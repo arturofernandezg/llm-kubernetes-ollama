@@ -1,0 +1,26 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Kubernetes temp files
+*.tmp
+
+# Environment files
+.env
+*.env
+
+# Python (por si se añade después)
+__pycache__/
+*.pyc
+
+# Mac system files
+.AppleDouble
+.LSOverride
