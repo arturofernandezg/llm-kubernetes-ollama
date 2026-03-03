@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-pvc
+  namespace: arturo-llm-test
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi    # suficiente para 1-2 modelos pequeños (phi3, gemma2:2b)
+  storageClassName: standard  # clase estándar en GKE
