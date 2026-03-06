@@ -8,5 +8,5 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 4Gi    # suficiente para 1-2 modelos pequeños (phi3, gemma2:2b)
-  storageClassName: standard  # clase estándar en GKE
+      storage: 20Gi    
+      storageClassName: standard  # clase estándar en GKE
