@@ -1,6 +1,6 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/uniovi-ai-infra-agent/aiops-agent:latest', './agent']
+    args: ['build', '-t', 'europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:latest', './agent']
 
 images:
-  - 'gcr.io/uniovi-ai-infra-agent/aiops-agent:latest'
+  - 'europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:latest'ent:latest'
