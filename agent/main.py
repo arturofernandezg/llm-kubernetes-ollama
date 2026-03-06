@@ -7,16 +7,18 @@ app = FastAPI()
 
 OLLAMA_URL = "http://ollama-svc:11434/api/generate"
 
-PROMPT_TEMPLATE = """You are an infrastructure parameter extractor. 
-Given a natural language request, extract the following parameters and return ONLY a valid JSON object, no extra text, no markdown:
-- project_name: name of the project
-- region: GCP region (e.g. europe-west1)
-- instance_type: machine type (e.g. e2-standard-2)
-- purpose: brief description of what the resource is for
+PROMPT_TEMPLATE = """Eres un extractor de parámetros de infraestructura cloud.
+Dado un mensaje en lenguaje natural, extrae los siguientes parámetros y devuelve ÚNICAMENTE un objeto JSON válido, sin texto adicional, sin markdown, sin explicaciones:
+- project_name: nombre del proyecto
+- region: región de GCP (ej. europe-west1)
+- instance_type: tipo de máquina (ej. e2-standard-2)
+- purpose: descripción breve del uso del recurso
 
-Request: {user_request}
+Si algún parámetro no se menciona explícitamente, dedúcelo del contexto o usa null.
 
-Return ONLY the JSON object."""
+Mensaje: {user_request}
+
+Devuelve ÚNICAMENTE el objeto JSON."""
 
 class InfraRequest(BaseModel):
     message: str
