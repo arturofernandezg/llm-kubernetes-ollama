@@ -7,11 +7,12 @@ Esta fase establece la infraestructura base: una LLM propia corriendo como servi
 ---
 
 ## Arquitectura actual
+
 ```
 [Cliente / port-forward]
         │
         ▼
-  agent-svc:8000         ← Agente FastAPI (extracción de parámetros)
+  agent-svc:8000         ← Agente FastAPI (extracción de parámetros con LLM)
         │
         ▼
   ollama-svc:11434       ← API de inferencia LLM (tinyllama / phi3:mini)
@@ -23,6 +24,7 @@ Esta fase establece la infraestructura base: una LLM propia corriendo como servi
 ```
 
 ## Arquitectura objetivo
+
 ```
 [Slack]
    │
@@ -39,6 +41,7 @@ Esta fase establece la infraestructura base: una LLM propia corriendo como servi
 ---
 
 ## Estructura del repositorio
+
 ```
 llm-kubernetes-ollama/
 ├── k8s/
@@ -52,7 +55,13 @@ llm-kubernetes-ollama/
 ├── agent/
 │   ├── main.py
 │   ├── requirements.txt
-│   └── Dockerfile
+│   ├── requirements-dev.txt
+│   ├── pytest.ini
+│   ├── Dockerfile
+│   ├── .dockerignore
+│   └── tests/
+│       ├── __init__.py
+│       └── test_main.py
 ├── cloudbuild.yaml
 └── README.md
 ```
@@ -64,7 +73,7 @@ llm-kubernetes-ollama/
 - Clúster GKE con `kubectl` configurado
 - `gcloud` CLI autenticado con permisos sobre el proyecto
 - Namespace creado: `kubectl create namespace arturo-llm-test`
-- Google Cloud Build habilitado en el proyecto GCP (para construir imágenes sin Docker local)
+- Google Cloud Build habilitado en el proyecto GCP
 - Repositorio en Artifact Registry: `aiops-agent` en `europe-southwest1`
 
 ---
@@ -72,6 +81,7 @@ llm-kubernetes-ollama/
 ## Despliegue
 
 ### 1. Infraestructura base (Ollama)
+
 ```bash
 kubectl apply -f k8s/pvc-ollama.yaml
 kubectl apply -f k8s/service-ollama.yaml
@@ -81,7 +91,8 @@ kubectl get pods -n arturo-llm-test
 
 ### 2. Cargar un modelo
 
-Sin Cloud NAT, los modelos no se pueden descargar directamente desde los pods. Se transfieren manualmente desde una instalación local de Ollama:
+Sin Cloud NAT, los pods no tienen salida a internet. Los modelos se transfieren manualmente desde una instalación local de Ollama:
+
 ```bash
 kubectl exec -i <pod> -n arturo-llm-test -- bash -c \
   "mkdir -p /root/.ollama/models/blobs && cat > /root/.ollama/models/blobs/<hash>" \
@@ -89,6 +100,7 @@ kubectl exec -i <pod> -n arturo-llm-test -- bash -c \
 ```
 
 ### 3. Apache (validación de red interna)
+
 ```bash
 kubectl apply -f k8s/deployment-apache.yaml
 kubectl apply -f k8s/service-apache.yaml
@@ -97,17 +109,20 @@ kubectl apply -f k8s/service-apache.yaml
 ### 4. Agente FastAPI
 
 Construir y publicar la imagen con Cloud Build:
+
 ```bash
 gcloud builds submit --config cloudbuild.yaml
 ```
 
 Desplegar en el clúster:
+
 ```bash
 kubectl apply -f k8s/deployment-agent.yaml
 kubectl apply -f k8s/service-agent.yaml
 ```
 
 ### 5. Acceso local (desarrollo)
+
 ```bash
 # Agente FastAPI
 kubectl port-forward svc/agent-svc 8000:8000 -n arturo-llm-test
@@ -118,6 +133,34 @@ kubectl port-forward svc/ollama-svc 11434:11434 -n arturo-llm-test
 # Apache
 kubectl port-forward svc/apache-svc 8080:80 -n arturo-llm-test
 ```
+
+---
+
+## Tests
+
+Los tests no requieren Kubernetes ni Ollama — Ollama se mockea completamente.
+
+```bash
+cd agent
+pip install -r requirements-dev.txt
+pytest tests/test_main.py -v
+```
+
+Estructura de tests:
+- `TestExtractJson` — lógica de extracción de JSON (unitarios)
+- `TestValidateParams` — validación de parámetros GCP (unitarios)
+- `TestHealthEndpoint` — endpoint `/health` con Ollama mockeado
+- `TestExtractEndpoint` — endpoint `/extract` con Ollama mockeado, incluyendo casos de error
+
+---
+
+## Variables de entorno del agente
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `OLLAMA_URL` | `http://ollama-svc:11434/api/generate` | URL del endpoint de generación de Ollama |
+| `OLLAMA_TAGS` | `http://ollama-svc:11434/api/tags` | URL para consultar modelos disponibles |
+| `OLLAMA_MODEL` | `tinyllama` | Modelo a usar para inferencia |
 
 ---
 
@@ -135,4 +178,5 @@ kubectl port-forward svc/apache-svc 8080:80 -n arturo-llm-test
 - Los nodos son de tipo **spot** (e2-standard-2), lo que reduce costes pero implica que pueden ser reciclados por GCP en cualquier momento. El PVC garantiza que los modelos no se pierden en esos reinicios.
 - Sin **Cloud NAT** configurado, los pods no tienen salida a internet. Los modelos deben cargarse manualmente.
 - Las imágenes Docker del agente se construyen con **Google Cloud Build** y se almacenan en **Artifact Registry** (`europe-southwest1`).
-- El agente FastAPI se comunica con Ollama usando el DNS interno del clúster (`ollama-svc:11434`), sin exponer el modelo a internet.
+- El agente se comunica con Ollama usando el DNS interno del clúster (`ollama-svc:11434`), sin exponer el modelo a internet.
+- El modelo y la URL de Ollama son configurables via variables de entorno — no hace falta recompilar la imagen para cambiar de modelo.
