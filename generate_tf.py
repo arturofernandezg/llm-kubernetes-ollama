@@ -136,7 +136,7 @@ def call_extract_endpoint(message: str) -> dict:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8")
-        print(f"\n❌  Error HTTP {e.code} del agente:")
+        print(f"\n  Error HTTP {e.code} del agente:")
         try:
             detail = json.loads(error_body).get("detail", error_body)
             print(f"    {detail}")
@@ -144,7 +144,7 @@ def call_extract_endpoint(message: str) -> dict:
             print(f"    {error_body}")
         sys.exit(1)
     except urllib.error.URLError as e:
-        print(f"\n❌  No se puede conectar con el agente en {AGENT_URL}")
+        print(f"\n  No se puede conectar con el agente en {AGENT_URL}")
         print(f"    Asegúrate de que el port-forward está activo:")
         print(f"    kubectl port-forward svc/agent-svc 8000:8000 -n arturo-llm-test")
         print(f"    Error: {e.reason}")
@@ -209,7 +209,7 @@ def print_summary(agent_response: dict) -> None:
         for w in warnings:
             print(f"     · {w}")
     else:
-        print("\n  ✅  Sin warnings de validación")
+        print("\n    Sin warnings de validación")
     print("─" * 60)
 
 
@@ -257,7 +257,7 @@ def main():
 
     # 3. Mostrar raw_response para debug si no hay parámetros
     if not agent_response.get("extracted_parameters"):
-        print(f"\n⚠️  El modelo no devolvió JSON válido.")
+        print(f"\n  El modelo no devolvió JSON válido.")
         print(f"   Raw response del modelo:")
         print(f"   {agent_response.get('raw_response', '')[:300]}")
         if not args.dry_run:
@@ -286,10 +286,6 @@ def main():
 
     print(f"\n✅  Fichero generado: {output_path}")
     print(f"    Tamaño: {len(tf_content)} caracteres")
-    print(f"\n   Próximos pasos:")
-    print(f"    cd {OUTPUT_DIR}")
-    print(f"    terraform init")
-    print(f"    terraform plan -var='project_id=<TU_GCP_PROJECT>'")
     print()
 
 

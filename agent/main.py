@@ -40,18 +40,22 @@ VALID_INSTANCE_PREFIXES: tuple[str, ...] = (
 
 # ── Prompt ─────────────────────────────────────────────────────────────────────
 PROMPT_TEMPLATE = """\
-You are a cloud infrastructure parameter extractor.
-Given a message in natural language (possibly in Spanish), extract the following parameters and return ONLY a valid JSON object, no additional text, no markdown, no explanations:
-- project_name: project name
-- region: GCP region (e.g. europe-west1)
-- instance_type: machine type (e.g. e2-standard-2)
-- purpose: brief description of the resource usage
+You are an infrastructure parameter extractor. Given a message, extract exactly these 4 fields and return ONLY a valid JSON object, no extra text:
+- project_name: project name (string)
+- region: GCP region, e.g. europe-west1 (string)
+- instance_type: machine type, e.g. e2-standard-4 (string)
+- purpose: short description of the resource purpose, max 5 words (string)
 
-If a parameter is not explicitly mentioned, infer it from context or use null.
+If a parameter is not mentioned, use null.
+Do not copy the full message into purpose. Summarize it in 2-5 words.
+
+Examples:
+Message: "I need a server for the payments project in europe-west1 with e2-standard-4 for web traffic"
+Output: {"project_name": "payments", "region": "europe-west1", "instance_type": "e2-standard-4", "purpose": "web traffic"}
 
 Message: {user_request}
+Output:"""
 
-Return ONLY the JSON object."""
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 @asynccontextmanager
