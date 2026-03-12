@@ -270,14 +270,18 @@ def main():
     # 4. Generar contenido Terraform
     tf_content = generate_terraform(agent_response)
 
-    # 5. Determinar nombre del fichero
+    # 5. Determinar ruta del fichero de salida
     params = agent_response.get("extracted_parameters") or {}
     project_name = params.get("project_name") or "infra"
-    output_file = args.output or f"{safe_name(project_name)}.tf"
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = OUTPUT_DIR / f"{safe_name(project_name)}.tf"
 
     # 6. Guardar fichero
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / output_file
     output_path.write_text(tf_content, encoding="utf-8")
 
     print(f"\n✅  Fichero generado: {output_path}")
