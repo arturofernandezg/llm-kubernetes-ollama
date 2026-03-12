@@ -233,7 +233,18 @@ def main():
         metavar="FILE",
         help="Nombre del fichero .tf de salida (por defecto: <project_name>.tf)",
     )
+    parser.add_argument(
+        "--agent-url",
+        metavar="URL",
+        default=None,
+        help="URL del agente FastAPI (por defecto: variable AGENT_URL o http://localhost:8000)",
+    )
     args = parser.parse_args()
+
+    # Permite sobreescribir AGENT_URL via argumento CLI
+    if args.agent_url:
+        global AGENT_URL
+        AGENT_URL = args.agent_url
 
     # 1. Llamar al agente
     print(f"\n🔍  Enviando mensaje al agente ({AGENT_URL})...")
