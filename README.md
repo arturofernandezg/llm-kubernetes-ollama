@@ -1,41 +1,27 @@
 # AIOps Agent — Infraestructura LLM en Kubernetes (GKE)
 
-Fase 1 del proyecto de prácticas de ingeniería AIOps. El objetivo final es construir un agente de ciclo completo que automatice el despliegue de infraestructura: desde una petición en lenguaje natural en Slack hasta la ejecución de `terraform apply` mediante un pipeline de CI/CD en GitHub Actions.
+Agente de IA de ciclo completo que automatiza el despliegue de infraestructura GCP: desde una petición en lenguaje natural hasta la generación de código Terraform y (en fases futuras) la creación automática de Pull Requests y ejecución de pipelines CI/CD.
 
-Esta fase establece la infraestructura base: una LLM propia corriendo como servicio en Kubernetes, un agente FastAPI que la consume internamente, y un pipeline de Cloud Build para construir y publicar las imágenes del agente.
+Proyecto de prácticas de ingeniería AIOps en MasOrange/Telecable (TFG/TFM).
 
 ---
 
-## Arquitectura actual
+## Arquitectura actual (Fase 1)
 
 ```
-[Cliente / port-forward]
+[Cliente / port-forward / generate_tf.py]
         │
         ▼
-  agent-svc:8000         ← Agente FastAPI (extracción de parámetros con LLM)
+  agent-svc:8000         ← Agente FastAPI (2 réplicas, probes, shared client)
         │
         ▼
-  ollama-svc:11434       ← API de inferencia LLM (tinyllama / phi3:mini)
-        │
-        ▼
-   ollama-pvc            ← Disco persistente 20GB (modelos)
-
-  apache-svc:80          ← Servidor web (validación de red interna)
+  ollama-svc:11434       ← Ollama (tinyllama, 1 réplica, PVC 20Gi, PDB)
 ```
 
 ## Arquitectura objetivo
 
 ```
-[Slack]
-   │
-   ▼
-[FastAPI agent]  ──►  ollama-svc:11434  (extracción de parámetros)
-   │
-   ▼
-[GitHub API]  ──►  crea rama + commit + PR con código Terraform
-   │
-   ▼
-[GitHub Actions]  ──►  terraform plan / terraform apply
+[Slack] → [FastAPI Agent] → [Ollama] → [GitHub API] → [GitHub Actions] → [terraform apply]
 ```
 
 ---
@@ -44,25 +30,28 @@ Esta fase establece la infraestructura base: una LLM propia corriendo como servi
 
 ```
 llm-kubernetes-ollama/
-├── k8s/
-│   ├── deployment-ollama.yaml
-│   ├── service-ollama.yaml
-│   ├── pvc-ollama.yaml
-│   ├── deployment-apache.yaml
-│   ├── service-apache.yaml
-│   ├── deployment-agent.yaml
-│   └── service-agent.yaml
 ├── agent/
-│   ├── main.py
-│   ├── requirements.txt
-│   ├── requirements-dev.txt
+│   ├── main.py               # API FastAPI (extracción de parámetros)
+│   ├── Dockerfile             # Imagen del agente (python:3.11-slim, non-root)
+│   ├── requirements.txt       # Dependencias de producción
+│   ├── requirements-dev.txt   # Dependencias de test
 │   ├── pytest.ini
-│   ├── Dockerfile
-│   ├── .dockerignore
 │   └── tests/
 │       ├── __init__.py
-│       └── test_main.py
-├── cloudbuild.yaml
+│       └── test_main.py       # 40 tests (unitarios + integración)
+├── k8s/
+│   ├── deployment-agent.yaml  # 2 réplicas, probes /healthz + /readyz
+│   ├── deployment-ollama.yaml # 1 réplica, PVC, probes
+│   ├── deployment-apache.yaml # Validación de red interna
+│   ├── service-agent.yaml     # ClusterIP :8000
+│   ├── service-ollama.yaml    # ClusterIP :11434
+│   ├── service-apache.yaml    # ClusterIP :80
+│   ├── pvc-ollama.yaml        # 20Gi ReadWriteOnce
+│   └── pdb-ollama.yaml        # PodDisruptionBudget (minAvailable: 1)
+├── docs/                      # Documentación detallada por componente
+├── generate_tf.py             # CLI: extrae params + genera .tf
+├── cloudbuild.yaml            # Build pipeline (Cloud Build, dual tag)
+├── CLAUDE.md                  # Contexto para Claude Code
 └── README.md
 ```
 
@@ -70,113 +59,123 @@ llm-kubernetes-ollama/
 
 ## Requisitos
 
-- Clúster GKE con `kubectl` configurado
-- `gcloud` CLI autenticado con permisos sobre el proyecto
-- Namespace creado: `kubectl create namespace arturo-llm-test`
-- Google Cloud Build habilitado en el proyecto GCP
-- Repositorio en Artifact Registry: `aiops-agent` en `europe-southwest1`
+- Cluster GKE con `kubectl` configurado
+- `gcloud` CLI autenticado con permisos sobre el proyecto `uniovi-ai-infra-agent`
+- Namespace: `arturo-llm-test`
+- Google Cloud Build habilitado
+- Artifact Registry: `aiops-agent` en `europe-southwest1`
 
 ---
 
 ## Despliegue
 
-### 1. Infraestructura base (Ollama)
+### 1. Conectar al cluster
+
+```bash
+gcloud container clusters get-credentials ai-infra-agent \
+  --zone europe-southwest1-a --project uniovi-ai-infra-agent
+```
+
+### 2. Infraestructura base (Ollama)
 
 ```bash
 kubectl apply -f k8s/pvc-ollama.yaml
+kubectl apply -f k8s/pdb-ollama.yaml
 kubectl apply -f k8s/service-ollama.yaml
 kubectl apply -f k8s/deployment-ollama.yaml
-kubectl get pods -n arturo-llm-test
 ```
 
-### 2. Cargar un modelo
-
-Sin Cloud NAT, los pods no tienen salida a internet. Los modelos se transfieren manualmente desde una instalación local de Ollama:
+### 3. Cargar modelo (sin Cloud NAT)
 
 ```bash
-kubectl exec -i <pod> -n arturo-llm-test -- bash -c \
+kubectl exec -i <pod-ollama> -n arturo-llm-test -- bash -c \
   "mkdir -p /root/.ollama/models/blobs && cat > /root/.ollama/models/blobs/<hash>" \
   < ~/.ollama/models/blobs/<hash>
 ```
 
-### 3. Apache (validación de red interna)
+### 4. Build y deploy del agente
 
 ```bash
-kubectl apply -f k8s/deployment-apache.yaml
-kubectl apply -f k8s/service-apache.yaml
-```
+gcloud builds submit --config cloudbuild.yaml \
+  --substitutions=COMMIT_SHA=$(git rev-parse --short HEAD)
 
-### 4. Agente FastAPI
-
-Construir y publicar la imagen con Cloud Build:
-
-```bash
-gcloud builds submit --config cloudbuild.yaml
-```
-
-Desplegar en el clúster:
-
-```bash
 kubectl apply -f k8s/deployment-agent.yaml
 kubectl apply -f k8s/service-agent.yaml
 ```
 
-### 5. Acceso local (desarrollo)
+### 5. Verificar
 
 ```bash
-# Agente FastAPI
+kubectl get pods -n arturo-llm-test
+kubectl get pdb -n arturo-llm-test
+```
+
+---
+
+## Uso
+
+```bash
+# Port-forward al agente
 kubectl port-forward svc/agent-svc 8000:8000 -n arturo-llm-test
 
-# Ollama
-kubectl port-forward svc/ollama-svc 11434:11434 -n arturo-llm-test
+# Health checks
+curl http://localhost:8000/healthz     # Liveness (siempre 200)
+curl http://localhost:8000/readyz      # Readiness (verifica Ollama)
 
-# Apache
-kubectl port-forward svc/apache-svc 8080:80 -n arturo-llm-test
+# Extraer parámetros
+curl -X POST http://localhost:8000/extract \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Servidor para web-prod en europe-west1 con e2-standard-4"}'
+
+# Generar Terraform
+python generate_tf.py "Servidor para web-prod en europe-west1 con e2-standard-4"
+python generate_tf.py --dry-run "Solo quiero ver qué parámetros extrae"
 ```
 
 ---
 
 ## Tests
 
-Los tests no requieren Kubernetes ni Ollama — Ollama se mockea completamente.
-
 ```bash
 cd agent
-pip install -r requirements-dev.txt
-pytest tests/test_main.py -v
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests/ -v
+# 40 tests — no requieren K8s ni Ollama (todo mockeado)
 ```
-
-Estructura de tests:
-- `TestExtractJson` — lógica de extracción de JSON (unitarios)
-- `TestValidateParams` — validación de parámetros GCP (unitarios)
-- `TestHealthEndpoint` — endpoint `/health` con Ollama mockeado
-- `TestExtractEndpoint` — endpoint `/extract` con Ollama mockeado, incluyendo casos de error
 
 ---
 
-## Variables de entorno del agente
+## Endpoints
+
+| Método | Path | Descripción |
+|---|---|---|
+| GET | `/healthz` | Liveness probe (siempre 200, sin dependencias) |
+| GET | `/readyz` | Readiness probe (verifica Ollama + modelo) |
+| GET | `/health` | Health completo (retrocompatibilidad) |
+| POST | `/extract` | Extracción de parámetros desde lenguaje natural |
+
+---
+
+## Variables de entorno
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `OLLAMA_URL` | `http://ollama-svc:11434/api/generate` | URL del endpoint de generación de Ollama |
-| `OLLAMA_TAGS` | `http://ollama-svc:11434/api/tags` | URL para consultar modelos disponibles |
-| `OLLAMA_MODEL` | `tinyllama` | Modelo a usar para inferencia |
+| `OLLAMA_URL` | `http://ollama-svc:11434/api/generate` | Endpoint de generación |
+| `OLLAMA_TAGS` | `http://ollama-svc:11434/api/tags` | Endpoint de modelos |
+| `OLLAMA_MODEL` | `tinyllama` | Modelo a usar |
 
 ---
 
-## Modelos disponibles
+## Documentación
 
-| Modelo | Tamaño | RAM necesaria | Estado |
-|---|---|---|---|
-| tinyllama | 637 MB | ~1 GB | Operativo |
-| phi3:mini | 2.2 GB | ~3.5 GB | Almacenado (requiere más RAM) |
+Ver `docs/` para documentación detallada de cada componente:
+arquitectura, agente, K8s, CI/CD, Terraform, testing, y roadmap.
 
 ---
 
 ## Notas
 
-- Los nodos son de tipo **spot** (e2-standard-2), lo que reduce costes pero implica que pueden ser reciclados por GCP en cualquier momento. El PVC garantiza que los modelos no se pierden en esos reinicios.
-- Sin **Cloud NAT** configurado, los pods no tienen salida a internet. Los modelos deben cargarse manualmente.
-- Las imágenes Docker del agente se construyen con **Google Cloud Build** y se almacenan en **Artifact Registry** (`europe-southwest1`).
-- El agente se comunica con Ollama usando el DNS interno del clúster (`ollama-svc:11434`), sin exponer el modelo a internet.
-- El modelo y la URL de Ollama son configurables via variables de entorno — no hace falta recompilar la imagen para cambiar de modelo.
+- Nodos **spot** (e2-standard-2): reduce costes, pero pueden ser reciclados. Mitigado con PVC + PDB.
+- Sin **Cloud NAT**: los pods no tienen internet. Modelos se cargan manualmente.
+- Imágenes tagueadas con **commit SHA** + `:latest` para rollback.
+- Comunicación interna via **DNS del cluster** (ClusterIP), nada expuesto a internet.

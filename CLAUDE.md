@@ -1,80 +1,66 @@
 # AIOps Infrastructure Agent — Contexto para Claude Code
 
-## ¿Qué es este proyecto?
-Agente de IA de ciclo completo que automatiza despliegues de infraestructura GCP.
-TFG/TFM en MasOrange (Telecable). Rol: ingeniero AIOps.
+## Resumen del proyecto
 
-Flujo objetivo (zero-touch):
-```
-Slack → Agente extrae params → genera .tf → PR en GitHub → validación → terraform apply
-```
+Agente de IA de ciclo completo para automatizar despliegues de infraestructura GCP.
+TFG/TFM en MasOrange/Telecable. Rol: ingeniero AIOps.
 
-## Estado actual (Fase 1 completa)
-- ✅ Agente FastAPI con LLM local (Ollama/tinyllama) en Kubernetes (GKE)
-- ✅ Extracción de parámetros GCP desde lenguaje natural
-- ✅ Generación de código Terraform (.tf)
-- ✅ Tests unitarios y de integración (pytest)
-- ✅ Build con Cloud Build → Artifact Registry
-- ❌ Slack integration (Fase 2)
-- ❌ GitHub PR automation (Fase 2)
-- ❌ Validation agent + confidence score (Fase 3)
-- ❌ CI/CD terraform plan/apply (Fase 4)
+Flujo objetivo: `Slack → Agente → genera .tf → PR en GitHub → validación → terraform apply`
 
-## Stack técnico
-| Componente | Tecnología |
+## Documentación detallada
+
+Cada parte del proyecto tiene su propio archivo en `docs/`:
+
+| Archivo | Contenido |
 |---|---|
-| Agente | Python 3.11, FastAPI, httpx, Pydantic v2 |
-| LLM | Ollama (tinyllama) en Kubernetes |
-| Infra | GKE (namespace: arturo-llm-test) |
-| Build | Cloud Build → Artifact Registry (europe-southwest1) |
-| IaC | Terraform (módulo corporativo: terraform-modules/gcp-vm) |
+| `docs/01-architecture.md` | Arquitectura, decisiones de diseño, componentes |
+| `docs/02-agent-fastapi.md` | Endpoints, schemas, flujo de extracción, manejo de errores |
+| `docs/03-kubernetes.md` | Cluster GKE, manifiestos, probes, PDB, comandos |
+| `docs/04-cicd-cloudbuild.md` | Cloud Build, Artifact Registry, versionado |
+| `docs/05-terraform-generator.md` | CLI generate_tf.py, template, uso |
+| `docs/06-testing.md` | Tests, mocking, errores comunes y soluciones |
+| `docs/07-roadmap.md` | Fases del proyecto, TODOs por fase |
+
+**Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
+
+## Estado actual
+
+- **Fase 1**: Completa (agente + Ollama + tests + build + K8s)
+- **Fase 2**: Pendiente (Slack + GitHub PRs)
+- **Fase 3**: Pendiente (validación + score confianza)
+- **Fase 4**: Pendiente (CI/CD terraform)
+
+## Stack
+
+Python 3.11 | FastAPI | httpx | Pydantic v2 | Ollama (tinyllama) | GKE | Cloud Build
 
 ## Archivos clave
+
 ```
-agent/main.py          → FastAPI app (endpoints + lógica de extracción)
-agent/tests/test_main.py → Tests (pytest)
-generate_tf.py         → CLI: llama al agente y genera .tf
-k8s/                   → Manifiestos Kubernetes
-cloudbuild.yaml        → Pipeline de build (Cloud Build)
-```
-
-## Kubernetes — namespace: arturo-llm-test
-- **agent**: Deployment (2 réplicas), ClusterIP :8000
-- **ollama**: Deployment (1 réplica), PVC 20Gi ReadWriteOnce, ClusterIP :11434
-- **ollama-pdb**: PodDisruptionBudget (minAvailable: 1)
-
-## Endpoints del agente
-| Método | Path | Descripción |
-|---|---|---|
-| GET | /healthz | Liveness probe (siempre 200, sin deps) |
-| GET | /readyz | Readiness probe (verifica Ollama + modelo) |
-| GET | /health | Health completo (retrocompatibilidad) |
-| POST | /extract | Extracción de parámetros desde texto |
-
-## Comandos frecuentes
-```bash
-# Tests (en GCloud Shell)
-cd agent && pip install -r requirements-dev.txt && pytest tests/ -v
-
-# Port-forward al agente
-kubectl port-forward svc/agent-svc 8000:8000 -n arturo-llm-test
-
-# Build
-gcloud builds submit --config cloudbuild.yaml
-
-# Deploy K8s
-kubectl apply -f k8s/
-
-# Probar extracción
-python generate_tf.py "Servidor para proyecto web-prod en europe-west1 con e2-standard-4"
+agent/main.py           → API (endpoints + extracción)
+agent/tests/test_main.py → 40 tests
+generate_tf.py          → CLI generador de .tf
+k8s/                    → Manifiestos K8s
+cloudbuild.yaml         → Pipeline de build
 ```
 
-## IMPORTANTE — Secrets pendientes (Fase 2)
-Para Slack y GitHub no hay gestión de secrets aún.
-Usar GCP Secret Manager + ExternalSecrets o K8s Secrets.
-NO hardcodear tokens en el código ni en los manifiestos.
+## Entorno
 
-## Convenciones de nomenclatura MasOrange
-- Regiones permitidas: europe-west1/2/3/4, europe-southwest1
-- Tipos de instancia: prefijos e2-, n1-, n2-, n2d-, c2-, m1-, t2d-
+- **Cluster**: ai-infra-agent (europe-southwest1-a, e2-standard-2 spot, 2 nodos)
+- **Namespace**: arturo-llm-test
+- **Registry**: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent
+- **NO hay Python local en Windows** — tests se ejecutan en GCloud Shell
+- **Sin Cloud NAT** — pods no tienen internet, modelos se cargan manualmente
+
+## Convenciones
+
+- Regiones GCP permitidas: europe-west1/2/3/4, europe-southwest1
 - Labels obligatorios: managed-by, project, environment, created-by
+- Tests con mocking de Ollama (no requieren cluster ni LLM)
+- Builds con `--substitutions=COMMIT_SHA=$(git rev-parse --short HEAD)`
+
+## Notas importantes
+
+- NUNCA borrar el PVC `ollama-pvc` — perderías los modelos LLM cargados
+- Los docs/ se mantienen actualizados con errores encontrados y soluciones
+- El guion original menciona Jira, pero el proyecto usa Slack en su lugar
