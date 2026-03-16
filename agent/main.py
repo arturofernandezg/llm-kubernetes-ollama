@@ -51,7 +51,7 @@ Do not copy the full message into purpose. Summarize it in 2-5 words.
 
 Examples:
 Message: "I need a server for the payments project in europe-west1 with e2-standard-4 for web traffic"
-Output: {"project_name": "payments", "region": "europe-west1", "instance_type": "e2-standard-4", "purpose": "web traffic"}
+Output: {{"project_name": "payments", "region": "europe-west1", "instance_type": "e2-standard-4", "purpose": "web traffic"}}
 
 Message: {user_request}
 Output:"""

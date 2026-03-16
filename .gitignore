@@ -24,3 +24,6 @@ __pycache__/
 # Mac system files
 .AppleDouble
 .LSOverride
+
+# Claude Code (worktrees, sesiones locales, contexto interno)
+.claude/
