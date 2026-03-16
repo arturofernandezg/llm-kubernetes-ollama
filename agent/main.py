@@ -6,7 +6,7 @@ natural, usando un LLM local (Ollama) como motor de inferencia.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, field_validator
 import httpx
 import json
@@ -53,34 +53,47 @@ Examples:
 Message: "I need a server for the payments project in europe-west1 with e2-standard-4 for web traffic"
 Output: {{"project_name": "payments", "region": "europe-west1", "instance_type": "e2-standard-4", "purpose": "web traffic"}}
 
-Message: {user_request}
+<user_message>
+{user_request}
+</user_message>
 Output:"""
 
 
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Verifica conectividad con Ollama y disponibilidad del modelo al arrancar."""
+    """
+    Gestiona el ciclo de vida de la app:
+    - Crea un cliente HTTP compartido (reutiliza conexiones, no abre uno por request).
+    - Verifica conectividad con Ollama al arrancar.
+    - Cierra el cliente limpiamente al apagar.
+    """
     logger.info(f"Agent starting — model: {MODEL}, ollama: {OLLAMA_URL}")
+
+    # Cliente compartido: timeout de 120s para inferencia, 10s para health checks
+    app.state.http_client = httpx.AsyncClient(timeout=120.0)
+
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(OLLAMA_TAGS)
-            r.raise_for_status()
-            available = [m["name"] for m in r.json().get("models", [])]
-            if any(MODEL in m for m in available):
-                logger.info(f"Model '{MODEL}' confirmed available")
-            else:
-                logger.warning(f"Model '{MODEL}' NOT found. Available: {available}")
+        r = await app.state.http_client.get(OLLAMA_TAGS, timeout=10.0)
+        r.raise_for_status()
+        available = [m["name"] for m in r.json().get("models", [])]
+        if any(MODEL in m for m in available):
+            logger.info(f"Model '{MODEL}' confirmed available")
+        else:
+            logger.warning(f"Model '{MODEL}' NOT found. Available: {available}")
     except Exception as exc:
         logger.warning(f"Could not reach Ollama at startup: {exc}")
+
     yield
-    logger.info("Agent shutting down")
+
+    await app.state.http_client.aclose()
+    logger.info("Agent shutting down — HTTP client closed")
 
 
 app = FastAPI(
     title="AIOps Infrastructure Agent",
     description="Extrae parámetros de infraestructura GCP desde lenguaje natural.",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -189,20 +202,58 @@ def validate_params(params: dict) -> list[str]:
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
-@app.get("/health", summary="Health check — agent + Ollama + modelo")
-async def health():
+
+@app.get("/healthz", summary="Liveness probe — solo verifica que el proceso responde")
+async def healthz():
     """
-    Verifica que:
-    - El agente responde.
-    - Ollama es alcanzable.
-    - El modelo configurado está cargado en Ollama.
+    Liveness probe: responde 200 siempre que el proceso esté vivo.
+    NO comprueba dependencias externas (Ollama, etc.).
+    Kubernetes usa este endpoint para decidir si reiniciar el pod.
+    """
+    return {"status": "alive"}
+
+
+@app.get("/readyz", summary="Readiness probe — verifica Ollama + modelo disponible")
+async def readyz(request: httpx.Request = None):
+    """
+    Readiness probe: verifica que Ollama es alcanzable y el modelo está cargado.
+    Devuelve 503 si Ollama no responde o el modelo no está disponible.
+    Kubernetes usa este endpoint para decidir si enrutar tráfico al pod.
     """
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(OLLAMA_TAGS)
-            r.raise_for_status()
-            available = [m["name"] for m in r.json().get("models", [])]
-            model_loaded = any(MODEL in m for m in available)
+        client: httpx.AsyncClient = app.state.http_client
+        r = await client.get(OLLAMA_TAGS, timeout=5.0)
+        r.raise_for_status()
+        available = [m["name"] for m in r.json().get("models", [])]
+        model_loaded = any(MODEL in m for m in available)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Ollama unreachable: {exc}")
+
+    if not model_loaded:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Model '{MODEL}' not loaded. Available: {available}",
+        )
+
+    return {
+        "status": "ready",
+        "model": MODEL,
+        "model_loaded": model_loaded,
+    }
+
+
+@app.get("/health", summary="Health check completo — retrocompatibilidad")
+async def health():
+    """
+    Endpoint de health completo (retrocompatible con versiones anteriores).
+    Verifica que el agente responde, Ollama es alcanzable y el modelo está cargado.
+    """
+    try:
+        client: httpx.AsyncClient = app.state.http_client
+        r = await client.get(OLLAMA_TAGS, timeout=5.0)
+        r.raise_for_status()
+        available = [m["name"] for m in r.json().get("models", [])]
+        model_loaded = any(MODEL in m for m in available)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Ollama unreachable: {exc}")
 
@@ -220,7 +271,7 @@ async def health():
     response_model=ExtractResponse,
     summary="Extrae parámetros de infraestructura desde lenguaje natural",
 )
-async def extract_parameters(request: InfraRequest, http_request: Request):
+async def extract_parameters(request: InfraRequest):
     """
     Recibe un mensaje en lenguaje natural, lo envía al LLM y devuelve
     los parámetros de infraestructura extraídos en formato estructurado.
@@ -237,12 +288,12 @@ async def extract_parameters(request: InfraRequest, http_request: Request):
     prompt = PROMPT_TEMPLATE.format(user_request=request.message)
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                OLLAMA_URL,
-                json={"model": MODEL, "prompt": prompt, "stream": False},
-            )
-            response.raise_for_status()
+        client: httpx.AsyncClient = app.state.http_client
+        response = await client.post(
+            OLLAMA_URL,
+            json={"model": MODEL, "prompt": prompt, "stream": False},
+        )
+        response.raise_for_status()
     except httpx.TimeoutException:
         logger.error(f"[{request_id}] Ollama timeout after 120s")
         raise HTTPException(status_code=504, detail="LLM timeout — model took too long")

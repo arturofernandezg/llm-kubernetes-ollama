@@ -6,7 +6,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
+  storageClassName: standard  # clase estándar en GKE
   resources:
     requests:
-      storage: 20Gi    
-      storageClassName: standard  # clase estándar en GKE
+      storage: 20Gi

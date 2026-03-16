@@ -4,7 +4,7 @@ metadata:
   name: agent
   namespace: arturo-llm-test
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: agent
@@ -25,3 +25,28 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
+        # Liveness: solo comprueba que el proceso responde.
+        # Si falla → Kubernetes reinicia el pod.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          failureThreshold: 3
+        # Readiness: comprueba Ollama + modelo disponible.
+        # Si falla → Kubernetes deja de enrutar tráfico (sin reiniciar).
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        env:
+        - name: OLLAMA_URL
+          value: "http://ollama-svc:11434/api/generate"
+        - name: OLLAMA_TAGS
+          value: "http://ollama-svc:11434/api/tags"
+        - name: OLLAMA_MODEL
+          value: "tinyllama"

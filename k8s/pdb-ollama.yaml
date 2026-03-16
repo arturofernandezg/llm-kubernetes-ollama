@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ollama-pdb
+  namespace: arturo-llm-test
+spec:
+  # Garantiza que siempre haya al menos 1 réplica de Ollama disponible
+  # durante operaciones de mantenimiento del nodo (drain, actualizaciones, etc.)
+  # Ollama usa PVC ReadWriteOnce → solo puede haber 1 réplica, así que
+  # minAvailable=1 bloquea el drain hasta que el pod se pueda reprogramar.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ollama

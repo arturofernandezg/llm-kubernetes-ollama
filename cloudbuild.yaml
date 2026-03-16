@@ -1,9 +1,13 @@
-steps: 
-  - name: 'gcr.io/cloud-builders/docker' 
-    args: 
-      - 'build' 
-      - '-t' 
-      - 'europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:latest' 
-      - './agent' 
-images: 
-  - 'europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:latest' 
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:$COMMIT_SHA'
+      - '-t'
+      - 'europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:latest'
+      - './agent'
+
+images:
+  - 'europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:$COMMIT_SHA'
+  - 'europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:latest'

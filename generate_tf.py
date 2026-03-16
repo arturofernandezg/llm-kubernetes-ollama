@@ -18,6 +18,7 @@ Uso:
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +28,7 @@ import urllib.error
 
 # ── Configuración ──────────────────────────────────────────────────────────────
 
-AGENT_URL = os.getenv("AGENT_URL", "http://localhost:8000")
+DEFAULT_AGENT_URL = os.getenv("AGENT_URL", "http://localhost:8000")
 OUTPUT_DIR = Path(os.getenv("TF_OUTPUT_DIR", "./terraform_output"))
 
 # Módulo Terraform corporativo a invocar.
@@ -114,14 +115,21 @@ output "instance_zone" {{
 }}
 """
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def safe_name(s: str) -> str:
+    """Convierte un string a identificador válido para Terraform (solo a-z, 0-9, _)."""
+    return re.sub(r"[^a-z0-9_]", "_", s.lower()).strip("_") or "project"
+
+
 # ── Llamada al agente ──────────────────────────────────────────────────────────
 
-def call_extract_endpoint(message: str) -> dict:
+def call_extract_endpoint(message: str, agent_url: str) -> dict:
     """
     Llama a POST /extract del agente FastAPI y devuelve el JSON de respuesta.
     Usa urllib de stdlib para no requerir dependencias externas.
     """
-    url = f"{AGENT_URL}/extract"
+    url = f"{agent_url}/extract"
     body = json.dumps({"message": message}).encode("utf-8")
 
     req = urllib.request.Request(
@@ -144,7 +152,7 @@ def call_extract_endpoint(message: str) -> dict:
             print(f"    {error_body}")
         sys.exit(1)
     except urllib.error.URLError as e:
-        print(f"\n  No se puede conectar con el agente en {AGENT_URL}")
+        print(f"\n  No se puede conectar con el agente en {agent_url}")
         print(f"    Asegúrate de que el port-forward está activo:")
         print(f"    kubectl port-forward svc/agent-svc 8000:8000 -n arturo-llm-test")
         print(f"    Error: {e.reason}")
@@ -152,12 +160,6 @@ def call_extract_endpoint(message: str) -> dict:
 
 
 # ── Generador de Terraform ─────────────────────────────────────────────────────
-
-def safe_name(s: str) -> str:
-    """Convierte un string a identificador válido para Terraform (solo a-z, 0-9, _)."""
-    import re
-    return re.sub(r"[^a-z0-9_]", "_", s.lower()).strip("_") or "project"
-
 
 def generate_terraform(agent_response: dict) -> str:
     """
@@ -236,21 +238,18 @@ def main():
     parser.add_argument(
         "--agent-url",
         metavar="URL",
-        default=None,
-        help="URL del agente FastAPI (por defecto: variable AGENT_URL o http://localhost:8000)",
+        default=DEFAULT_AGENT_URL,
+        help=f"URL del agente FastAPI (por defecto: {DEFAULT_AGENT_URL})",
     )
     args = parser.parse_args()
 
-    # Permite sobreescribir AGENT_URL via argumento CLI
-    if args.agent_url:
-        global AGENT_URL
-        AGENT_URL = args.agent_url
+    agent_url = args.agent_url
 
     # 1. Llamar al agente
-    print(f"\n🔍  Enviando mensaje al agente ({AGENT_URL})...")
+    print(f"\n🔍  Enviando mensaje al agente ({agent_url})...")
     print(f"    \"{args.message}\"")
 
-    agent_response = call_extract_endpoint(args.message)
+    agent_response = call_extract_endpoint(args.message, agent_url)
 
     # 2. Mostrar resumen
     print_summary(agent_response)
