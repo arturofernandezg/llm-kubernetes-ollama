@@ -214,7 +214,7 @@ async def healthz():
 
 
 @app.get("/readyz", summary="Readiness probe — verifica Ollama + modelo disponible")
-async def readyz(request: httpx.Request = None):
+async def readyz():
     """
     Readiness probe: verifica que Ollama es alcanzable y el modelo está cargado.
     Devuelve 503 si Ollama no responde o el modelo no está disponible.
