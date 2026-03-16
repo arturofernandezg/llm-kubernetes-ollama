@@ -26,11 +26,11 @@ spec:
           value: "24h"
         resources:
           requests:
-            memory: "1Gi"
-            cpu: "500m"
+            memory: "512Mi"
+            cpu: "100m"
           limits:
-            memory: "5Gi"
-            cpu: "1"
+            memory: "4Gi"
+            cpu: "2"
         volumeMounts:
         - name: ollama-data
           mountPath: /root/.ollama
