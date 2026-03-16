@@ -20,7 +20,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import urllib.request
@@ -175,7 +175,7 @@ def generate_terraform(agent_response: dict) -> str:
     purpose       = params.get("purpose")        or "general purpose"
 
     return TF_TEMPLATE.format(
-        generated_at     = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+        generated_at     = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         request_id       = agent_response.get("request_id", "unknown"),
         model_used       = agent_response.get("model_used", "unknown"),
         input_message    = agent_response.get("input_message", ""),
