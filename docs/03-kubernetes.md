@@ -20,7 +20,7 @@
 | `service-ollama.yaml` | ClusterIP :11434 | Solo accesible internamente |
 | `pvc-ollama.yaml` | PVC 20Gi ReadWriteOnce | Modelos LLM persistidos |
 | `pdb-ollama.yaml` | PodDisruptionBudget (minAvailable: 1) | Protege durante drains |
-| `deployment-agent.yaml` | Deployment agent (2 réplicas) | Probes /healthz y /readyz |
+| `deployment-agent.yaml` | Deployment agent (1 réplica) | Probes /healthz y /readyz |
 | `service-agent.yaml` | ClusterIP :8000 | Solo accesible internamente |
 | `deployment-apache.yaml` | Deployment apache (1 réplica) | Validación de red |
 | `service-apache.yaml` | ClusterIP :80 | Validación de red |
@@ -59,22 +59,52 @@ livenessProbe:         # GET / — reinicia si Ollama se cuelga
 (node drain, actualizaciones K8s) siempre haya al menos 1 pod de Ollama.
 Importante con nodos spot que pueden ser reciclados.
 
-## Carga de modelos
+## Carga de modelos (sin Cloud NAT)
 
-Sin Cloud NAT, los pods no tienen internet. Los modelos se cargan manualmente:
+Los pods NO tienen internet. Para cargar un modelo nuevo:
 
 ```bash
-# Desde una máquina con Ollama local instalado:
-kubectl exec -i <pod-ollama> -n arturo-llm-test -- bash -c \
-  "mkdir -p /root/.ollama/models/blobs && cat > /root/.ollama/models/blobs/<hash>" \
-  < ~/.ollama/models/blobs/<hash>
+# 1. Instalar ollama en Cloud Shell (si no está)
+sudo apt-get install -y zstd && curl -fsSL https://ollama.com/install.sh | sh
+
+# 2. Arrancar ollama y descargar el modelo en Cloud Shell
+ollama serve &
+sleep 2
+ollama pull <modelo>   # ej: qwen2.5:1.5b
+
+# 3. Comprimir y copiar al pod
+tar czf /tmp/models.tar.gz -C ~/.ollama models
+POD=$(kubectl get pod -l app=ollama -n arturo-llm-test -o jsonpath='{.items[0].metadata.name}')
+kubectl cp /tmp/models.tar.gz arturo-llm-test/$POD:/tmp/models.tar.gz
+
+# 4. Descomprimir dentro del pod
+kubectl exec $POD -n arturo-llm-test -- tar xzf /tmp/models.tar.gz -C /root/.ollama/
+
+# 5. Verificar
+kubectl exec $POD -n arturo-llm-test -- ollama list
 ```
+
+**Nota**: Cloud Shell es efímero — lo instalado se pierde entre sesiones.
+Si `kubectl cp` falla por timeout, subir a GCS bucket como alternativa.
+
+## Resources (ajustados para 1 nodo spot e2-standard-2)
+
+| Deployment | CPU request | CPU limit | Mem request | Mem limit |
+|---|---|---|---|---|
+| ollama | 100m | 2 | 512Mi | 4Gi |
+| agent | 50m | 300m | 128Mi | 384Mi |
+
+**Nota**: los requests son bajos a propósito para que todo quepa en 1 nodo (~1930m CPU).
+Los limits son altos para que Ollama pueda usar más CPU/RAM cuando carga un modelo.
+Si el cluster vuelve a tener 2 nodos, se pueden subir los requests.
 
 ## Modelos disponibles
 
 | Modelo | Tamaño | RAM | Estado |
 |---|---|---|---|
-| tinyllama | 637 MB | ~1 GB | Operativo |
+| qwen2.5:1.5b | 986 MB | ~2 GB | **Activo** (modelo principal) |
+| tinyllama | 637 MB | ~1 GB | Almacenado |
+| qwen2:1.5b | 934 MB | ~2 GB | Almacenado |
 | phi3:mini | 2.2 GB | ~3.5 GB | Almacenado (requiere más RAM) |
 
 ## Comandos frecuentes
@@ -126,3 +156,35 @@ NUNCA borrar el PVC manualmente a menos que quieras perder los modelos.
 **Causa**: ReadWriteOnce solo permite que un nodo monte el volumen.
 **Solución futura**: migrar a init container que descarga modelos desde GCS,
 o usar un StatefulSet con volumeClaimTemplates.
+
+### Ollama en Pending con "Insufficient cpu"
+**Causa**: con 1 solo nodo spot, los resource requests de todos los pods suman más
+de lo disponible (~1930m CPU en e2-standard-2). Típico cuando el 2º nodo spot es
+reclamado por Google.
+**Solución**: bajar los resource requests (NO limits) al mínimo. Los requests son
+lo que Kubernetes reserva para scheduling. Los limits permiten usar más si hay disponible.
+**Procedimiento si pasa**: escalar agent a 0 (`kubectl scale deployment agent --replicas=0`),
+esperar a que Ollama arranque, luego escalar agent a 1.
+
+### Ollama tarda mucho en ContainerCreating
+**Causa**: nodo spot nuevo que no tiene la imagen Docker de Ollama cacheada (~3GB).
+El PVC guarda los modelos LLM, NO la imagen Docker del programa Ollama.
+**Solución**: esperar 3-5 minutos. Solo pasa la primera vez en cada nodo nuevo.
+
+### kubectl cp falla con "context deadline exceeded"
+**Causa**: copiar archivos grandes (>500MB) al pod puede hacer timeout.
+**Solución**: comprimir con tar antes de copiar, o subir a GCS bucket y descargar desde el pod.
+
+### Cloud Shell pierde autenticación de kubectl
+**Causa**: al abrir múltiples pestañas de Cloud Shell, las credenciales pueden expirar.
+**Solución**: `gcloud auth login --update-adc` y luego `gcloud container clusters get-credentials ...`
+
+### Port-forward: "address already in use"
+**Causa**: un port-forward anterior sigue corriendo en background.
+**Solución**: `pkill -f "port-forward"` y relanzar.
+
+### Nodo spot reclamado (1 nodo en vez de 2)
+**Causa**: los nodos spot son preemptibles — Google los reclama cuando necesita capacidad.
+El cluster-autoscaler puede no conseguir reemplazarlo si no hay capacidad spot en la zona.
+**Solución**: con los resources ajustados actuales, todo cabe en 1 nodo.
+Si necesitas forzar 2 nodos: `gcloud container clusters resize ai-infra-agent --node-pool spot-e411 --num-nodes 2 --zone europe-southwest1-a`

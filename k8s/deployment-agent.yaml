@@ -49,4 +49,4 @@ spec:
         - name: OLLAMA_TAGS
           value: "http://ollama-svc:11434/api/tags"
         - name: OLLAMA_MODEL
-          value: "tinyllama"
+          value: "qwen2.5:1.5b"
