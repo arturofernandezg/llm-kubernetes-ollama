@@ -57,3 +57,19 @@ def mock_ollama_model_not_loaded():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=tags_response)
     return mock_client
+
+
+def mock_http_client_with_retries(fail_times: int, fail_exc, response_text: str):
+    """
+    Mock que falla fail_times veces con fail_exc, luego devuelve OK.
+    Útil para testear retry con exponential backoff.
+    """
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"response": response_text}
+    mock_response.raise_for_status = MagicMock()
+
+    side_effects = [fail_exc] * fail_times + [mock_response]
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=side_effects)
+    return mock_client

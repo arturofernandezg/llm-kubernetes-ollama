@@ -14,6 +14,7 @@ from main import app
 from tests.helpers import (
     VALID_PARAMS, VALID_JSON_STR,
     mock_http_client, mock_ollama_unreachable, mock_ollama_model_not_loaded,
+    mock_http_client_with_retries,
 )
 
 
@@ -170,3 +171,67 @@ class TestExtractEndpoint:
         with patch.object(app.state, "http_client", mock_client):
             r = api_client.post("/extract", json={"message": "Test"})
         assert r.status_code == 502
+
+
+# ── Retry con exponential backoff ─────────────────────────────────────────────
+
+class TestRetryBehavior:
+    """Tests del retry con exponential backoff hacia Ollama."""
+
+    def test_retry_succeeds_after_connect_error(self, api_client):
+        """Falla 1 vez con ConnectError, luego OK → 200."""
+        mock_client = mock_http_client_with_retries(
+            fail_times=1,
+            fail_exc=_httpx.ConnectError("Connection refused"),
+            response_text=VALID_JSON_STR,
+        )
+        with patch.object(app.state, "http_client", mock_client):
+            r = api_client.post("/extract", json={"message": "Test retry"})
+        assert r.status_code == 200
+        assert r.json()["extracted_parameters"] == VALID_PARAMS
+        assert mock_client.post.call_count == 2
+
+    def test_retry_succeeds_after_timeout(self, api_client):
+        """Falla 1 vez con TimeoutException, luego OK → 200."""
+        mock_client = mock_http_client_with_retries(
+            fail_times=1,
+            fail_exc=_httpx.TimeoutException("timeout"),
+            response_text=VALID_JSON_STR,
+        )
+        with patch.object(app.state, "http_client", mock_client):
+            r = api_client.post("/extract", json={"message": "Test retry"})
+        assert r.status_code == 200
+        assert mock_client.post.call_count == 2
+
+    def test_retry_exhausted_timeout_returns_504(self, api_client):
+        """Todos los intentos fallan con TimeoutException → 504."""
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=_httpx.TimeoutException("timeout"))
+        with patch.object(app.state, "http_client", mock_client):
+            r = api_client.post("/extract", json={"message": "Test"})
+        assert r.status_code == 504
+        assert mock_client.post.call_count == 3  # retry_max_attempts default
+
+    def test_retry_exhausted_connect_error_returns_502(self, api_client):
+        """Todos los intentos fallan con ConnectError → 502."""
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=_httpx.ConnectError("refused"))
+        with patch.object(app.state, "http_client", mock_client):
+            r = api_client.post("/extract", json={"message": "Test"})
+        assert r.status_code == 502
+        assert "3 attempts" in r.json()["detail"]
+
+    def test_no_retry_on_http_status_error(self, api_client):
+        """HTTPStatusError (500) → fallo inmediato sin retry."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(
+            side_effect=_httpx.HTTPStatusError(
+                "Server Error", request=MagicMock(), response=mock_response
+            )
+        )
+        with patch.object(app.state, "http_client", mock_client):
+            r = api_client.post("/extract", json={"message": "Test"})
+        assert r.status_code == 502
+        assert mock_client.post.call_count == 1  # sin retry

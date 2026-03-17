@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     http_timeout: float = 120.0
     health_timeout: float = 5.0
 
+    # Retry con exponential backoff (llamadas a Ollama)
+    retry_max_attempts: int = 3
+    retry_base_delay: float = 1.0
+    retry_max_delay: float = 10.0
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

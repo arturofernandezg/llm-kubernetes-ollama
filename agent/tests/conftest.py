@@ -2,6 +2,8 @@
 Fixtures de pytest compartidos para todos los tests del agente.
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,4 +18,6 @@ app.state.http_client = mock_http_client("")
 
 @pytest.fixture
 def api_client():
-    return TestClient(app)
+    """TestClient con asyncio.sleep parcheado para evitar esperas en retry."""
+    with patch("main.asyncio.sleep", new_callable=AsyncMock):
+        yield TestClient(app)

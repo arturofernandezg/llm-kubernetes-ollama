@@ -5,6 +5,7 @@ Extrae parámetros de infraestructura GCP a partir de mensajes en lenguaje
 natural, usando un LLM local (Ollama) como motor de inferencia.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -142,29 +143,56 @@ async def extract_parameters(request: InfraRequest):
     logger.info("[%s] Processing: %s", request_id, request.message[:100])
 
     prompt = PROMPT_TEMPLATE.format(user_request=request.message)
+    client: httpx.AsyncClient = app.state.http_client
 
-    try:
-        client: httpx.AsyncClient = app.state.http_client
-        response = await client.post(
-            settings.ollama_url,
-            json={
-                "model": settings.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-            },
-        )
-        response.raise_for_status()
-    except httpx.TimeoutException:
-        logger.error("[%s] Ollama timeout after %.0fs", request_id, settings.http_timeout)
-        raise HTTPException(status_code=504, detail="LLM timeout — model took too long")
-    except httpx.HTTPStatusError as exc:
-        logger.error("[%s] Ollama HTTP error: %s", request_id, exc.response.status_code)
-        raise HTTPException(
-            status_code=502, detail=f"LLM returned error: {exc.response.status_code}"
-        )
-    except httpx.HTTPError as exc:
-        logger.error("[%s] Ollama connection error: %s", request_id, exc)
-        raise HTTPException(status_code=502, detail=f"LLM unavailable: {exc}")
+    # Retry con exponential backoff para errores transitorios
+    last_exc: Exception | None = None
+    response = None
+
+    for attempt in range(settings.retry_max_attempts):
+        try:
+            response = await client.post(
+                settings.ollama_url,
+                json={
+                    "model": settings.ollama_model,
+                    "prompt": prompt,
+                    "stream": False,
+                },
+            )
+            response.raise_for_status()
+            break  # éxito, salir del loop
+        except httpx.HTTPStatusError as exc:
+            # Error del modelo (4xx/5xx) — no reintentar
+            logger.error("[%s] Ollama HTTP error: %s", request_id, exc.response.status_code)
+            raise HTTPException(
+                status_code=502, detail=f"LLM returned error: {exc.response.status_code}"
+            )
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            last_exc = exc
+            if attempt < settings.retry_max_attempts - 1:
+                delay = min(
+                    settings.retry_base_delay * (2 ** attempt),
+                    settings.retry_max_delay,
+                )
+                logger.warning(
+                    "[%s] Ollama attempt %d/%d failed (%s), retrying in %.1fs",
+                    request_id, attempt + 1, settings.retry_max_attempts,
+                    type(exc).__name__, delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "[%s] Ollama failed after %d attempts: %s",
+                    request_id, settings.retry_max_attempts, exc,
+                )
+        except httpx.HTTPError as exc:
+            logger.error("[%s] Ollama connection error: %s", request_id, exc)
+            raise HTTPException(status_code=502, detail=f"LLM unavailable: {exc}")
+
+    if response is None:
+        if isinstance(last_exc, httpx.TimeoutException):
+            raise HTTPException(status_code=504, detail="LLM timeout — model took too long")
+        raise HTTPException(status_code=502, detail=f"LLM unavailable after {settings.retry_max_attempts} attempts: {last_exc}")
 
     raw = response.json().get("response", "")
     parsed_dict, method = extract_json(raw)
