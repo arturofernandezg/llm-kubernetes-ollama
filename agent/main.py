@@ -6,60 +6,19 @@ natural, usando un LLM local (Ollama) como motor de inferencia.
 """
 
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, field_validator
 import httpx
-import json
-import logging
-import os
-import re
 import time
 import uuid
 
-# ── Logging ────────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-)
-logger = logging.getLogger(__name__)
-
-# ── Configuración via variables de entorno ─────────────────────────────────────
-OLLAMA_URL  = os.getenv("OLLAMA_URL",   "http://ollama-svc:11434/api/generate")
-OLLAMA_TAGS = os.getenv("OLLAMA_TAGS",  "http://ollama-svc:11434/api/tags")
-MODEL       = os.getenv("OLLAMA_MODEL", "tinyllama")
-
-# Valores válidos de GCP — ampliar según las regiones permitidas en MasOrange
-VALID_REGIONS: frozenset[str] = frozenset({
-    "europe-west1", "europe-west2", "europe-west3", "europe-west4",
-    "europe-southwest1", "us-central1", "us-east1", "us-west1",
-    "asia-east1", "asia-northeast1",
-})
-VALID_INSTANCE_PREFIXES: tuple[str, ...] = (
-    "e2-", "n1-", "n2-", "n2d-", "c2-", "m1-", "t2d-"
-)
-
-# ── Prompt ─────────────────────────────────────────────────────────────────────
-PROMPT_TEMPLATE = """\
-You are an infrastructure parameter extractor. Given a message, extract exactly these 4 fields and return ONLY a valid JSON object, no extra text:
-- project_name: project name (string)
-- region: GCP region, e.g. europe-west1 (string)
-- instance_type: machine type, e.g. e2-standard-4 (string)
-- purpose: short description of the resource purpose, max 5 words (string)
-
-If a parameter is not mentioned, use null.
-Do not copy the full message into purpose. Summarize it in 2-5 words.
-
-Examples:
-Message: "I need a server for the payments project in europe-west1 with e2-standard-4 for web traffic"
-Output: {{"project_name": "payments", "region": "europe-west1", "instance_type": "e2-standard-4", "purpose": "web traffic"}}
-
-<user_message>
-{user_request}
-</user_message>
-Output:"""
+from config import settings, logger
+from schemas import InfraRequest, ExtractedParams, ExtractResponse
+from extraction import PROMPT_TEMPLATE, extract_json
+from validation import validate_params
 
 
-# ── Lifespan ───────────────────────────────────────────────────────────────────
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -68,21 +27,26 @@ async def lifespan(app: FastAPI):
     - Verifica conectividad con Ollama al arrancar.
     - Cierra el cliente limpiamente al apagar.
     """
-    logger.info(f"Agent starting — model: {MODEL}, ollama: {OLLAMA_URL}")
+    logger.info(
+        "Agent starting — model: %s, ollama: %s",
+        settings.ollama_model, settings.ollama_url,
+    )
 
-    # Cliente compartido: timeout de 120s para inferencia, 10s para health checks
-    app.state.http_client = httpx.AsyncClient(timeout=120.0)
+    app.state.http_client = httpx.AsyncClient(timeout=settings.http_timeout)
 
     try:
-        r = await app.state.http_client.get(OLLAMA_TAGS, timeout=10.0)
+        r = await app.state.http_client.get(settings.ollama_tags, timeout=10.0)
         r.raise_for_status()
         available = [m["name"] for m in r.json().get("models", [])]
-        if any(MODEL in m for m in available):
-            logger.info(f"Model '{MODEL}' confirmed available")
+        if any(settings.ollama_model in m for m in available):
+            logger.info("Model '%s' confirmed available", settings.ollama_model)
         else:
-            logger.warning(f"Model '{MODEL}' NOT found. Available: {available}")
+            logger.warning(
+                "Model '%s' NOT found. Available: %s",
+                settings.ollama_model, available,
+            )
     except Exception as exc:
-        logger.warning(f"Could not reach Ollama at startup: {exc}")
+        logger.warning("Could not reach Ollama at startup: %s", exc)
 
     yield
 
@@ -93,115 +57,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AIOps Infrastructure Agent",
     description="Extrae parámetros de infraestructura GCP desde lenguaje natural.",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
 
-# ── Schemas ────────────────────────────────────────────────────────────────────
-class InfraRequest(BaseModel):
-    message: str
-
-    @field_validator("message")
-    @classmethod
-    def message_not_empty(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("message cannot be empty")
-        if len(v) > 2000:
-            raise ValueError("message too long (max 2000 chars)")
-        return v
-
-
-class ExtractedParams(BaseModel):
-    project_name:  str | None = None
-    region:        str | None = None
-    instance_type: str | None = None
-    purpose:       str | None = None
-
-
-class ExtractResponse(BaseModel):
-    request_id:           str
-    input_message:        str
-    extracted_parameters: ExtractedParams | None
-    validation_warnings:  list[str]
-    raw_response:         str
-    model_used:           str
-    extraction_method:    str | None
-    duration_ms:          int
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-def extract_json(text: str) -> tuple[dict | None, str | None]:
-    """
-    Extrae un objeto JSON del texto devuelto por el modelo.
-
-    Estrategias (en orden de fiabilidad):
-      1. Parseo directo — el modelo devolvió JSON puro.
-      2. Bloque markdown — JSON dentro de ```json ... ``` o ``` ... ```.
-      3. Regex fallback — primer { ... } encontrado en el texto.
-
-    Returns:
-        Tupla (dict, method_name). Ambos son None si no se encuentra JSON.
-    """
-    stripped = text.strip()
-
-    # 1. JSON puro
-    try:
-        return json.loads(stripped), "direct"
-    except json.JSONDecodeError:
-        pass
-
-    # 2. Bloque markdown
-    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1)), "markdown_block"
-        except json.JSONDecodeError:
-            pass
-
-    # 3. Primer objeto JSON en texto libre
-    match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group()), "regex_search"
-        except json.JSONDecodeError:
-            pass
-
-    return None, None
-
-
-def validate_params(params: dict) -> list[str]:
-    """
-    Valida los parámetros extraídos contra valores conocidos de GCP.
-
-    No bloquea la respuesta — genera warnings informativos que el llamante
-    puede usar para decidir si escalar a revisión humana.
-    """
-    warnings: list[str] = []
-
-    region = params.get("region")
-    if region and region not in VALID_REGIONS:
-        warnings.append(
-            f"Unknown region '{region}' — verify it is a valid GCP region"
-        )
-
-    instance_type = params.get("instance_type")
-    if instance_type and not any(
-        instance_type.startswith(p) for p in VALID_INSTANCE_PREFIXES
-    ):
-        warnings.append(
-            f"Unusual instance type '{instance_type}' — verify GCP machine type format"
-        )
-
-    for field in ("project_name", "region", "instance_type", "purpose"):
-        if not params.get(field):
-            warnings.append(f"Missing parameter: '{field}'")
-
-    return warnings
-
-
-# ── Endpoints ──────────────────────────────────────────────────────────────────
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/healthz", summary="Liveness probe — solo verifica que el proceso responde")
 async def healthz():
@@ -222,22 +83,22 @@ async def readyz():
     """
     try:
         client: httpx.AsyncClient = app.state.http_client
-        r = await client.get(OLLAMA_TAGS, timeout=5.0)
+        r = await client.get(settings.ollama_tags, timeout=settings.health_timeout)
         r.raise_for_status()
         available = [m["name"] for m in r.json().get("models", [])]
-        model_loaded = any(MODEL in m for m in available)
+        model_loaded = any(settings.ollama_model in m for m in available)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Ollama unreachable: {exc}")
 
     if not model_loaded:
         raise HTTPException(
             status_code=503,
-            detail=f"Model '{MODEL}' not loaded. Available: {available}",
+            detail=f"Model '{settings.ollama_model}' not loaded. Available: {available}",
         )
 
     return {
         "status": "ready",
-        "model": MODEL,
+        "model": settings.ollama_model,
         "model_loaded": model_loaded,
     }
 
@@ -250,19 +111,19 @@ async def health():
     """
     try:
         client: httpx.AsyncClient = app.state.http_client
-        r = await client.get(OLLAMA_TAGS, timeout=5.0)
+        r = await client.get(settings.ollama_tags, timeout=settings.health_timeout)
         r.raise_for_status()
         available = [m["name"] for m in r.json().get("models", [])]
-        model_loaded = any(MODEL in m for m in available)
+        model_loaded = any(settings.ollama_model in m for m in available)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Ollama unreachable: {exc}")
 
     return {
         "status": "ok",
-        "model": MODEL,
+        "model": settings.ollama_model,
         "model_loaded": model_loaded,
         "available_models": available,
-        "ollama_url": OLLAMA_URL,
+        "ollama_url": settings.ollama_url,
     }
 
 
@@ -275,35 +136,34 @@ async def extract_parameters(request: InfraRequest):
     """
     Recibe un mensaje en lenguaje natural, lo envía al LLM y devuelve
     los parámetros de infraestructura extraídos en formato estructurado.
-
-    Si el modelo no devuelve JSON puro, se intentan estrategias de
-    extracción progresivas (markdown, regex). Los parámetros extraídos
-    se validan contra valores conocidos de GCP y se devuelven warnings
-    cuando algo es sospechoso, sin bloquear la respuesta.
     """
     request_id = str(uuid.uuid4())[:8]
     start = time.time()
-    logger.info(f"[{request_id}] Processing: {request.message[:100]}")
+    logger.info("[%s] Processing: %s", request_id, request.message[:100])
 
     prompt = PROMPT_TEMPLATE.format(user_request=request.message)
 
     try:
         client: httpx.AsyncClient = app.state.http_client
         response = await client.post(
-            OLLAMA_URL,
-            json={"model": MODEL, "prompt": prompt, "stream": False},
+            settings.ollama_url,
+            json={
+                "model": settings.ollama_model,
+                "prompt": prompt,
+                "stream": False,
+            },
         )
         response.raise_for_status()
     except httpx.TimeoutException:
-        logger.error(f"[{request_id}] Ollama timeout after 120s")
+        logger.error("[%s] Ollama timeout after %.0fs", request_id, settings.http_timeout)
         raise HTTPException(status_code=504, detail="LLM timeout — model took too long")
     except httpx.HTTPStatusError as exc:
-        logger.error(f"[{request_id}] Ollama HTTP error: {exc.response.status_code}")
+        logger.error("[%s] Ollama HTTP error: %s", request_id, exc.response.status_code)
         raise HTTPException(
             status_code=502, detail=f"LLM returned error: {exc.response.status_code}"
         )
     except httpx.HTTPError as exc:
-        logger.error(f"[{request_id}] Ollama connection error: {exc}")
+        logger.error("[%s] Ollama connection error: %s", request_id, exc)
         raise HTTPException(status_code=502, detail=f"LLM unavailable: {exc}")
 
     raw = response.json().get("response", "")
@@ -317,9 +177,9 @@ async def extract_parameters(request: InfraRequest):
     duration_ms = int((time.time() - start) * 1000)
 
     if parsed_dict:
-        logger.info(f"[{request_id}] OK via '{method}' in {duration_ms}ms — {parsed_dict}")
+        logger.info("[%s] OK via '%s' in %dms — %s", request_id, method, duration_ms, parsed_dict)
     else:
-        logger.warning(f"[{request_id}] Failed in {duration_ms}ms. Raw: {raw[:150]}")
+        logger.warning("[%s] Failed in %dms. Raw: %s", request_id, duration_ms, raw[:150])
 
     return ExtractResponse(
         request_id=request_id,
@@ -327,7 +187,7 @@ async def extract_parameters(request: InfraRequest):
         extracted_parameters=ExtractedParams(**parsed_dict) if parsed_dict else None,
         validation_warnings=warnings,
         raw_response=raw,
-        model_used=MODEL,
+        model_used=settings.ollama_model,
         extraction_method=method,
         duration_ms=duration_ms,
     )
