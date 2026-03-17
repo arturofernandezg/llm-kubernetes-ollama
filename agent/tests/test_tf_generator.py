@@ -40,7 +40,7 @@ class TestSafeName:
         assert safe_name("web-prod") == "web_prod"
 
     def test_special_chars(self):
-        assert safe_name("My Project!") == "my_project_"
+        assert safe_name("My Project!") == "my_project"
 
     def test_empty_string(self):
         assert safe_name("") == "project"
@@ -120,4 +120,4 @@ class TestGenerateTerraform:
             },
         }
         tf = generate_terraform(response)
-        assert 'module "vm_my_cool_project_"' in tf
+        assert 'module "vm_my_cool_project"' in tf
