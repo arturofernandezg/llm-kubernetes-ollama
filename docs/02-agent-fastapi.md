@@ -58,11 +58,14 @@ ExtractResponse:
 
 ## Validaciones GCP
 
-- **Regiones permitidas**: europe-west1/2/3/4, europe-southwest1, us-central1,
+- **Regiones permitidas** (en `VALID_REGIONS`): europe-west1/2/3/4, europe-southwest1, us-central1,
   us-east1, us-west1, asia-east1, asia-northeast1
 - **Prefijos de instancia válidos**: e2-, n1-, n2-, n2d-, c2-, m1-, t2d-
 - **Campos obligatorios**: project_name, region, instance_type, purpose
 - No bloquea: genera warnings informativos
+- **Nota**: la convención del proyecto MasOrange es solo europe-\*, pero `VALID_REGIONS`
+  incluye también regiones US y Asia. Esto significa que `us-east1` pasa validación
+  sin warning. Gap identificado el 2026-03-18 durante pruebas end-to-end.
 
 ## Variables de entorno
 
@@ -104,11 +107,25 @@ Cuando se agotan los reintentos:
 Endpoint `GET /metrics` expuesto via `prometheus-fastapi-instrumentator`:
 
 **Auto-instrumentación** (todos los endpoints):
-- Request count, latency histogram, in-progress gauge
+- `http_requests_total{handler, method, status}` — contador de requests por endpoint
+- `http_request_duration_seconds{handler, method}` — histograma de latencia por endpoint
+- `http_request_duration_highr_seconds` — histograma de alta resolución (todos los endpoints)
+- `http_request_size_bytes{handler}` — tamaño de requests entrantes
 
 **Contadores custom**:
 - `aiops_ollama_retries_total{outcome}` — resultado del retry ("success" / "exhausted")
 - `aiops_extraction_total{method}` — método de extracción usado ("direct" / "markdown_block" / "regex_search" / "failed")
+
+**Datos reales observados** (2026-03-18, pod con ~40 min de uptime):
+- `/healthz` latencia media: ~1.8ms (puro in-memory, sin dependencias)
+- `/readyz` latencia media: ~62ms (consulta Ollama via red interna)
+- `/extract` latencia: 7-45 segundos (inferencia LLM en CPU)
+- `/readyz` 5xx: 23 requests durante arranque de Ollama (readiness probe correctamente devolviendo 503)
+
+**Gap conocido — buckets del histograma para /extract**:
+Los buckets por defecto del instrumentador llegan hasta 1s (0.1, 0.5, 1.0, +Inf).
+Las inferencias LLM tardan 7-45s, así que todas caen en `+Inf` sin resolución intermedia.
+Para Fase 2 se deberían añadir buckets en 5s, 10s, 30s, 60s, 120s.
 
 ## Logging JSON estructurado
 

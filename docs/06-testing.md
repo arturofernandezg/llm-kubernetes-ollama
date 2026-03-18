@@ -16,12 +16,13 @@ python -m pytest tests/ -v
 | `test_endpoints.py` | 26 | Integración | Health probes (/healthz, /readyz, /health), /extract end-to-end, retry con backoff, /metrics |
 | `test_extraction.py` | 11 | Unitario | extract_json: direct, markdown_block, regex con bracket counting, nested JSON, edge cases |
 | `test_tf_generator.py` | 16 | Unitario | safe_name (caracteres especiales, vacíos, trailing underscore), generate_terraform (template, defaults, labels) |
-| `test_validation.py` | 6 | Unitario | validate_params: regiones válidas/inválidas, instance types, campos null |
-| **Total** | **59** | | |
+| `test_validation.py` | 11 | Unitario | validate_params: regiones válidas/inválidas, instance types con parametrize (6 prefijos), campos null |
+| **Total** | **64** | | |
 
 **Nota**: los tests estaban originalmente en un único `test_main.py` (40 tests).
 Se refactorizaron en 4 archivos al modularizar el código del agente (commit 7ec4a3a)
-y se añadieron 19 tests nuevos para cubrir `tf_generator.py` y casos adicionales.
+y se añadieron tests nuevos para cubrir `tf_generator.py`, validación parametrizada
+y casos adicionales. Verificado con Cloud Build el 2026-03-18: **64 passed in 0.39s**.
 
 ### Ficheros de soporte
 
@@ -123,3 +124,14 @@ que rastrea la profundidad de anidamiento. Corregido en commit 5ec78f5.
 **Causa**: pytest-asyncio 0.24 advierte sobre un cambio futuro en el scope por defecto.
 **Impacto**: solo es un warning, los tests funcionan correctamente.
 **Solución futura**: añadir `asyncio_default_fixture_loop_scope = function` al pytest.ini.
+
+### Tests de validación: `us-east1` no genera warning en /extract real
+**Descubierto**: 2026-03-18 durante pruebas end-to-end en el cluster.
+**Contexto**: al enviar `"Quiero un servidor en us-east1"` al endpoint `/extract`,
+la respuesta incluye `validation_warnings` para campos faltantes (instance_type, purpose)
+pero **no avisa de que `us-east1` no está entre las regiones europe-\* del proyecto**.
+**Causa**: `validation.py` sí valida regiones con `VALID_REGIONS`, pero esa lista incluye
+regiones US y Asia además de las europeas. La convención del proyecto es solo europe-\*,
+pero la validación acepta un conjunto más amplio.
+**Nota**: los tests unitarios (`test_invalid_region_generates_warning`) usan `"zona-inventada-1"`
+(región que no existe), no una región GCP válida fuera de Europa. Gap entre test y regla de negocio.

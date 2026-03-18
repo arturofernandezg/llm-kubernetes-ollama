@@ -18,14 +18,14 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 | `docs/03-kubernetes.md` | Cluster GKE, manifiestos, probes, PDB, NetworkPolicy, SecurityContext |
 | `docs/04-cicd-cloudbuild.md` | Cloud Build (tests + build), Artifact Registry, versionado |
 | `docs/05-terraform-generator.md` | CLI generate_tf.py, módulo tf_generator.py, template, uso |
-| `docs/06-testing.md` | 59 tests en 4 ficheros, mocking, errores comunes y soluciones |
+| `docs/06-testing.md` | 64 tests en 4 ficheros, mocking, errores comunes y soluciones |
 | `docs/07-roadmap.md` | Fases del proyecto, TODOs por fase, mejoras completadas |
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 
 ## Estado actual
 
-- **Fase 1**: Completa (agente modular + Ollama + 59 tests + build + K8s + retry + metrics + security)
+- **Fase 1**: Completa (agente modular + Ollama + 64 tests + build + K8s + retry + metrics + security)
 - **Fase 2**: Pendiente (Slack + GitHub PRs)
 - **Fase 3**: Pendiente (validación + score confianza)
 - **Fase 4**: Pendiente (CI/CD terraform)
@@ -43,7 +43,7 @@ agent/schemas.py        → Modelos Pydantic v2
 agent/extraction.py     → 3 estrategias de extracción JSON
 agent/validation.py     → Validación de parámetros GCP
 agent/tf_generator.py   → Generación de template Terraform
-agent/tests/            → 59 tests en 4 ficheros (endpoints, extraction, tf_generator, validation)
+agent/tests/            → 64 tests en 4 ficheros (endpoints, extraction, tf_generator, validation)
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
 k8s/                    → Manifiestos K8s (incl. networkpolicy.yaml)
 cloudbuild.yaml         → Pipeline: tests (gate) + build + push
@@ -59,7 +59,7 @@ cloudbuild.yaml         → Pipeline: tests (gate) + build + push
 
 ## Convenciones
 
-- Regiones GCP permitidas: europe-west1/2/3/4, europe-southwest1
+- Regiones GCP permitidas (convención): europe-west1/2/3/4, europe-southwest1 (nota: validation.py acepta más regiones — gap conocido)
 - Labels obligatorios: managed-by, project, environment, created-by
 - Tests con mocking de Ollama (no requieren cluster ni LLM)
 - Builds con `--substitutions=COMMIT_SHA=$(git rev-parse --short HEAD)`

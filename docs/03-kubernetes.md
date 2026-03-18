@@ -8,9 +8,9 @@
 | Proyecto GCP | uniovi-ai-infra-agent |
 | Zona | europe-southwest1-a |
 | Tipo de nodo | e2-standard-2 (spot) |
-| Nodos | 2 |
+| Nodos | 2 (pero frecuentemente 1 por preemption spot — ver nota abajo) |
 | Namespace | arturo-llm-test |
-| K8s version | 1.35.1-gke |
+| K8s version | 1.35.1-gke.1396001 |
 
 ## Manifiestos (`k8s/`)
 
@@ -59,6 +59,9 @@ livenessProbe:         # GET / — reinicia si Ollama se cuelga
 `minAvailable: 1` — garantiza que durante operaciones de mantenimiento
 (node drain, actualizaciones K8s) siempre haya al menos 1 pod de Ollama.
 Importante con nodos spot que pueden ser reciclados.
+
+**Verificado** (2026-03-18): `ALLOWED DISRUPTIONS: 0` con 1 réplica activa.
+Kubernetes no puede desalojar el pod voluntariamente mientras no haya un reemplazo.
 
 ## NetworkPolicy
 
@@ -207,6 +210,10 @@ esperar a que Ollama arranque, luego escalar agent a 1.
 **Causa**: nodo spot nuevo que no tiene la imagen Docker de Ollama cacheada (~3GB).
 El PVC guarda los modelos LLM, NO la imagen Docker del programa Ollama.
 **Solución**: esperar 3-5 minutos. Solo pasa la primera vez en cada nodo nuevo.
+**Observado** (2026-03-18): tras preemption de nodo spot, Ollama estuvo en ContainerCreating
+~2-3 minutos mientras se pullaba la imagen. Durante ese tiempo, el agente estaba Running
+pero `/readyz` devolvía 503 (23 requests 5xx contabilizados en métricas Prometheus).
+Comportamiento correcto: el pod no recibió tráfico de `/extract` hasta que Ollama estuvo ready.
 
 ### kubectl cp falla con "context deadline exceeded"
 **Causa**: copiar archivos grandes (>500MB) al pod puede hacer timeout.

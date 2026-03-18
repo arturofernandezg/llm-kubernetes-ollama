@@ -16,7 +16,7 @@
 - [x] Agente FastAPI con extracción de parámetros via LLM
 - [x] Ollama desplegado en K8s con PVC
 - [x] Generador de Terraform (generate_tf.py + agent/tf_generator.py)
-- [x] 59 tests unitarios y de integración (4 ficheros: test_endpoints, test_extraction, test_tf_generator, test_validation)
+- [x] 64 tests unitarios y de integración (4 ficheros: test_endpoints, test_extraction, test_tf_generator, test_validation)
 - [x] Cloud Build con versionado ($COMMIT_SHA + :latest) y tests como gate
 - [x] Probes separadas (liveness /healthz + readiness /readyz)
 - [x] Cliente httpx compartido (no uno nuevo por request)
@@ -33,6 +33,24 @@
 - [x] Métricas Prometheus: endpoint /metrics auto-instrumentado + contadores custom `aiops_ollama_retries_total` y `aiops_extraction_total` (commit 5ec78f5)
 - [x] SecurityContext hardening: runAsNonRoot, readOnlyRootFilesystem, drop ALL capabilities, allowPrivilegeEscalation: false (commit 5ec78f5)
 - [x] Logging JSON estructurado compatible con Cloud Logging / ELK (config.py, python-json-logger)
+- [x] Fix Dockerfile: `COPY *.py ./` con trailing slash para múltiples ficheros fuente (commit 326cdc5)
+
+### Verificación end-to-end (2026-03-18)
+
+Sesión de pruebas completa contra el cluster en producción:
+- Cluster: 2 nodos spot Ready, K8s 1.35.1-gke
+- PDB: `ALLOWED DISRUPTIONS: 0` — protección activa
+- `/healthz`: 200 OK (~1.8ms)
+- `/readyz`: 200 OK con `model_loaded: true` (~62ms)
+- `/extract`: extracción correcta 4/4 parámetros, validación funcional
+- `/metrics`: Prometheus con contadores reales (232 readyz, 168 healthz, 23 readyz 5xx durante arranque)
+- Cloud Build: 64/64 tests + Docker build + push en ~1 min
+- `generate_tf.py` end-to-end: .tf generado desde lenguaje natural (7.8s)
+
+**Gaps identificados**:
+- Validación de regiones acepta us-east1 sin warning (la convención es solo europe-\*)
+- Buckets del histograma Prometheus no cubren latencias LLM (7-45s cae en +Inf)
+- Primera inferencia tras restart de nodo: ~45s (modelo cargándose en memoria)
 
 ---
 
@@ -76,7 +94,7 @@ agent/
     ├── test_endpoints.py # 26 tests (ya existe)
     ├── test_extraction.py # 11 tests (ya existe)
     ├── test_tf_generator.py # 16 tests (ya existe)
-    ├── test_validation.py # 6 tests (ya existe)
+    ├── test_validation.py # 11 tests (ya existe)
     ├── test_slack.py     # NUEVO
     └── test_github.py    # NUEVO
 ```
@@ -113,9 +131,12 @@ agent/
 
 ## Mejoras técnicas pendientes (transversales)
 
+- [ ] Restringir `VALID_REGIONS` a solo europe-\* (alinear validación con convención MasOrange)
+- [ ] Configurar buckets personalizados en prometheus-fastapi-instrumentator para latencias LLM (5s, 10s, 30s, 60s, 120s)
 - [ ] Circuit breaker para evitar saturar Ollama
 - [ ] Rate limiting en el agente
 - [ ] HPA (Horizontal Pod Autoscaler) para el agente
 - [ ] Tracing OpenTelemetry
 - [ ] Evaluar modelo más capaz (phi3:mini, llama3) vs precisión
 - [ ] Considerar migrar modelos a GCS + init container (para escalar Ollama)
+- [ ] Solicitar rol `roles/logging.logWriter` para service account de Cloud Build (warning actual no afecta builds)

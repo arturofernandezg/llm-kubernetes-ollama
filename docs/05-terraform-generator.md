@@ -88,5 +88,25 @@ Corregido en commit e36ceab.
 
 ### datetime.utcnow() deprecation warning
 **Causa**: Python 3.12+ depreca `datetime.utcnow()` por no incluir timezone info.
-**Solución**: reemplazado por `datetime.now(timezone.utc)`.
-Corregido en commit 87675be.
+**Solución**: reemplazado por `datetime.now(timezone.utc)` en `tf_generator.py`.
+El código actual ya usa la versión corregida.
+
+### Ejemplo end-to-end verificado (2026-03-18)
+```bash
+$ python3 generate_tf.py --agent-url http://localhost:8000 \
+    "Servidor para analytics-prod en europe-west4 con n2-standard-4 para analytics"
+
+  PARÁMETROS EXTRAÍDOS
+  project_name  : analytics-prod
+  region        : europe-west4
+  instance_type : n2-standard-4
+  purpose       : analytics
+  model_used    : qwen2.5:1.5b
+  extract_method: markdown_block
+  duration_ms   : 7874ms
+
+✅ Fichero generado: terraform_output/analytics_prod.tf (1977 chars)
+```
+El flujo completo (mensaje → LLM → extracción → validación → .tf) funciona end-to-end
+contra el cluster en producción. La primera inferencia tras reinicio de nodo tarda ~45s;
+las siguientes bajan a ~8-20s porque el modelo ya está cargado en memoria.

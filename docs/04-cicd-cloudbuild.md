@@ -5,7 +5,7 @@
 Archivo: `cloudbuild.yaml`
 
 ```
-gcloud builds submit → Step 1: pytest (59 tests) → Step 2: Docker build → Push a Artifact Registry
+gcloud builds submit → Step 1: pytest (64 tests) → Step 2: Docker build → Push a Artifact Registry
                                                                             ├── :latest
                                                                             └── :$COMMIT_SHA
 ```
@@ -42,30 +42,47 @@ cd llm-kubernetes-ollama
 # $COMMIT_SHA no se rellena automáticamente en builds manuales.
 # Hay que pasarlo como sustitución:
 gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=COMMIT_SHA=$(git rev-parse --short HEAD)
+  --substitutions=COMMIT_SHA=$(git rev-parse --short HEAD) \
+  .
 ```
+
+**IMPORTANTE — contexto del build**: el último argumento (`.`) indica que se sube
+el directorio raíz del proyecto como contexto. Si se usa `agent/` como contexto,
+el paso de Docker no encontrará la carpeta `./agent` porque ya estarás *dentro* de ella.
+Error típico: `unable to prepare context: path "./agent" not found`.
+
+**En Windows (Google Cloud SDK Shell)**: no usar `\` para continuación de línea.
+Poner todo en una línea: `gcloud builds submit --config cloudbuild.yaml --substitutions=COMMIT_SHA=abc1234 .`
 
 ## Dockerfile (`agent/Dockerfile`)
 
-- Base: `python:3.11-slim`
+- Base: `python:3.11.12-slim` (versión específica para reproducibilidad)
 - Usuario no-root (`appuser`) — buena práctica de seguridad
 - Capa de dependencias cacheada (COPY requirements.txt antes que el código)
-- Copia todos los módulos Python (`COPY *.py .`): main.py, config.py, schemas.py,
+- Copia todos los módulos Python (`COPY *.py ./`): main.py, config.py, schemas.py,
   extraction.py, validation.py, tf_generator.py (no copia tests ni dev dependencies
   gracias al `.dockerignore`)
+- **Nota**: el destino debe terminar en `/` (`COPY *.py ./`, no `COPY *.py .`)
+  porque Docker exige directorio explícito cuando hay múltiples ficheros fuente.
+  Fix aplicado en commit 326cdc5.
 
 ## Deploy tras build
 
 ```bash
-# Aplicar manifiestos actualizados
-kubectl apply -f k8s/deployment-agent.yaml
+# Opción A: usar tag específico (recomendado — sabes exactamente qué versión corre)
+kubectl set image deployment/agent \
+  agent=europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:326cdc5 \
+  -n arturo-llm-test
 
-# Forzar pull de la nueva imagen si usas :latest
+# Opción B: forzar pull de :latest
 kubectl rollout restart deployment/agent -n arturo-llm-test
 
-# Verificar
+# Verificar rollout
 kubectl rollout status deployment/agent -n arturo-llm-test
 ```
+
+**Buena práctica**: usar el SHA del commit como tag (`kubectl set image ... :abc1234`)
+en vez de `:latest`. Así puedes hacer rollback exacto y sabes qué código está en producción.
 
 ---
 
