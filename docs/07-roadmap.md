@@ -15,14 +15,24 @@
 
 - [x] Agente FastAPI con extracción de parámetros via LLM
 - [x] Ollama desplegado en K8s con PVC
-- [x] Generador de Terraform (generate_tf.py)
-- [x] Tests unitarios y de integración (40 tests)
-- [x] Cloud Build con versionado ($COMMIT_SHA + :latest)
+- [x] Generador de Terraform (generate_tf.py + agent/tf_generator.py)
+- [x] 59 tests unitarios y de integración (4 ficheros: test_endpoints, test_extraction, test_tf_generator, test_validation)
+- [x] Cloud Build con versionado ($COMMIT_SHA + :latest) y tests como gate
 - [x] Probes separadas (liveness /healthz + readiness /readyz)
 - [x] Cliente httpx compartido (no uno nuevo por request)
 - [x] PodDisruptionBudget para Ollama
-- [x] 2 réplicas del agente
+- [x] 1 réplica del agente (optimizado para caber en 1 nodo spot e2-standard-2)
 - [x] Delimitadores en prompt (<user_message>) contra prompt injection
+- [x] Código modularizado: config.py, schemas.py, extraction.py, validation.py, tf_generator.py
+- [x] Modelo qwen2.5:1.5b como modelo principal (mejor extracción que tinyllama)
+
+### Mejoras técnicas completadas (post Fase 1)
+
+- [x] Retry con backoff exponencial hacia Ollama — solo en errores transitorios (timeout, connection), no en errores HTTP determinísticos (commit 07ad2e3)
+- [x] NetworkPolicy para aislar tráfico entre pods — Ollama solo acepta del agent, agent solo acepta de Apache (commit 5ec78f5)
+- [x] Métricas Prometheus: endpoint /metrics auto-instrumentado + contadores custom `aiops_ollama_retries_total` y `aiops_extraction_total` (commit 5ec78f5)
+- [x] SecurityContext hardening: runAsNonRoot, readOnlyRootFilesystem, drop ALL capabilities, allowPrivilegeEscalation: false (commit 5ec78f5)
+- [x] Logging JSON estructurado compatible con Cloud Logging / ELK (config.py, python-json-logger)
 
 ---
 
@@ -53,15 +63,22 @@
 ```
 agent/
 ├── main.py              # FastAPI app (ya existe)
-├── slack_handler.py     # Recepción y verificación de eventos Slack
-├── github_client.py     # Crear rama, commit .tf, abrir PR
-├── tf_generator.py      # Mover lógica de generate_tf.py aquí
-├── config.py            # Settings centralizados (pydantic-settings)
+├── config.py            # Settings centralizados (ya existe)
+├── schemas.py           # Pydantic models (ya existe)
+├── extraction.py        # Extracción JSON del LLM (ya existe)
+├── validation.py        # Validación de params GCP (ya existe)
+├── tf_generator.py      # Generación de .tf (ya existe)
+├── slack_handler.py     # NUEVO: recepción y verificación de eventos Slack
+├── github_client.py     # NUEVO: crear rama, commit .tf, abrir PR
 └── tests/
-    ├── test_main.py     # Ya existe
-    ├── test_slack.py
-    ├── test_github.py
-    └── test_tf_generator.py
+    ├── conftest.py      # Fixtures (ya existe)
+    ├── helpers.py        # Mocks compartidos (ya existe)
+    ├── test_endpoints.py # 26 tests (ya existe)
+    ├── test_extraction.py # 11 tests (ya existe)
+    ├── test_tf_generator.py # 16 tests (ya existe)
+    ├── test_validation.py # 6 tests (ya existe)
+    ├── test_slack.py     # NUEVO
+    └── test_github.py    # NUEVO
 ```
 
 ---
@@ -96,11 +113,9 @@ agent/
 
 ## Mejoras técnicas pendientes (transversales)
 
-- [ ] Retry con backoff exponencial hacia Ollama
 - [ ] Circuit breaker para evitar saturar Ollama
 - [ ] Rate limiting en el agente
-- [ ] NetworkPolicy para aislar tráfico entre pods
-- [ ] Observabilidad: métricas Prometheus, tracing OpenTelemetry
 - [ ] HPA (Horizontal Pod Autoscaler) para el agente
+- [ ] Tracing OpenTelemetry
 - [ ] Evaluar modelo más capaz (phi3:mini, llama3) vs precisión
 - [ ] Considerar migrar modelos a GCS + init container (para escalar Ollama)

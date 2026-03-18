@@ -24,6 +24,7 @@
 | `service-agent.yaml` | ClusterIP :8000 | Solo accesible internamente |
 | `deployment-apache.yaml` | Deployment apache (1 réplica) | Validación de red |
 | `service-apache.yaml` | ClusterIP :80 | Validación de red |
+| `networkpolicy.yaml` | NetworkPolicy (2 políticas) | Segmentación de tráfico entre pods |
 
 ## Probes del agente
 
@@ -58,6 +59,42 @@ livenessProbe:         # GET / — reinicia si Ollama se cuelga
 `minAvailable: 1` — garantiza que durante operaciones de mantenimiento
 (node drain, actualizaciones K8s) siempre haya al menos 1 pod de Ollama.
 Importante con nodos spot que pueden ser reciclados.
+
+## NetworkPolicy
+
+Fichero: `k8s/networkpolicy.yaml` — dos políticas de ingress:
+
+1. **`ollama-allow-agent-only`**: pods de Ollama solo aceptan tráfico desde pods con `app: agent` en el port 11434.
+2. **`agent-allow-apache-only`**: pods del agent solo aceptan tráfico desde pods con `app: apache` en el port 8000.
+
+**Requisito**: el cluster debe tener NetworkPolicy habilitado (GKE Dataplane V2 o Calico).
+Si no está habilitado, las políticas se aceptan pero no se aplican (fallan silenciosamente).
+
+```bash
+# Verificar si NetworkPolicy está activo
+gcloud container clusters describe ai-infra-agent \
+  --zone europe-southwest1-a \
+  --format="value(networkPolicy, networkConfig.datapathProvider)"
+```
+
+## SecurityContext (agent)
+
+El deployment del agente aplica un security context restrictivo (commit 5ec78f5):
+
+```yaml
+securityContext:
+  runAsNonRoot: true        # impide ejecución como root
+  readOnlyRootFilesystem: true  # filesystem de solo lectura
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]             # elimina todas las capabilities Linux
+```
+
+Se monta un volumen `emptyDir` en `/tmp` porque `readOnlyRootFilesystem: true`
+impide que uvicorn escriba ficheros temporales en el filesystem del contenedor.
+
+**Nota sobre Ollama**: la imagen oficial de Ollama requiere root (escribe en `/root/.ollama`).
+Se aplica `allowPrivilegeEscalation: false` y `capabilities.drop: [ALL]` como mitigación.
 
 ## Carga de modelos (sin Cloud NAT)
 

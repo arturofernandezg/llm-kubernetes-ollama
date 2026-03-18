@@ -1,8 +1,20 @@
 # Agente FastAPI — Extracción de parámetros
 
-## Archivo principal
+## Estructura modular (`agent/`)
 
-`agent/main.py` — versión 0.2.0
+Versión actual: 0.4.0
+
+El agente se modularizó (commit 7ec4a3a) para separar responsabilidades. Originalmente
+todo estaba en `main.py`; ahora se divide en 6 módulos:
+
+| Módulo | Responsabilidad |
+|---|---|
+| `main.py` | FastAPI app, endpoints, lifespan, middleware de logging, retry logic |
+| `config.py` | Pydantic BaseSettings, setup de logging JSON estructurado |
+| `schemas.py` | Modelos Pydantic v2 (InfraRequest, ExtractedParams, ExtractResponse) |
+| `extraction.py` | PROMPT_TEMPLATE, `extract_json()` con 3 estrategias de fallback |
+| `validation.py` | `validate_params()` — validación no-bloqueante contra valores GCP |
+| `tf_generator.py` | `safe_name()`, `generate_terraform()`, template Terraform |
 
 ## Endpoints
 
@@ -10,19 +22,20 @@
 |---|---|---|---|
 | GET | `/healthz` | Liveness probe. Siempre 200. | Ninguna |
 | GET | `/readyz` | Readiness probe. 200 si Ollama + modelo OK. | Ollama |
-| GET | `/health` | Health completo (retrocompatibilidad). | Ollama |
+| GET | `/health` | Redirect 307 a /readyz (retrocompatibilidad). | Ollama |
 | POST | `/extract` | Extracción de parámetros desde texto. | Ollama |
+| GET | `/metrics` | Métricas Prometheus (auto-instrumentado + contadores custom). | Ninguna |
 
 ## Flujo de /extract
 
 1. Recibe `{"message": "texto en lenguaje natural"}` (validado por Pydantic, max 2000 chars)
 2. Construye prompt con `PROMPT_TEMPLATE` + delimitadores `<user_message>...</user_message>`
-3. Envía al LLM via cliente httpx compartido (`app.state.http_client`)
-4. Intenta extraer JSON de la respuesta con 3 estrategias:
+3. Envía al LLM via cliente httpx compartido (`app.state.http_client`) con retry automático
+4. Intenta extraer JSON de la respuesta con 3 estrategias (en `extraction.py`):
    - **direct**: parseo directo (el LLM devolvió JSON puro)
    - **markdown_block**: JSON dentro de ```json ... ```
-   - **regex_search**: primer `{...}` encontrado en el texto
-5. Valida parámetros extraídos contra valores conocidos GCP
+   - **regex_search**: bracket counting — busca `{`, cuenta profundidad de llaves hasta encontrar `}` correspondiente
+5. Valida parámetros extraídos contra valores conocidos GCP (en `validation.py`)
 6. Devuelve respuesta estructurada con warnings, método de extracción, duración
 
 ## Schemas
@@ -57,7 +70,13 @@ ExtractResponse:
 |---|---|---|
 | `OLLAMA_URL` | `http://ollama-svc:11434/api/generate` | Endpoint de generación |
 | `OLLAMA_TAGS` | `http://ollama-svc:11434/api/tags` | Endpoint de modelos |
-| `OLLAMA_MODEL` | `tinyllama` | Modelo a usar |
+| `OLLAMA_MODEL` | `tinyllama` | Modelo a usar (en K8s se sobreescribe a `qwen2.5:1.5b`) |
+| `HTTP_TIMEOUT` | `120.0` | Timeout general del cliente HTTP (segundos) |
+| `HEALTH_TIMEOUT` | `5.0` | Timeout para health checks (segundos) |
+| `RETRY_MAX_ATTEMPTS` | `3` | Intentos máximos de retry hacia Ollama |
+| `RETRY_BASE_DELAY` | `1.0` | Delay base (segundos) para backoff exponencial |
+| `RETRY_MAX_DELAY` | `10.0` | Delay máximo (segundos) entre reintentos |
+| `LOG_LEVEL` | `INFO` | Nivel de logging (DEBUG, INFO, WARNING, ERROR) |
 
 ## Cliente HTTP compartido
 
@@ -65,6 +84,40 @@ Creado en el lifespan de FastAPI, cerrado al apagar:
 - Timeout de 120s para inferencia (POST /extract)
 - Timeout de 5-10s para health checks (GET /readyz, /health)
 - Reutiliza pool de conexiones TCP (no crea uno por request)
+
+## Retry con exponential backoff
+
+Implementado en `main.py` (commit 07ad2e3). Solo se aplica al endpoint `/extract`:
+
+- **Errores transitorios** (se reintenta): `TimeoutException`, `ConnectError`
+- **Errores permanentes** (NO se reintenta): `HTTPStatusError` (4xx/5xx de Ollama)
+- **Fórmula de backoff**: `delay = min(base_delay * 2^attempt, max_delay)`
+- **Default**: hasta 3 intentos, delays de 1s, 2s (capped a 10s)
+- **Prometheus counter**: `aiops_ollama_retries_total{outcome}` — "success" o "exhausted"
+
+Cuando se agotan los reintentos:
+- `TimeoutException` → HTTP 504 ("LLM timeout")
+- `ConnectError` → HTTP 502 ("LLM unavailable")
+
+## Métricas Prometheus
+
+Endpoint `GET /metrics` expuesto via `prometheus-fastapi-instrumentator`:
+
+**Auto-instrumentación** (todos los endpoints):
+- Request count, latency histogram, in-progress gauge
+
+**Contadores custom**:
+- `aiops_ollama_retries_total{outcome}` — resultado del retry ("success" / "exhausted")
+- `aiops_extraction_total{method}` — método de extracción usado ("direct" / "markdown_block" / "regex_search" / "failed")
+
+## Logging JSON estructurado
+
+Configurado en `config.py` con `python-json-logger`:
+
+- Todas las líneas de log salen como JSON (compatible con Cloud Logging, ELK, Loki)
+- Campos: `timestamp`, `severity`, `name`, `message`
+- Middleware añade extras por request: `method`, `path`, `status`, `duration_ms`, `request_id`
+- Nivel configurable via `LOG_LEVEL` (env var)
 
 ## Manejo de errores
 

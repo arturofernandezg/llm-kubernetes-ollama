@@ -5,6 +5,11 @@
 `generate_tf.py` — script CLI independiente (no requiere K8s para ejecutarse,
 solo necesita que el agente esté accesible via port-forward o URL directa).
 
+**Nota**: la lógica core de generación (template, `safe_name()`, `generate_terraform()`)
+vive ahora en `agent/tf_generator.py` como módulo importable. `generate_tf.py` lo importa
+para evitar duplicación de código. Esto permite que el agente FastAPI también genere
+Terraform directamente sin pasar por la CLI.
+
 ## Flujo
 
 ```
@@ -58,7 +63,9 @@ Cada `.tf` generado incluye:
 
 Convierte cualquier string a identificador válido para Terraform:
 - Solo `a-z`, `0-9`, `_`
-- Ej: "Web-Prod 2024" → "web_prod_2024"
+- Elimina underscores finales (`.strip("_")`) — fix del commit e36ceab
+- Si queda vacío tras la conversión, retorna `"project"` como fallback
+- Ej: "Web-Prod 2024" → "web_prod_2024", "test-" → "test" (no "test_")
 
 ---
 
@@ -71,4 +78,15 @@ Convierte cualquier string a identificador válido para Terraform:
 ### "El modelo no devolvió JSON válido" + se genera .tf con defaults
 **Causa**: tinyllama a veces no genera JSON válido, especialmente con mensajes ambiguos.
 **Solución**: usar `--dry-run` primero para ver qué extrae. Reformular el mensaje
-con más detalle. En el futuro, considerar retry automático o modelo más capaz.
+con más detalle. El agente ahora incluye retry automático con backoff exponencial.
+Se migró a qwen2.5:1.5b que tiene mejor precisión en extracción.
+
+### safe_name produce trailing underscore
+**Causa**: input terminado en caracteres especiales (ej: "test-") generaba "test_".
+**Solución**: se añadió `.strip("_")` al final de `safe_name()`.
+Corregido en commit e36ceab.
+
+### datetime.utcnow() deprecation warning
+**Causa**: Python 3.12+ depreca `datetime.utcnow()` por no incluir timezone info.
+**Solución**: reemplazado por `datetime.now(timezone.utc)`.
+Corregido en commit 87675be.

@@ -14,34 +14,39 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 | Archivo | Contenido |
 |---|---|
 | `docs/01-architecture.md` | Arquitectura, decisiones de diseño, componentes |
-| `docs/02-agent-fastapi.md` | Endpoints, schemas, flujo de extracción, manejo de errores |
-| `docs/03-kubernetes.md` | Cluster GKE, manifiestos, probes, PDB, comandos |
-| `docs/04-cicd-cloudbuild.md` | Cloud Build, Artifact Registry, versionado |
-| `docs/05-terraform-generator.md` | CLI generate_tf.py, template, uso |
-| `docs/06-testing.md` | Tests, mocking, errores comunes y soluciones |
-| `docs/07-roadmap.md` | Fases del proyecto, TODOs por fase |
+| `docs/02-agent-fastapi.md` | Módulos, endpoints, schemas, retry, métricas, logging |
+| `docs/03-kubernetes.md` | Cluster GKE, manifiestos, probes, PDB, NetworkPolicy, SecurityContext |
+| `docs/04-cicd-cloudbuild.md` | Cloud Build (tests + build), Artifact Registry, versionado |
+| `docs/05-terraform-generator.md` | CLI generate_tf.py, módulo tf_generator.py, template, uso |
+| `docs/06-testing.md` | 59 tests en 4 ficheros, mocking, errores comunes y soluciones |
+| `docs/07-roadmap.md` | Fases del proyecto, TODOs por fase, mejoras completadas |
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 
 ## Estado actual
 
-- **Fase 1**: Completa (agente + Ollama + tests + build + K8s)
+- **Fase 1**: Completa (agente modular + Ollama + 59 tests + build + K8s + retry + metrics + security)
 - **Fase 2**: Pendiente (Slack + GitHub PRs)
 - **Fase 3**: Pendiente (validación + score confianza)
 - **Fase 4**: Pendiente (CI/CD terraform)
 
 ## Stack
 
-Python 3.11 | FastAPI | httpx | Pydantic v2 | Ollama (tinyllama) | GKE | Cloud Build
+Python 3.11 | FastAPI | httpx | Pydantic v2 | Ollama (qwen2.5:1.5b en K8s, tinyllama default en config.py) | GKE | Cloud Build
 
 ## Archivos clave
 
 ```
-agent/main.py           → API (endpoints + extracción)
-agent/tests/test_main.py → 40 tests
-generate_tf.py          → CLI generador de .tf
-k8s/                    → Manifiestos K8s
-cloudbuild.yaml         → Pipeline de build
+agent/main.py           → FastAPI app (endpoints, retry, metrics)
+agent/config.py         → Settings (pydantic-settings) + JSON logging
+agent/schemas.py        → Modelos Pydantic v2
+agent/extraction.py     → 3 estrategias de extracción JSON
+agent/validation.py     → Validación de parámetros GCP
+agent/tf_generator.py   → Generación de template Terraform
+agent/tests/            → 59 tests en 4 ficheros (endpoints, extraction, tf_generator, validation)
+generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
+k8s/                    → Manifiestos K8s (incl. networkpolicy.yaml)
+cloudbuild.yaml         → Pipeline: tests (gate) + build + push
 ```
 
 ## Entorno
@@ -58,6 +63,7 @@ cloudbuild.yaml         → Pipeline de build
 - Labels obligatorios: managed-by, project, environment, created-by
 - Tests con mocking de Ollama (no requieren cluster ni LLM)
 - Builds con `--substitutions=COMMIT_SHA=$(git rev-parse --short HEAD)`
+- Helpers de test en `tests/helpers.py` (no importar desde conftest.py)
 
 ## Notas importantes
 

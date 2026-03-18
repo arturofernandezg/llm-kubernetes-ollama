@@ -5,10 +5,13 @@
 Archivo: `cloudbuild.yaml`
 
 ```
-gcloud builds submit → Docker build → Push a Artifact Registry
-                                        ├── :latest
-                                        └── :$COMMIT_SHA
+gcloud builds submit → Step 1: pytest (59 tests) → Step 2: Docker build → Push a Artifact Registry
+                                                                            ├── :latest
+                                                                            └── :$COMMIT_SHA
 ```
+
+El pipeline tiene 2 pasos secuenciales. Si los tests fallan en Step 1,
+el build Docker (Step 2) **no se ejecuta** — ninguna imagen rota llega al registry.
 
 ## Artifact Registry
 
@@ -47,7 +50,9 @@ gcloud builds submit --config cloudbuild.yaml \
 - Base: `python:3.11-slim`
 - Usuario no-root (`appuser`) — buena práctica de seguridad
 - Capa de dependencias cacheada (COPY requirements.txt antes que el código)
-- Solo copia `main.py` (no tests ni dev dependencies)
+- Copia todos los módulos Python (`COPY *.py .`): main.py, config.py, schemas.py,
+  extraction.py, validation.py, tf_generator.py (no copia tests ni dev dependencies
+  gracias al `.dockerignore`)
 
 ## Deploy tras build
 
