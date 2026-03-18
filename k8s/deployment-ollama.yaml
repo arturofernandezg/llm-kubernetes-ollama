@@ -31,6 +31,14 @@ spec:
           limits:
             memory: "4Gi"
             cpu: "2"
+        # Ollama corre como root por diseño de la imagen oficial
+        # (escribe en /root/.ollama). No se puede usar runAsNonRoot
+        # sin cambiar OLLAMA_HOME y permisos del PVC.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
         volumeMounts:
         - name: ollama-data
           mountPath: /root/.ollama
@@ -40,12 +48,14 @@ spec:
             port: 11434
           initialDelaySeconds: 10
           periodSeconds: 5
+          timeoutSeconds: 3
         livenessProbe:
           httpGet:
             path: /
             port: 11434
           initialDelaySeconds: 30
           periodSeconds: 15
+          timeoutSeconds: 5
       volumes:
       - name: ollama-data
         persistentVolumeClaim:

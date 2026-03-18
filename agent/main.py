@@ -8,15 +8,31 @@ natural, usando un LLM local (Ollama) como motor de inferencia.
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import RedirectResponse
 import httpx
 import time
 import uuid
+
+from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Counter
 
 from config import settings, logger
 from schemas import InfraRequest, ExtractedParams, ExtractResponse
 from extraction import PROMPT_TEMPLATE, extract_json
 from validation import validate_params
+
+# ── Métricas Prometheus ──────────────────────────────────────────────────────
+RETRY_COUNTER = Counter(
+    "aiops_ollama_retries_total",
+    "Number of Ollama retry attempts",
+    ["outcome"],  # "success" | "exhausted"
+)
+EXTRACTION_COUNTER = Counter(
+    "aiops_extraction_total",
+    "Extraction attempts by method",
+    ["method"],  # "direct" | "markdown_block" | "regex_search" | "failed"
+)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -58,9 +74,32 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AIOps Infrastructure Agent",
     description="Extrae parámetros de infraestructura GCP desde lenguaje natural.",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
+
+# Auto-instrumentar todos los endpoints: request count, latency histogram, in-progress
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+
+
+# ── Middleware ────────────────────────────────────────────────────────────────
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log every request with method, path, status and duration (JSON structured)."""
+    start = time.time()
+    response = await call_next(request)
+    duration = int((time.time() - start) * 1000)
+    logger.info(
+        "request completed",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_ms": duration,
+        },
+    )
+    return response
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -104,28 +143,10 @@ async def readyz():
     }
 
 
-@app.get("/health", summary="Health check completo — retrocompatibilidad")
+@app.get("/health", include_in_schema=False)
 async def health():
-    """
-    Endpoint de health completo (retrocompatible con versiones anteriores).
-    Verifica que el agente responde, Ollama es alcanzable y el modelo está cargado.
-    """
-    try:
-        client: httpx.AsyncClient = app.state.http_client
-        r = await client.get(settings.ollama_tags, timeout=settings.health_timeout)
-        r.raise_for_status()
-        available = [m["name"] for m in r.json().get("models", [])]
-        model_loaded = any(settings.ollama_model in m for m in available)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Ollama unreachable: {exc}")
-
-    return {
-        "status": "ok",
-        "model": settings.ollama_model,
-        "model_loaded": model_loaded,
-        "available_models": available,
-        "ollama_url": settings.ollama_url,
-    }
+    """Deprecated — redirige a /readyz para retrocompatibilidad."""
+    return RedirectResponse(url="/readyz", status_code=307)
 
 
 @app.post(
@@ -190,12 +211,16 @@ async def extract_parameters(request: InfraRequest):
             raise HTTPException(status_code=502, detail=f"LLM unavailable: {exc}")
 
     if response is None:
+        RETRY_COUNTER.labels(outcome="exhausted").inc()
         if isinstance(last_exc, httpx.TimeoutException):
             raise HTTPException(status_code=504, detail="LLM timeout — model took too long")
         raise HTTPException(status_code=502, detail=f"LLM unavailable after {settings.retry_max_attempts} attempts: {last_exc}")
 
+    RETRY_COUNTER.labels(outcome="success").inc()
+
     raw = response.json().get("response", "")
     parsed_dict, method = extract_json(raw)
+    EXTRACTION_COUNTER.labels(method=method or "failed").inc()
     warnings = (
         validate_params(parsed_dict)
         if parsed_dict

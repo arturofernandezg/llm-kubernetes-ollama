@@ -1,7 +1,7 @@
 """
 Tests de los endpoints del agente AIOps.
 
-Cubre: GET /healthz, GET /readyz, GET /health, POST /extract.
+Cubre: GET /healthz, GET /readyz, GET /health, POST /extract, GET /metrics.
 Todos los tests usan mocks de Ollama (no requieren cluster ni LLM).
 """
 
@@ -63,21 +63,22 @@ class TestReadyzEndpoint:
 # ── GET /health ───────────────────────────────────────────────────────────────
 
 class TestHealthEndpoint:
+    """GET /health — deprecated, redirige a /readyz (307)."""
 
-    def test_health_ok_when_ollama_available(self, api_client):
+    def test_health_redirects_to_readyz(self, api_client):
+        """Sin follow_redirects, devuelve 307 con Location: /readyz."""
+        r = api_client.get("/health", follow_redirects=False)
+        assert r.status_code == 307
+        assert r.headers["location"] == "/readyz"
+
+    def test_health_follows_redirect_when_ollama_ok(self, api_client):
+        """Con follow_redirects (default), acaba en /readyz y devuelve 200."""
         with patch.object(app.state, "http_client", mock_http_client("")):
             r = api_client.get("/health")
         assert r.status_code == 200
         data = r.json()
-        assert data["status"] == "ok"
+        assert data["status"] == "ready"
         assert data["model_loaded"] is True
-        assert "available_models" in data
-
-    def test_health_503_when_ollama_unreachable(self, api_client):
-        with patch.object(app.state, "http_client", mock_ollama_unreachable()):
-            r = api_client.get("/health")
-        assert r.status_code == 503
-        assert "Ollama unreachable" in r.json()["detail"]
 
 
 # ── POST /extract ─────────────────────────────────────────────────────────────
@@ -235,3 +236,14 @@ class TestRetryBehavior:
             r = api_client.post("/extract", json={"message": "Test"})
         assert r.status_code == 502
         assert mock_client.post.call_count == 1  # sin retry
+
+
+# ── GET /metrics ─────────────────────────────────────────────────────────────
+
+class TestMetricsEndpoint:
+    """Prometheus metrics endpoint auto-instrumentado."""
+
+    def test_metrics_returns_200(self, api_client):
+        r = api_client.get("/metrics")
+        assert r.status_code == 200
+        assert "http_request" in r.text

@@ -57,3 +57,19 @@ class TestExtractJson:
     def test_prefers_direct_over_regex(self):
         result, method = extract_json(VALID_JSON_STR)
         assert method == "direct"
+
+    def test_nested_json_regex_fallback(self):
+        nested = '{"project_name": "web", "meta": {"env": "prod"}, "region": "europe-west1"}'
+        text = f"Here is the result: {nested} hope it helps."
+        result, method = extract_json(text)
+        assert result is not None
+        assert result["project_name"] == "web"
+        assert result["meta"]["env"] == "prod"
+        assert method == "regex_search"
+
+    def test_markdown_block_with_nested_json(self):
+        nested = '{"project_name": "web", "meta": {"env": "prod"}}'
+        text = f"```json\n{nested}\n```"
+        result, method = extract_json(text)
+        assert method == "markdown_block"
+        assert result["meta"]["env"] == "prod"

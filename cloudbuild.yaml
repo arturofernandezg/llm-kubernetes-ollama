@@ -1,4 +1,15 @@
 steps:
+  # Paso 1: Ejecutar tests (si fallan, el build se cancela)
+  - name: 'python:3.11-slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        cd agent
+        pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+        python -m pytest tests/ -v --tb=short
+
+  # Paso 2: Build de imagen Docker (solo si los tests pasan)
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'

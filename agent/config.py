@@ -6,8 +6,10 @@ Si un valor no se encuentra en el entorno, se usa el default definido aquí.
 """
 
 import logging
+import sys
 
 from pydantic_settings import BaseSettings
+from pythonjsonlogger.json import JsonFormatter
 
 
 class Settings(BaseSettings):
@@ -27,14 +29,21 @@ class Settings(BaseSettings):
     retry_base_delay: float = 1.0
     retry_max_delay: float = 10.0
 
+    # Logging
+    log_level: str = "INFO"
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 
 settings = Settings()
 
-# ── Logging ───────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-)
+# ── Logging JSON estructurado ─────────────────────────────────────────────────
+# Cada línea de log es un JSON parseable por Cloud Logging / ELK / Loki.
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(JsonFormatter(
+    fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+    rename_fields={"asctime": "timestamp", "levelname": "severity"},
+))
+logging.root.handlers = [handler]
+logging.root.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("aiops_agent")

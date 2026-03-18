@@ -59,12 +59,20 @@ def extract_json(text: str) -> tuple[dict | None, str | None]:
         except json.JSONDecodeError:
             pass
 
-    # 3. Primer objeto JSON en texto libre
-    match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group()), "regex_search"
-        except json.JSONDecodeError:
-            pass
+    # 3. Bracket-counting fallback — soporta JSON anidado
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        for i, ch in enumerate(text[start:], start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start:i + 1]), "regex_search"
+                except json.JSONDecodeError:
+                    break
+        start = text.find("{", start + 1)
 
     return None, None

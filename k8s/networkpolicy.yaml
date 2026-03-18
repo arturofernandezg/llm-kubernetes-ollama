@@ -1,0 +1,58 @@
+# =============================================================================
+# NetworkPolicy — Segmentación de tráfico entre pods
+#
+# Restringe qué pods pueden hablar con quién:
+#   - Ollama solo acepta tráfico del agente (puerto 11434)
+#   - Agent solo acepta tráfico de Apache (puerto 8000)
+#
+# NOTA: Requiere que el cluster tenga NetworkPolicy habilitado
+#       (GKE Dataplane V2 o Calico). Si no está habilitado, las
+#       políticas se aceptan pero no se aplican.
+#
+# Verificar:
+#   gcloud container clusters describe ai-infra-agent \
+#     --zone europe-southwest1-a \
+#     --format="value(networkPolicy, networkConfig.datapathProvider)"
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ollama-allow-agent-only
+  namespace: arturo-llm-test
+spec:
+  podSelector:
+    matchLabels:
+      app: ollama
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: agent
+      ports:
+        - protocol: TCP
+          port: 11434
+
+---
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-allow-apache-only
+  namespace: arturo-llm-test
+spec:
+  podSelector:
+    matchLabels:
+      app: agent
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: apache
+      ports:
+        - protocol: TCP
+          port: 8000
