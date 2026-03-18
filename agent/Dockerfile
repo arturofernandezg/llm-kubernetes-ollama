@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código fuente (todos los módulos Python)
-COPY *.py .
+COPY *.py ./
 
 # Ejecutar como usuario no-root (buena práctica de seguridad)
 RUN adduser --disabled-password --gecos "" appuser
