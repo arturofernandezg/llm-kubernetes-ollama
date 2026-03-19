@@ -44,7 +44,7 @@ Kubernetes API Server ──► (Remediación Autónoma: parchear limits/request
 
 | Componente | Tecnología | Ubicación | Réplicas |
 |---|---|---|---|
-| Agente | Python 3.11, FastAPI, httpx, Pydantic v2 | `agent/` (6 módulos) | 1 |
+| Agente | Python 3.11, FastAPI, httpx, BackgroundTasks | `agent/` (7 módulos) | 1 |
 | LLM | Ollama (qwen2.5:1.5b) | Pod K8s | 1 |
 | TF Generator | Python stdlib (urllib) | `generate_tf.py` | CLI local |
 | Build pipeline | Google Cloud Build | `cloudbuild.yaml` | — |
@@ -54,6 +54,7 @@ Kubernetes API Server ──► (Remediación Autónoma: parchear limits/request
 
 - **Ollama en K8s** (no API externa): control total, sin costes por token,
   datos no salen del cluster. Trade-off: modelos pequeños, menos precisión.
+- **BackgroundTasks (FastAPI)**: El cliente `httpx` de Mattermost implementa llamadas asíncronas no bloqueantes delegadas al event-loop base (BackgroundTasks) protegiendo el throughput del webhook entrante de Alertmanager de los posibles picos de latencia / timeout.
 - **PVC ReadWriteOnce**: los modelos sobreviven a reinicios. Trade-off:
   no se puede escalar Ollama a >1 réplica sin migrar a StatefulSet o GCS.
 - **Nodos spot**: reduce costes ~60-70%. Trade-off: los pods pueden ser
@@ -77,8 +78,14 @@ Todos los servicios usan ClusterIP (no expuestos a internet):
 - `ollama-svc:11434` → API Ollama
 - `apache-svc:80` → servidor web de validación de red
 
-Sin Cloud NAT: los pods no tienen salida a internet. Modelos se cargan
-manualmente vía `kubectl exec`.
+Sin Cloud NAT: los pods no tienen salida a internet. Modelos se cargan manualmente o consumiendo APIs internas privadas.
+
+## Integración y Seguridad con Vertex AI (GCP)
+
+El uso de los modelos fundacionales de Google (Gemini/Claude vía Vertex AI) está **estrictamente delimitado al entorno privado de trabajo** (VPC).
+
+1. **Aislamiento de Red**: Las peticiones desde el agente FastAPI hacia Vertex nunca cruzan internet público. Se resuelven con routing interno puro (requiere tener *Private Google Access* habilitado en la *Subnet* de GCP).
+2. **Workload Identity / Service Accounts**: Queda terminantemente prohibido el uso de API keys genéricas. La app se autentica tácitamente contra el control de accesos (IAM) de Google Cloud usando la identidad confiable de su entorno de ejecución (Namespace y Pod).
 
 ## Seguridad
 

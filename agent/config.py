@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
+    # Mattermost (Fase 1 - Observabilidad Activa)
+    mattermost_webhook_url: str | None = None
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

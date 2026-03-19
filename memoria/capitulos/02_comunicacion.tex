@@ -1,0 +1,9 @@
+\chapter{Fase 1: Canalización y Notificación mediante ChatOps}
+
+\section{Introducción}
+La estrategia ChatOps fomenta la transparencia organizativa y acelera la resolución de incidentes al centralizar las interacciones AIOps en plataformas de mensajería asíncrona convencionales, en este caso Mattermost. Todo el contexto recopilado será notificado al canal de los ingenieros de soporte.
+
+\section{Diseño del Cliente HTTP Resiliente (Relevo Async)}
+A diferencia de integraciones tradicionales basadas en peticiones web síncronas bloqueantes (tales como \texttt{urllib} o \texttt{requests}), cuyo diseño detiene el \textit{Event Loop} afectando negativamente al \textit{throughput} general de la aplicación, la integración con Mattermost ha diseñado utilizando llamadas asíncronas delegadas a procesos en segundo plano (\texttt{FastAPI BackgroundTasks}) junto a un cliente HTTP basado en \textit{connection pool} persistente (\texttt{httpx.AsyncClient}).
+
+Adicionalmente, se ha implementado de forma programática un mecanismo de \textit{Exponential Backoff} a nivel de cliente. Este patrón de desarrollo permite absorber posibles micro-cortes transitorios y la limitación de tasa (\textit{Rate Limiting}) originados por ráfagas intensivas de peticiones. De esta forma, el agente AIOps responde exitosamente al Alertmanager de Prometheus en milisegundos ($O(1)$) mientras confía el envío telemático final a una rutina separada más robusta, aislada de factores externos.

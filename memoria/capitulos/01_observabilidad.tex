@@ -1,0 +1,9 @@
+\chapter{Fase 1: Observabilidad y Patrones de Ingestión AIOps}
+
+\section{Introducción}
+El primer componente de una plataforma AIOps es la ingesta segura, resiliente y estructurada de la telemetría del ecosistema subyacente. En este proyecto, la capa de observabilidad de Kubernetes está delegada en Prometheus y Alertmanager.
+
+\section{Arquitectura del Webhook Receptor de Alertas}
+Se ha implementado un servicio REST asíncrono utilizando el marco \texttt{FastAPI} (Python), expuesto de forma interna dentro del cluster (mediante balanceo \texttt{ClusterIP}). Este componente actúa como sumidero principal (\textit{sink}) de la ráfaga de incidentes de Alertmanager.
+
+Para garantizar la estabilidad del sistema, las validaciones del esquema de entrada (\textit{Data Contract}) se han programado combinando la librería \texttt{Pydantic v2} y anotaciones de tipado estrictas, descartando de manera inmediata cualquier carga útil inconsistente o carente de etiquetas obligatorias. Este enfoque de validación inicial en la frontera de la API ("\textit{Fail-fast}"), habitual en estándares de alto nivel para microservicios, previene de manera anticipada la sobresaturación y contaminación del Motor de RAG e Inteligencia Artificial subyacente.

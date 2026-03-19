@@ -8,7 +8,7 @@ natural, usando un LLM local (Ollama) como motor de inferencia.
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import RedirectResponse
 import httpx
 import time
@@ -24,6 +24,7 @@ from schemas import (
 )
 from extraction import PROMPT_TEMPLATE, extract_json
 from validation import validate_params
+from mattermost import send_mattermost_alert
 
 # ── Métricas Prometheus ──────────────────────────────────────────────────────
 RETRY_COUNTER = Counter(
@@ -156,11 +157,11 @@ async def health():
     "/webhook/alert",
     summary="Recibe alertas de Prometheus Alertmanager (AIOps Ingestion)",
 )
-async def handle_alert_webhook(payload: AlertmanagerPayload):
+async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: BackgroundTasks):
     """
     Ingesta el alert-burst de Alertmanager garantizando el Data Contract.
-    Registra el evento usando structured logging y prepara la alerta
-    para la Fase de RAG/Mattermost.
+    Registra el evento usando structured logging y delega la emisión
+    a Mattermost a una BackgroundTask para evitar latencia al cliente (O(1)).
     """
     logger.info(
         "Alert webhook received",
@@ -175,6 +176,7 @@ async def handle_alert_webhook(payload: AlertmanagerPayload):
         alert_name = alert.labels.get("alertname", "UnknownAlert")
         pod = alert.labels.get("pod", "unknown-pod")
         namespace = alert.labels.get("namespace", "unknown-ns")
+        severity = alert.labels.get("severity", "critical").upper()
         
         logger.info(
             f"Processing alert {idx+1}/{len(payload.alerts)}",
@@ -186,9 +188,14 @@ async def handle_alert_webhook(payload: AlertmanagerPayload):
             }
         )
         
-        # TODO: Fase 2 - Buscar contexto de remediación en ChromaDB
-        # TODO: Fase 2 - Evaluar con LLM
-        # TODO: Fase 3 - Notificar a Mattermost o parchear K8s
+        # Formatear el mensaje raw para ChatOps
+        icon = "🔴" if alert.status == "firing" else "🟢"
+        desc = alert.annotations.get("description", "Sin descripción detallada")
+        msg = f"{icon} **[{severity}] {alert_name}** en Pod `{pod}` (NS: `{namespace}`)\n> {desc}"
+        
+        # Delegate a capa de ChatOps (Fire & Forget)
+        background_tasks.add_task(send_mattermost_alert, msg)
+        logger.info(f"Queued background task to Mattermost for alert: {alert_name}")
         
     return {
         "status": "success",
