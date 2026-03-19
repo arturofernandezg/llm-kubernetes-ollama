@@ -2,28 +2,27 @@
 
 ## Visión general
 
-Agente de IA de ciclo completo para automatizar despliegues de infraestructura GCP
+Agente AIOps de remediación automática en Kubernetes. Detecta problemas en el cluster (mediante Prometheus/Alertmanager), consulta a un sistema RAG (ChromaDB) y procesa todo por el LLM para notificar/actuar sobre el cluster.
 en MasOrange/Telecable. TFG/TFM — rol: ingeniero AIOps.
 
-## Flujo objetivo (zero-touch)
+*(Nota: Originalmente el proyecto se basaba en la generación de IaC (Terraform) para GCP. Esa funcionalidad ha sido desplazada en favor de la remediación de Kubernetes, aunque el código original se conserva en `agent/`).*
+
+## Flujo objetivo (Sistema de Remediación RAG)
 
 ```
-Slack message
+Prometheus / Alertmanager
     │
     ▼
-FastAPI Agent ──► Ollama/qwen2.5:1.5b (extracción de parámetros)
+FastAPI Agent (Webhook Receiver)
+    │  ◄──────────── (RAG) ChromaDB In-Cluster (Vector DB)
+    ▼
+LLM (Ollama local o Vertex AI vía Private Google Access)
     │
     ▼
-Terraform Generator ──► genera .tf a partir de módulo corporativo
+Mattermost (ChatOps - Notificación y validación de usuario)
     │
     ▼
-GitHub API ──► crea rama + commit + Pull Request
-    │
-    ▼
-Validation Agent ──► revisa PR vs petición original + políticas internas
-    │
-    ▼
-GitHub Actions ──► terraform plan → aprobación → terraform apply
+Kubernetes API Server ──► (Remediación Autónoma: parchear limits/requests automáticos si el sugerido es razonable)
 ```
 
 ## Flujo actual (Fase 1)

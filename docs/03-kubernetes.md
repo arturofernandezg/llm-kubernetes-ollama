@@ -7,8 +7,8 @@
 | Nombre | ai-infra-agent |
 | Proyecto GCP | uniovi-ai-infra-agent |
 | Zona | europe-southwest1-a |
-| Tipo de nodo | e2-standard-2 (spot) |
-| Nodos | 2 (pero frecuentemente 1 por preemption spot — ver nota abajo) |
+| Tipo de nodo | e2-standard-2 (Spot en Fase 1, se migrará a **Standard** en Fase 2 para albergar ChromaDB) |
+| Nodos | 2 (Frecuentemente 1 por preemption spot en Fase 1) |
 | Namespace | arturo-llm-test |
 | K8s version | 1.35.1-gke.1396001 |
 

@@ -2,10 +2,11 @@
 
 ## Resumen del proyecto
 
-Agente de IA de ciclo completo para automatizar despliegues de infraestructura GCP.
+Sistema de Remediación Automática en Kubernetes. Detecta alertas de Prometheus, las procesa con un LLM (junto a una base RAG in-cluster con ChromaDB) y notifica a Mattermost, pudiendo auto-remediar fallos (ej. OOMs).
+*(Nota: El proyecto original generaba Terraform, la Fase 1 original se conserva intacta sin interrupción).*
 TFG/TFM en MasOrange/Telecable. Rol: ingeniero AIOps.
 
-Flujo objetivo: `Slack → Agente → genera .tf → PR en GitHub → validación → terraform apply`
+Flujo objetivo: `Prometheus → Alertmanager → FastAPI (Webhook) → LLM + ChromaDB (RAG) → Mattermost → K8s API`
 
 ## Documentación detallada
 
@@ -25,10 +26,10 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 
 ## Estado actual
 
-- **Fase 1**: Completa (agente modular + Ollama + 64 tests + build + K8s + retry + metrics + security)
-- **Fase 2**: Pendiente (Slack + GitHub PRs)
-- **Fase 3**: Pendiente (validación + score confianza)
-- **Fase 4**: Pendiente (CI/CD terraform)
+- **Fase 1 (Legado)**: Completa (agente modular + Ollama local + Terraform endpoints + K8s base). Se mantienen los archivos sin borrar.
+- **Fase 1 (Nueva)**: Pendiente (Prometheus, Alertmanager, webhook custom en FastAPI, integración Mattermost).
+- **Fase 2 (RAG)**: Pendiente (ChromaDB in-cluster, ingesta de documentos históricos, pruebas Vertex AI vs local según disponibilidad de red/VPC).
+- **Fase 3 (Remediación Autónoma)**: Pendiente (RBAC para k8s updates automáticos basados en sugerencia segura del LLM).
 
 ## Stack
 

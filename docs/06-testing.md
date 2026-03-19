@@ -75,10 +75,10 @@ log_cli_level = INFO
 
 ## Tests pendientes (TODO)
 
-- [ ] Tests de integración real (con Ollama corriendo, no mock)
-- [ ] Test de carga/performance (múltiples requests concurrentes)
-- [ ] Tests para integración Slack (Fase 2)
-- [ ] Tests para GitHub client (Fase 2)
+- [ ] Tests de integración real (con Ollama o Vertex AI direct, sin mock)
+- [ ] Test de carga/performance (múltiples webhooks concurrentes desde Alertmanager)
+- [ ] Tests unitarios para el parser de JSON de alertas de Prometheus (`/webhook/alert`)
+- [ ] Tests para el formateador e integración con ChatOps (Mattermost API)
 
 ---
 

@@ -27,3 +27,6 @@ __pycache__/
 
 # Claude Code (worktrees, sesiones locales, contexto interno)
 .claude/
+
+# Personal Engineering Profile (Do not upload to GitHub)
+arturo_engineering_profile.md

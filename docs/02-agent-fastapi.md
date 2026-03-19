@@ -1,4 +1,7 @@
-# Agente FastAPI — Extracción de parámetros
+# Agente FastAPI — Core API (Remediación AIOps)
+
+> [!NOTE]
+> *(Nota: Esta documentación refleja los endpoints clásicos de la Fase 1 (Extracción NLP -> Terraform) que se conservan como código heredado, así como el roadmap del nuevo enrutador de alertas de Prometheus y acciones de auto-remediación.)*
 
 ## Estructura modular (`agent/`)
 
@@ -22,8 +25,8 @@ todo estaba en `main.py`; ahora se divide en 6 módulos:
 |---|---|---|---|
 | GET | `/healthz` | Liveness probe. Siempre 200. | Ninguna |
 | GET | `/readyz` | Readiness probe. 200 si Ollama + modelo OK. | Ollama |
-| GET | `/health` | Redirect 307 a /readyz (retrocompatibilidad). | Ollama |
-| POST | `/extract` | Extracción de parámetros desde texto. | Ollama |
+| POST | `/webhook/alert` | **[NUEVO]** Recibe payloads JSON de Alertmanager, ingiere métricas y triggerea el RAG/LLM. | Ollama / Vertex / BBDD |
+| POST | `/extract` | **[LEGADO]** Extracción de parámetros desde texto a JSON. | Ollama |
 | GET | `/metrics` | Métricas Prometheus (auto-instrumentado + contadores custom). | Ninguna |
 
 ## Flujo de /extract

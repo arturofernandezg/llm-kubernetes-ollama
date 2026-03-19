@@ -1,12 +1,12 @@
-# AIOps Agent — Infraestructura LLM en Kubernetes (GKE)
+# AIOps Agent — Sistema de Remediación Automática en Kubernetes (GKE)
 
-Agente de IA de ciclo completo que automatiza el despliegue de infraestructura GCP: desde una petición en lenguaje natural hasta la generación de código Terraform y (en fases futuras) la creación automática de Pull Requests y ejecución de pipelines CI/CD.
+Proyecto que evoluciona hacia una plataforma AIOps de remediación automática. Basado en alertas de Prometheus (ej. OOM), el agente interactúa con Mattermost y utiliza Modelos de Lenguaje (LLM) y bases de datos vectoriales (RAG con ChromaDB) para sugerir o ejecutar remediaciones en el cluster (ej. aumentar memoria, reiniciar pods). (Anteriormente: agente de despliegue de infraestructura GCP mediante Terraform).
 
 Proyecto de prácticas de ingeniería AIOps en MasOrange/Telecable (TFG/TFM).
 
 ---
 
-## Arquitectura actual (Fase 1)
+## Arquitectura actual (Fase 1 - Legado)
 
 ```
 [Cliente / port-forward / generate_tf.py]
@@ -18,10 +18,10 @@ Proyecto de prácticas de ingeniería AIOps en MasOrange/Telecable (TFG/TFM).
   ollama-svc:11434       ← Ollama (qwen2.5:1.5b, 1 réplica, PVC 20Gi, PDB)
 ```
 
-## Arquitectura objetivo
+## Arquitectura objetivo (Sistema de Remediación)
 
 ```
-[Slack] → [FastAPI Agent] → [Ollama] → [GitHub API] → [GitHub Actions] → [terraform apply]
+[Prometheus / Alertmanager] → [FastAPI Webhook] → [(RAG) ChromaDB + LLM (Vertex/Ollama)] → [Mattermost] → [K8s API Server (Remediación)]
 ```
 
 ---

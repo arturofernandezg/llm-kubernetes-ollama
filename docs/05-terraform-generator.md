@@ -1,5 +1,9 @@
 # Generador de Terraform
 
+> [!WARNING]
+> **COMPONENTE DEPRECADO (Fase 1 Legado)**
+> Este módulo forma parte del sistema inicial de IaC y se preserva únicamente como código heredado sin uso activo en producción. La arquitectura actual se centra en una plataforma **AIOps de Remediación Automática** con Alertmanager, RAG y auto-parcheo de APIs de K8s y flujos ChatOps vía Mattermost.
+
 ## Archivo
 
 `generate_tf.py` — script CLI independiente (no requiere K8s para ejecutarse,
