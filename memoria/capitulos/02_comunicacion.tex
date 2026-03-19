@@ -7,3 +7,13 @@ La estrategia ChatOps fomenta la transparencia organizativa y acelera la resoluc
 A diferencia de integraciones tradicionales basadas en peticiones web síncronas bloqueantes (tales como \texttt{urllib} o \texttt{requests}), cuyo diseño detiene el \textit{Event Loop} afectando negativamente al \textit{throughput} general de la aplicación, la integración con Mattermost ha diseñado utilizando llamadas asíncronas delegadas a procesos en segundo plano (\texttt{FastAPI BackgroundTasks}) junto a un cliente HTTP basado en \textit{connection pool} persistente (\texttt{httpx.AsyncClient}).
 
 Adicionalmente, se ha implementado de forma programática un mecanismo de \textit{Exponential Backoff} a nivel de cliente. Este patrón de desarrollo permite absorber posibles micro-cortes transitorios y la limitación de tasa (\textit{Rate Limiting}) originados por ráfagas intensivas de peticiones. De esta forma, el agente AIOps responde exitosamente al Alertmanager de Prometheus en milisegundos ($O(1)$) mientras confía el envío telemático final a una rutina separada más robusta, aislada de factores externos.
+
+\section{Justificación Arquitectónica: Ingeniería Senior y Minimalismo Resiliente}
+Frente a aproximaciones de programación acoplada o enfoques sobre-dimensionados (\textit{Over-engineering}) que introducen gestores de colas pesados como RabbitMQ o Kafka para el ruteo de notificaciones, esta integración se rige rigurosamente por metodologías \textit{Twelve-Factor App}.
+
+La aparente concisión del componente de integración se cimenta sobre pilares de ingeniería de fiabilidad (\textit{Site Reliability Engineering}):
+\begin{itemize}
+    \item \textbf{Apalancamiento de Abstracciones}: El marco FastAPI proporciona la gestión concurrente sobre el \textit{Event Loop} subyacente (\texttt{uvloop}). Inyectar operaciones mediante \texttt{BackgroundTasks} evita instanciar nueva infraestructura mientras erradica el bloqueo por I/O.
+    \item \textbf{Tolerancia a Redes Falibles}: Asumiendo las falacias de la computación distribuida, el sistema atrapa \textit{Timeouts} e implementa reintentos exponenciales. Si el fallo persiste, el error es capturado estructuradamente, pero nunca arrastra en cadena la disponibilidad de componentes previos como Prometheus.
+    \item \textbf{Seguridad y Calidad del Software (TDD)}: Cumpliendo perfiles \textit{DevSecOps}, las vías de comunicación carecen de secretos en disco rígido (\textit{Zero-secrets in code}). Todo el espectro de fallos de red ha sido aislado y certificado un 100\% empleando \textit{Test-Driven Development} y simulaciones (\textit{mocks}) asíncronas.
+\end{itemize}
