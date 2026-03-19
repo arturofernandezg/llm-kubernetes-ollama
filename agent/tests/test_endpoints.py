@@ -238,6 +238,79 @@ class TestRetryBehavior:
         assert mock_client.post.call_count == 1  # sin retry
 
 
+class TestAlertmanagerWebhook:
+    """Tests para la ingesta del payload JSON de Alertmanager garantizando el Data Contract."""
+
+    def test_webhook_success_single_alert(self, api_client):
+        payload = {
+            "receiver": "webhook",
+            "status": "firing",
+            "alerts": [
+                {
+                    "status": "firing",
+                    "labels": {"alertname": "PodOOMKilled", "pod": "engine-pod", "namespace": "prod"},
+                    "annotations": {"description": "OOM Killed"},
+                    "startsAt": "2026-03-19T14:00:00Z"
+                }
+            ],
+            "groupLabels": {},
+            "commonLabels": {},
+            "commonAnnotations": {}
+        }
+        r = api_client.post("/webhook/alert", json=payload)
+        assert r.status_code == 200
+        assert r.json()["status"] == "success"
+        assert r.json()["alerts_processed"] == 1
+
+    def test_webhook_success_multiple_alerts(self, api_client):
+        payload = {
+            "receiver": "webhook",
+            "status": "firing",
+            "alerts": [
+                {
+                    "status": "firing",
+                    "labels": {"alertname": "PodOOMKilled", "pod": "engine-pod"},
+                    "annotations": {},
+                    "startsAt": "2026-03-19T14:00:00Z"
+                },
+                {
+                    "status": "resolved",
+                    "labels": {"alertname": "CPUThrottlingHigh", "pod": "web-pod"},
+                    "annotations": {},
+                    "startsAt": "2026-03-19T14:00:00Z",
+                    "endsAt": "2026-03-19T14:05:00Z"
+                }
+            ]
+        }
+        r = api_client.post("/webhook/alert", json=payload)
+        assert r.status_code == 200
+        assert r.json()["alerts_processed"] == 2
+
+    def test_webhook_fails_validation_missing_status(self, api_client):
+        payload = {
+            "receiver": "webhook",
+            # "status": "firing",  # Falta campo obligatorio
+            "alerts": []
+        }
+        r = api_client.post("/webhook/alert", json=payload)
+        assert r.status_code == 422
+        
+    def test_webhook_fails_validation_alert_missing_start_time(self, api_client):
+        payload = {
+            "receiver": "webhook",
+            "status": "firing",
+            "alerts": [
+                {
+                    "status": "firing",
+                    "labels": {"alertname": "PodOOMKilled"}
+                    # "startsAt" falta
+                }
+            ]
+        }
+        r = api_client.post("/webhook/alert", json=payload)
+        assert r.status_code == 422
+
+
 # ── GET /metrics ─────────────────────────────────────────────────────────────
 
 class TestMetricsEndpoint:

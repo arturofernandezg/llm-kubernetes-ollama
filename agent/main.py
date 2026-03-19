@@ -18,7 +18,10 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from prometheus_client import Counter
 
 from config import settings, logger
-from schemas import InfraRequest, ExtractedParams, ExtractResponse
+from schemas import (
+    InfraRequest, ExtractedParams, ExtractResponse,
+    AlertmanagerPayload
+)
 from extraction import PROMPT_TEMPLATE, extract_json
 from validation import validate_params
 
@@ -147,6 +150,51 @@ async def readyz():
 async def health():
     """Deprecated — redirige a /readyz para retrocompatibilidad."""
     return RedirectResponse(url="/readyz", status_code=307)
+
+
+@app.post(
+    "/webhook/alert",
+    summary="Recibe alertas de Prometheus Alertmanager (AIOps Ingestion)",
+)
+async def handle_alert_webhook(payload: AlertmanagerPayload):
+    """
+    Ingesta el alert-burst de Alertmanager garantizando el Data Contract.
+    Registra el evento usando structured logging y prepara la alerta
+    para la Fase de RAG/Mattermost.
+    """
+    logger.info(
+        "Alert webhook received",
+        extra={
+            "alert_status": payload.status,
+            "alerts_count": len(payload.alerts),
+            "receiver": payload.receiver,
+        },
+    )
+    
+    for idx, alert in enumerate(payload.alerts):
+        alert_name = alert.labels.get("alertname", "UnknownAlert")
+        pod = alert.labels.get("pod", "unknown-pod")
+        namespace = alert.labels.get("namespace", "unknown-ns")
+        
+        logger.info(
+            f"Processing alert {idx+1}/{len(payload.alerts)}",
+            extra={
+                "alertname": alert_name,
+                "target_pod": pod,
+                "target_namespace": namespace,
+                "firing_status": alert.status,
+            }
+        )
+        
+        # TODO: Fase 2 - Buscar contexto de remediación en ChromaDB
+        # TODO: Fase 2 - Evaluar con LLM
+        # TODO: Fase 3 - Notificar a Mattermost o parchear K8s
+        
+    return {
+        "status": "success",
+        "alerts_processed": len(payload.alerts),
+        "message": "Payload ingested and queued for RAG processing"
+    }
 
 
 @app.post(
