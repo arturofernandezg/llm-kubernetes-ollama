@@ -12,6 +12,15 @@ A la hora de vertebrar el ciclo de ingeniería del ecosistema AIOps, el flujo de
     \item \textbf{Plano Operativo Cloud Shell (GCP)}: Terminal incrustada en navegador interactuando simbióticamente con el clúster perimetral \textit{Google Kubernetes Engine (GKE)}. Provee el instrumental oficial (\texttt{kubectl}, \texttt{gcloud}) para certificar latencias de red, ejecutar interactivamente las validaciones del Pipeline de despliegue continuo (Cloud Build), y auditar topologías internas ajenas al alcance de la pasarela local.
 \end{enumerate}
 
+\section{Alternativas Arquitectónicas Estudiadas y Descartadas}
+Todo diseño \textit{Senior} debe fundamentarse en el análisis comparativo de opciones previas. Antes de decantar la arquitectura hacia la solución final (Base de datos \textit{Stateful} en nodo Efímero), se analizaron y descartaron tres grandes paradigmas:
+
+\begin{itemize}
+    \item \textbf{Alternativa A: BBDD Vectorial Gestionada (MaaS)}. Opciones como \textit{Pinecone} o \textit{Vertex AI Vector Search} delegan toda la infraestructura a un tercero. Fue rechazado radicalmente por incurrir en \textit{Vendor Lock-In}, costes recurrentes impredecibles, y por derivar datos internos altamente críticos hacia ecosistemas Cloud públicos.
+    \item \textbf{Alternativa B: \textit{Node Pool Standard} Dedicado en GKE}. Exigía aprovisionar hardware reservado constante ($24/7$) en GCP para aislar ChromaDB. Descartado por representar una solución excesivamente laxa a nivel de ingeniería y por demoler la previsión FinOps (sobrecoste estructural $\approx\! x3$).
+    \item \textbf{Alternativa C: Despliegue en Pod Efímero (Volumen \texttt{EmptyDir})}. Consistía en alojar ChromaDB sobre la flota \textit{Spot} sin acoplar disco rígido de bloque, escribiendo directamente en la partición efímera del nodo K8s. Rechazado por riesgo inaceptable: una evicción mandataria de Google volatilizaría al instante todo el aprendizaje (\textit{embeddings}) acumulado por el RAG, provocando "amnesia total" en el cerebro resolutivo del sistema.
+\end{itemize}
+
 \section{Estrategia SRE: FinOps sobre \textit{Spot Instances}}
 Ante las crueles exigencias de la ingeniería de fiabilidad (\textit{Site Reliability Engineering}), se optó deliberadamente por declinar la instauración predecible de un \textit{Node Pool Standard} dedicado para la base de datos ChromaDB con objeto de optimizar masivamente el presupuesto de infraestructura computacional (estrategias \textit{FinOps}, con factor de ahorro $\approx\! 65\%$).
 
