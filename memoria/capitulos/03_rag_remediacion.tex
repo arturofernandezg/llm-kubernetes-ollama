@@ -1,0 +1,19 @@
+\chapter{Fase 2: Almacenamiento Vectorial y Resiliencia en Kubernetes}
+
+\section{Introducción a RAG y BBDD Vectoriales}
+El salto paradigmático hacia una remediación verdaderamente autónoma requiere dotar al cerebro del Agente (LLM) de una vasta memoria semántica histórica. Para prevenir las "alucinaciones" (respuestas inventadas), el modelo no opina en crudo, sino que se nutre con \textit{Runbooks} y resoluciones de casos validados suministrados vía Generación Aumentada por Recuperación (RAG).
+
+Esta inserción de contexto se vehicula a través de \textbf{ChromaDB}, una Base de Datos Vectorial open-source (\textit{Vector Database}) diseñada para calcular vecindad algorítmica y buscar rápida y tridimensionalmente entre colosales matrices numéricas (\textit{Embeddings}).
+
+\section{Topología Cognitiva y Dualidad de Entornos}
+A la hora de vertebrar el ciclo de ingeniería del ecosistema AIOps, el flujo de desarrollo ha debido pivotar hacia una filosofía híbrida distribuida sumamente enriquecedora, desdoblando el puesto íntegro de trabajo:
+\begin{enumerate}
+    \item \textbf{Estación de Desarrollo Desktop (Local)}: Entorno \textit{Windows} nativo apoyado en \textit{IDE} robustos (\texttt{Visual Studio Code}) para centralizar la trazabilidad semántica del código (\textit{Git}), potenciar un diseño desacoplado (SOLID) y orquestar a los Agentes AI programadores asistenciales mediante delegación de tareas TDD.
+    \item \textbf{Plano Operativo Cloud Shell (GCP)}: Terminal incrustada en navegador interactuando simbióticamente con el clúster perimetral \textit{Google Kubernetes Engine (GKE)}. Provee el instrumental oficial (\texttt{kubectl}, \texttt{gcloud}) para certificar latencias de red, ejecutar interactivamente las validaciones del Pipeline de despliegue continuo (Cloud Build), y auditar topologías internas ajenas al alcance de la pasarela local.
+\end{enumerate}
+
+\section{Estrategia SRE: FinOps sobre \textit{Spot Instances}}
+Ante las crueles exigencias de la ingeniería de fiabilidad (\textit{Site Reliability Engineering}), se optó deliberadamente por declinar la instauración predecible de un \textit{Node Pool Standard} dedicado para la base de datos ChromaDB con objeto de optimizar masivamente el presupuesto de infraestructura computacional (estrategias \textit{FinOps}, con factor de ahorro $\approx\! 65\%$).
+
+La Base de Datos Vectorial absorbe la penalización intrínseca de la flota efímera preexistente (\textit{Spot Instances}). Para eludir la letal aniquilación de vectores semánticos en el funesto lapso que Google orquesta el cierre perentorio de estos nodos, ChromaDB se despliega como un \texttt{StatefulSet} anclado sobre un disco zonal de ensamblaje dinámico persistente (\texttt{PersistentVolumeClaim} en modalidad \texttt{ReadWriteOnce}). 
+Durante la inevitabilidad física de una evicción programada, el Clúster repone velozmente el \textit{Pod} en instancias sanedadas subyacentes reciclando los datos en disco inmutables. Esta aproximación asume microcortes temporales como una compensación trivial e inteligible a favor de un espectacular decrecimiento de las facturas del proveedor *Cloud*.

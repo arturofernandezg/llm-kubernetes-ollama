@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: chromadb-svc
+  namespace: arturo-llm-test
+  labels:
+    app: chromadb
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: chromadb
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: chromadb
+  namespace: arturo-llm-test
+  labels:
+    app: chromadb
+spec:
+  serviceName: "chromadb-svc"
+  replicas: 1 # Única réplica embebida (Suficiente para Fase 2)
+  selector:
+    matchLabels:
+      app: chromadb
+  template:
+    metadata:
+      labels:
+        app: chromadb
+    spec:
+      # Las bases de datos no recomiendan ejecutarse como ROOT
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      tolerations:
+        # GCP Spot Toleration para que K8s permita programarlo en el node pool e2-standard-2 actual
+        - key: "cloud.google.com/gke-spot"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      containers:
+        - name: chromadb
+          image: chromadb/chroma:0.4.24
+          ports:
+            - containerPort: 8000
+          env:
+            - name: IS_PERSISTENT
+              value: "TRUE"
+            - name: PERSIST_DIRECTORY
+              value: "/chroma/chroma"
+            - name: ANONYMIZED_TELEMETRY
+              value: "False"
+          volumeMounts:
+            - name: chromadb-data
+              mountPath: /chroma/chroma
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi" # RAM garantizada
+            limits:
+              cpu: "1000m" # Evita canibalizar el resto del nodo e2-standard-2
+              memory: "2Gi" # Hard limit para evitar OOMKillers del sistema principal
+  # Plantilla de disco. GCP inyectará su GCE Persistent Disk dinámicamente
+  volumeClaimTemplates:
+    - metadata:
+        name: chromadb-data
+      spec:
+        accessModes: [ "ReadWriteOnce" ] # El disco solo se enchufa a 1 nodo a la vez
+        resources:
+          requests:
+            storage: 10Gi

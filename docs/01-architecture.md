@@ -7,6 +7,13 @@ en MasOrange/Telecable. TFG/TFM — rol: ingeniero AIOps.
 
 *(Nota: Originalmente el proyecto se basaba en la generación de IaC (Terraform) para GCP. Esa funcionalidad ha sido desplazada en favor de la remediación de Kubernetes, aunque el código original se conserva en `agent/`).*
 
+## Topología del Entorno de Trabajo (Dual-Environment)
+
+El ciclo de desarrollo y operaciones del proyecto se reparte entre dos ecosistemas para separar control de versiones y operaciones del clúster:
+
+1. **Local Desktop (Windows / VSCode)**: Base principal de programación. Sede de control de versiones locales (*Git*), programación del software de la API (TDD), y manipulación de artefactos de diseño.
+2. **Google Cloud Shell (Navegador)**: Consola de operaciones en GCP. Herramientas pesadas acopladas nativamente al clúster perimetral GKE `ai-infra-agent` (`gcloud`, `kubectl`, Cloud Build CLI), facilitando la interacción continua con los *Node Pools* e insumos de la API privada de Google.
+
 ## Flujo objetivo (Sistema de Remediación RAG)
 
 ```
