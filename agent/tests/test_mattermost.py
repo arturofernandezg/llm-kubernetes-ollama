@@ -3,7 +3,7 @@ Tests del cliente de integración con Mattermost.
 """
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 import httpx
 
 from mattermost import send_mattermost_alert
@@ -23,7 +23,7 @@ class TestMattermostClient:
         settings.mattermost_webhook_url = "http://mattermost/hooks/fake-url"
         
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = MagicMock()
         
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
@@ -48,7 +48,7 @@ class TestMattermostClient:
         settings.mattermost_webhook_url = "http://mattermost/hooks/fake-url"
         
         mock_response = AsyncMock()
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = MagicMock()
         
         mock_client = AsyncMock()
         # Fallar la 1a vez (Timeout), Exito la 2a vez
