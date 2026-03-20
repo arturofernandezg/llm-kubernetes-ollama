@@ -1,0 +1,169 @@
+# =============================================================================
+# Alertmanager Standalone — Sin operador, sin CRDs, sin ClusterRoles
+#
+# Todo namespace-scoped dentro de arturo-monitoring.
+# La configuración de routing está en el ConfigMap alertmanager-config.
+#
+# Cuando recibe una alerta (via API POST), la agrupa y la envía al
+# webhook del agente FastAPI en arturo-llm-test.
+#
+# Setup:
+#   kubectl create namespace arturo-monitoring
+#   kubectl apply -f k8s/alertmanager.yaml
+#
+# Verificar:
+#   kubectl get pods -n arturo-monitoring
+#   kubectl port-forward svc/alertmanager-svc 9093:9093 -n arturo-monitoring
+#   curl http://localhost:9093/-/healthy
+#
+# Enviar una alerta de prueba (desde Cloud Shell con port-forward activo):
+#   curl -X POST http://localhost:9093/api/v2/alerts \
+#     -H "Content-Type: application/json" \
+#     -d '[{
+#       "labels": {
+#         "alertname": "KubePodOOMKilled",
+#         "pod": "test-pod",
+#         "namespace": "arturo-llm-test",
+#         "severity": "critical"
+#       },
+#       "annotations": {
+#         "summary": "Pod test-pod OOM killed",
+#         "description": "Container test was killed by OOM killer. Exit code 137."
+#       },
+#       "startsAt": "2026-03-20T10:00:00Z"
+#     }]'
+#
+# =============================================================================
+
+# ── ConfigMap con la configuración de Alertmanager ────────────────────────────
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: arturo-monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      group_by: ["namespace", "alertname"]
+      group_wait: 10s
+      group_interval: 5m
+      repeat_interval: 1h
+      receiver: "aiops-webhook"
+
+      routes:
+        # Alertas críticas: envío rápido
+        - matchers:
+            - severity="critical"
+          group_wait: 5s
+          group_interval: 1m
+          repeat_interval: 30m
+          receiver: "aiops-webhook"
+
+    receivers:
+      - name: "aiops-webhook"
+        webhook_configs:
+          - url: "http://agent-svc.arturo-llm-test.svc.cluster.local:8000/webhook/alert"
+            send_resolved: true
+
+    inhibit_rules:
+      - source_matchers:
+          - severity="critical"
+        target_matchers:
+          - severity="warning"
+        equal: ["namespace", "pod"]
+
+---
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: arturo-monitoring
+  labels:
+    app: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      tolerations:
+        - key: "cloud.google.com/gke-spot"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          args:
+            - "--config.file=/etc/alertmanager/alertmanager.yml"
+            - "--storage.path=/alertmanager"
+            - "--web.listen-address=:9093"
+          ports:
+            - containerPort: 9093
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+              readOnly: true
+            - name: storage
+              mountPath: /alertmanager
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9093
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9093
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: storage
+          emptyDir: {}
+
+---
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager-svc
+  namespace: arturo-monitoring
+  labels:
+    app: alertmanager
+spec:
+  selector:
+    app: alertmanager
+  ports:
+    - port: 9093
+      targetPort: 9093
+      protocol: TCP
+      name: http
+  type: ClusterIP

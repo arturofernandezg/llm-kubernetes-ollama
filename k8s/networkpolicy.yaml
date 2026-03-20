@@ -68,14 +68,14 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
-    # Alertmanager (namespace: arturo-monitoring)
+    # Alertmanager standalone (namespace: arturo-monitoring)
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: arturo-monitoring
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: alertmanager
+              app: alertmanager
       ports:
         - protocol: TCP
           port: 8000
