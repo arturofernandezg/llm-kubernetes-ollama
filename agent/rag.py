@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 RAG (Retrieval-Augmented Generation) module for AIOps agent.
 
@@ -7,6 +9,8 @@ Manages two ChromaDB collections:
 
 Embeddings are generated in-cluster via Ollama (nomic-embed-text).
 """
+
+from typing import Optional
 
 import chromadb
 import httpx
@@ -70,7 +74,7 @@ async def ingest_runbook(
     text: str,
     metadata: dict,
     http_client: httpx.AsyncClient,
-    chroma_client: chromadb.HttpClient | None = None,
+    chroma_client: Optional[chromadb.HttpClient] = None,
 ) -> None:
     """
     Add a runbook document to the runbooks collection.
@@ -103,7 +107,7 @@ async def ingest_incident(
     text: str,
     metadata: dict,
     http_client: httpx.AsyncClient,
-    chroma_client: chromadb.HttpClient | None = None,
+    chroma_client: Optional[chromadb.HttpClient] = None,
 ) -> None:
     """
     Persist a resolved incident into the incidents collection (feedback loop).
@@ -164,10 +168,10 @@ def build_rag_query(alert_labels: dict, description: str) -> str:
 async def retrieve_context(
     query_text: str,
     http_client: httpx.AsyncClient,
-    chroma_client: chromadb.HttpClient | None = None,
+    chroma_client: Optional[chromadb.HttpClient] = None,
     top_k_runbooks: int = DEFAULT_TOP_K,
     top_k_incidents: int = 2,
-    metadata_filter: dict | None = None,
+    metadata_filter: Optional[dict] = None,
 ) -> dict:
     """
     Query both ChromaDB collections and return relevant context.
