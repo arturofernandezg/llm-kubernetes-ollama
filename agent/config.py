@@ -33,7 +33,18 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # Mattermost (Fase 1 - Observabilidad Activa)
+    # URL completa del incoming webhook de Mattermost.
+    # En K8s se usa el FQDN cross-namespace:
+    #   http://mattermost-svc.arturo-mattermost.svc.cluster.local:8065/hooks/<token>
     mattermost_webhook_url: str | None = None
+
+    # ChromaDB (Fase 2 - RAG)
+    chromadb_host: str = "chromadb-svc"
+    chromadb_port: int = 8000
+
+    # Ollama Embeddings (Fase 2 - RAG)
+    ollama_embed_url: str = "http://ollama-svc:11434/api/embeddings"
+    ollama_embed_model: str = "nomic-embed-text"
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 

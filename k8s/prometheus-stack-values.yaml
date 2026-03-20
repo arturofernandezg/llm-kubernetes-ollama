@@ -1,0 +1,134 @@
+# =============================================================================
+# Helm values para kube-prometheus-stack
+#
+# Instalación:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   kubectl create namespace arturo-monitoring
+#   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     --namespace arturo-monitoring \
+#     --values k8s/prometheus-stack-values.yaml
+#
+# Actualizar valores después:
+#   helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     --namespace arturo-monitoring \
+#     --values k8s/prometheus-stack-values.yaml
+#
+# IMPORTANTE: Aplicar prometheus-rules.yaml DESPUÉS de instalar el stack:
+#   kubectl apply -f k8s/prometheus-rules.yaml
+# =============================================================================
+
+# ── Grafana ───────────────────────────────────────────────────────────────────
+# Deshabilitado: no hay internet para acceder desde fuera, y consume ~200MB RAM.
+# Si se necesita en el futuro, habilitar y configurar port-forward.
+grafana:
+  enabled: false
+
+# ── Prometheus ────────────────────────────────────────────────────────────────
+prometheus:
+  prometheusSpec:
+    # Retención de métricas: 7 días (reducido para ahorrar disco en spot nodes)
+    retention: 7d
+    retentionSize: "5GB"
+
+    # Recursos ajustados para nodo spot e2-standard-2
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+    # Incluir PrometheusRules de todos los namespaces
+    ruleNamespaceSelector: {}
+    ruleSelector:
+      matchLabels:
+        release: kube-prometheus-stack
+
+    # Incluir ServiceMonitors de todos los namespaces
+    serviceMonitorNamespaceSelector: {}
+    serviceMonitorSelector: {}
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+# ── Alertmanager ──────────────────────────────────────────────────────────────
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: "10m"
+        memory: "64Mi"
+      limits:
+        cpu: "100m"
+        memory: "128Mi"
+
+  config:
+    global:
+      # Tiempo que espera Alertmanager antes de reenviar si la alerta sigue activa
+      resolve_timeout: 5m
+
+    route:
+      # Agrupar alertas por namespace + alertname para reducir ruido
+      group_by: ["namespace", "alertname"]
+      group_wait: 10s       # Espera antes del primer envío (agrupar ráfagas)
+      group_interval: 5m    # Tiempo mínimo entre envíos para el mismo grupo
+      repeat_interval: 1h   # Reenviar si la alerta sigue activa tras 1h
+      receiver: "aiops-webhook"
+
+      routes:
+        # Alertas críticas: envío rápido, sin agrupar mucho
+        - matchers:
+            - severity="critical"
+          group_wait: 5s
+          group_interval: 1m
+          repeat_interval: 30m
+          receiver: "aiops-webhook"
+
+        # Alertas de equipo aiops (todas las definidas en prometheus-rules.yaml)
+        - matchers:
+            - team="aiops"
+          receiver: "aiops-webhook"
+
+    receivers:
+      - name: "aiops-webhook"
+        webhook_configs:
+          - url: "http://agent-svc.arturo-llm-test.svc.cluster.local:8000/webhook/alert"
+            send_resolved: true   # Notificar también cuando la alerta se resuelve
+            http_config:
+              # Sin autenticación por ahora — el agent está en red privada ClusterIP
+              follow_redirects: true
+
+    inhibit_rules:
+      # Silenciar warnings si ya hay un critical del mismo pod
+      - source_matchers:
+          - severity="critical"
+        target_matchers:
+          - severity="warning"
+        equal: ["namespace", "pod"]
+
+# ── kube-state-metrics ────────────────────────────────────────────────────────
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+# ── node-exporter ─────────────────────────────────────────────────────────────
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "32Mi"
+    limits:
+      cpu: "100m"
+      memory: "64Mi"

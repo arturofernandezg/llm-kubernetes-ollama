@@ -13,16 +13,20 @@ python -m pytest tests/ -v
 
 | Archivo | Tests | Tipo | Qué verifica |
 |---|---|---|---|
-| `test_endpoints.py` | 26 | Integración | Health probes (/healthz, /readyz, /health), /extract end-to-end, retry con backoff, /metrics |
+| `test_endpoints.py` | 26 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics |
 | `test_extraction.py` | 11 | Unitario | extract_json: direct, markdown_block, regex con bracket counting, nested JSON, edge cases |
-| `test_tf_generator.py` | 16 | Unitario | safe_name (caracteres especiales, vacíos, trailing underscore), generate_terraform (template, defaults, labels) |
-| `test_validation.py` | 11 | Unitario | validate_params: regiones válidas/inválidas, instance types con parametrize (6 prefijos), campos null |
-| **Total** | **64** | | |
+| `test_tf_generator.py` | 16 | Unitario | safe_name, generate_terraform (template, defaults, labels) |
+| `test_validation.py` | 11 | Unitario | validate_params: regiones, instance types, campos null |
+| `test_mattermost.py` | 8 | Unitario | send_mattermost_alert: envío, retry 5xx, no-retry 4xx, ConnectError, excepción inesperada, fail-open |
+| `test_rag.py` | 12 | Unitario | build_rag_query, generate_embedding, retrieve_context, ingest_runbook (ChromaDB + Ollama mockeados) |
+| `test_diagnosis.py` | 14 | Unitario | build_alert_text, format_context_docs, generate_diagnosis, _clamp (LLM mockeado) |
+| **Total** | **98** | | |
 
 **Nota**: los tests estaban originalmente en un único `test_main.py` (40 tests).
-Se refactorizaron en 4 archivos al modularizar el código del agente (commit 7ec4a3a)
-y se añadieron tests nuevos para cubrir `tf_generator.py`, validación parametrizada
-y casos adicionales. Verificado con Cloud Build el 2026-03-18: **64 passed in 0.39s**.
+Se refactorizaron y ampliaron progresivamente al añadir módulos:
+- Fase 0 refactor (commit 7ec4a3a): 4 ficheros, 64 tests. Verificado con Cloud Build 2026-03-18.
+- Fase 1 (2026-03-20): +8 tests para `mattermost.py`.
+- Fase 2 (2026-03-20): +12 tests para `rag.py`, +14 tests para `diagnosis.py`.
 
 ### Ficheros de soporte
 

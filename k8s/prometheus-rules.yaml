@@ -1,0 +1,155 @@
+# =============================================================================
+# PrometheusRule — Alerting rules para AIOps
+#
+# Instalado con kube-prometheus-stack (CRD PrometheusRule).
+# El Prometheus Operator detecta este recurso automáticamente si:
+#   - el label "release: kube-prometheus-stack" coincide con el selector
+#   - está en el namespace arturo-monitoring (donde está instalado el stack)
+#
+# Alertas definidas para cubrir los casos de remediación principales:
+#   - OOMKilled (Fase 3: auto-patch memory limits)
+#   - CrashLoopBackOff (Fase 3: diagnóstico + escalado)
+#   - CPU Throttling alto (informativo)
+#   - Pod no ready / evicted
+#   - Nodo spot reclamado
+# =============================================================================
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aiops-alerting-rules
+  namespace: arturo-monitoring
+  labels:
+    # Label que debe coincidir con el ruleSelector del stack de Prometheus
+    release: kube-prometheus-stack
+    app: kube-prometheus-stack
+spec:
+  groups:
+    - name: aiops.kubernetes.pods
+      interval: 30s
+      rules:
+
+        # ── OOMKilled ──────────────────────────────────────────────────────────
+        # Detecta cuando un container es terminado por el OOM killer del kernel.
+        # Exit code 137 = killed by signal 9 (SIGKILL from OOM killer).
+        # Caso de uso Fase 3: auto-patch memory limits si aumento < 25%.
+        - alert: KubePodOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 0m
+          labels:
+            severity: critical
+            team: aiops
+          annotations:
+            summary: "Pod {{ $labels.pod }} killed by OOM"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              (namespace {{ $labels.namespace }}) was killed by the OOM killer.
+              Memory limit may be too low. Check with:
+              kubectl describe pod {{ $labels.pod }} -n {{ $labels.namespace }}
+
+        # ── CrashLoopBackOff ──────────────────────────────────────────────────
+        # Detecta pods que se reinician repetidamente.
+        # Threshold: >3 reinicios en los últimos 15 minutos.
+        - alert: KubePodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total[15m]) > 3
+          for: 5m
+          labels:
+            severity: critical
+            team: aiops
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash looping"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              (namespace {{ $labels.namespace }}) has restarted
+              {{ $value | printf "%.0f" }} times in the last 15 minutes.
+
+        # ── Pod Not Ready ─────────────────────────────────────────────────────
+        - alert: KubePodNotReady
+          expr: |
+            kube_pod_status_ready{condition="true"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            team: aiops
+          annotations:
+            summary: "Pod {{ $labels.pod }} not ready"
+            description: >
+              Pod {{ $labels.pod }} in namespace {{ $labels.namespace }}
+              has been in a non-ready state for more than 5 minutes.
+
+        # ── Pod Evicted (spot node reclamado) ─────────────────────────────────
+        - alert: KubePodEvicted
+          expr: |
+            kube_pod_status_reason{reason="Evicted"} == 1
+          for: 0m
+          labels:
+            severity: warning
+            team: aiops
+          annotations:
+            summary: "Pod {{ $labels.pod }} was evicted"
+            description: >
+              Pod {{ $labels.pod }} in namespace {{ $labels.namespace }}
+              was evicted. Likely caused by spot node preemption or resource pressure.
+              Run: kubectl describe pod {{ $labels.pod }} -n {{ $labels.namespace }}
+
+    - name: aiops.kubernetes.resources
+      interval: 60s
+      rules:
+
+        # ── CPU Throttling alto ───────────────────────────────────────────────
+        # Un container recibe throttling cuando intenta usar más CPU de su limit.
+        # Umbral: >50% del tiempo en throttling durante los últimos 5 minutos.
+        - alert: KubeCPUThrottlingHigh
+          expr: |
+            rate(container_cpu_cfs_throttled_seconds_total[5m])
+            / rate(container_cpu_cfs_periods_total[5m]) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+            team: aiops
+          annotations:
+            summary: "CPU throttling in {{ $labels.pod }}"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              (namespace {{ $labels.namespace }}) is being CPU throttled
+              {{ $value | humanizePercentage }} of the time.
+
+        # ── Memoria cerca del límite ──────────────────────────────────────────
+        # Aviso temprano antes de OOMKilled. >90% del memory limit usado.
+        - alert: KubeContainerMemoryNearLimit
+          expr: |
+            container_memory_working_set_bytes
+            / on(pod, container, namespace)
+            kube_pod_container_resource_limits{resource="memory"} > 0.9
+          for: 5m
+          labels:
+            severity: warning
+            team: aiops
+          annotations:
+            summary: "Container {{ $labels.container }} memory near limit"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              (namespace {{ $labels.namespace }}) is using
+              {{ $value | humanizePercentage }} of its memory limit.
+              Risk of OOMKilled imminent.
+
+    - name: aiops.kubernetes.nodes
+      interval: 60s
+      rules:
+
+        # ── Nodo not ready (spot preempted) ───────────────────────────────────
+        - alert: KubeNodeNotReady
+          expr: |
+            kube_node_status_condition{condition="Ready", status="true"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            team: aiops
+          annotations:
+            summary: "Node {{ $labels.node }} is not ready"
+            description: >
+              Node {{ $labels.node }} has been in NotReady state for >2 minutes.
+              If using spot nodes, this may indicate preemption.
+              Check: kubectl describe node {{ $labels.node }}

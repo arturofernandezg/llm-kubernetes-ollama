@@ -1,0 +1,224 @@
+# =============================================================================
+# Mattermost Team Edition — ChatOps para AIOps
+#
+# Namespace: arturo-mattermost (aislado del core AIOps stack)
+#
+# Stack: PostgreSQL (StatefulSet) + Mattermost (Deployment)
+#
+# Recursos ajustados para caber en nodo spot e2-standard-2 (~8GB RAM):
+#   - PostgreSQL: 256Mi request / 512Mi limit
+#   - Mattermost: 256Mi request / 512Mi limit
+#
+# Setup inicial (GCloud Shell):
+#   1. Crear namespace:
+#      kubectl create namespace arturo-mattermost
+#
+#   2. Crear secret con la contraseña de la DB:
+#      DB_PASSWORD="cambia-esto-por-una-password-segura"
+#      kubectl create secret generic mattermost-secrets \
+#        --from-literal=db-password="${DB_PASSWORD}" \
+#        --from-literal=db-datasource="postgres://mmuser:${DB_PASSWORD}@postgres-svc:5432/mattermost?sslmode=disable" \
+#        -n arturo-mattermost
+#
+#   3. Aplicar este manifiesto:
+#      kubectl apply -f k8s/mattermost.yaml
+#
+#   4. Port-forward para configurar admin (primer arranque):
+#      kubectl port-forward svc/mattermost-svc 8065:8065 -n arturo-mattermost
+#
+# URL interna desde el agente (cross-namespace FQDN):
+#   http://mattermost-svc.arturo-mattermost.svc.cluster.local:8065
+# =============================================================================
+
+# ── PostgreSQL para Mattermost ────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: arturo-mattermost
+  labels:
+    app: postgres
+spec:
+  serviceName: postgres-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      tolerations:
+        - key: "cloud.google.com/gke-spot"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: "mattermost"
+            - name: POSTGRES_USER
+              value: "mmuser"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-secrets
+                  key: db-password
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "mmuser", "-d", "mattermost"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-svc
+  namespace: arturo-mattermost
+  labels:
+    app: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP
+
+---
+
+# ── Mattermost Team Edition ───────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mattermost
+  namespace: arturo-mattermost
+  labels:
+    app: mattermost
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mattermost
+  template:
+    metadata:
+      labels:
+        app: mattermost
+    spec:
+      tolerations:
+        - key: "cloud.google.com/gke-spot"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      initContainers:
+        # Espera a que PostgreSQL esté listo antes de arrancar Mattermost
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgres-svc 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+      containers:
+        - name: mattermost
+          image: mattermost/mattermost-team-edition:9.5
+          ports:
+            - containerPort: 8065
+          env:
+            - name: MM_SQLSETTINGS_DRIVERNAME
+              value: "postgres"
+            - name: MM_SQLSETTINGS_DATASOURCE
+              valueFrom:
+                secretKeyRef:
+                  name: mattermost-secrets
+                  key: db-datasource
+            # FQDN completo porque Mattermost puede generar links internos
+            - name: MM_SERVICESETTINGS_SITEURL
+              value: "http://mattermost-svc.arturo-mattermost.svc.cluster.local:8065"
+            - name: MM_LOGSETTINGS_ENABLEDIAGNOSTICS
+              value: "false"
+            - name: MM_PLUGINSETTINGS_ENABLE
+              value: "false"
+          volumeMounts:
+            - name: mattermost-data
+              mountPath: /mattermost/data
+            - name: mattermost-logs
+              mountPath: /mattermost/logs
+            - name: mattermost-config
+              mountPath: /mattermost/config
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /api/v4/system/ping
+              port: 8065
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/v4/system/ping
+              port: 8065
+            initialDelaySeconds: 60
+            periodSeconds: 20
+      volumes:
+        - name: mattermost-data
+          emptyDir: {}
+        - name: mattermost-logs
+          emptyDir: {}
+        - name: mattermost-config
+          emptyDir: {}
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mattermost-svc
+  namespace: arturo-mattermost
+  labels:
+    app: mattermost
+spec:
+  selector:
+    app: mattermost
+  ports:
+    - port: 8065
+      targetPort: 8065
+  type: ClusterIP

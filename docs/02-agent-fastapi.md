@@ -1,33 +1,56 @@
 # Agente FastAPI — Core API (Remediación AIOps)
 
 > [!NOTE]
-> *(Nota: Esta documentación refleja los endpoints clásicos de la Fase 1 (Extracción NLP -> Terraform) que se conservan como código heredado, así como el roadmap del nuevo enrutador de alertas de Prometheus y acciones de auto-remediación.)*
+> El agente está en transición de Fase 0 (extracción NLP → Terraform) a Fase 1-3
+> (alertas → RAG → diagnóstico → remediación). Los endpoints y módulos legacy se conservan
+> pero no reciben desarrollo activo.
 
 ## Estructura modular (`agent/`)
 
-Versión actual: 0.4.0
+Versión actual: 0.5.0
 
-El agente se modularizó (commit 7ec4a3a) para separar responsabilidades. Originalmente
-todo estaba en `main.py`; ahora se divide en 6 módulos:
-
-| Módulo | Responsabilidad |
-|---|---|
-| `main.py` | FastAPI app, endpoints, lifespan, middleware de logging, retry logic |
-| `config.py` | Pydantic BaseSettings, setup de logging JSON estructurado |
-| `schemas.py` | Modelos Pydantic v2 (InfraRequest, ExtractedParams, ExtractResponse) |
-| `extraction.py` | PROMPT_TEMPLATE, `extract_json()` con 3 estrategias de fallback |
-| `validation.py` | `validate_params()` — validación no-bloqueante contra valores GCP |
-| `tf_generator.py` | `safe_name()`, `generate_terraform()`, template Terraform |
+| Módulo | Responsabilidad | Fase |
+|---|---|---|
+| `main.py` | FastAPI app, endpoints, lifespan, middleware de logging, retry logic | 0+ |
+| `config.py` | Pydantic BaseSettings, setup de logging JSON estructurado | 0+ |
+| `schemas.py` | Modelos Pydantic v2 (alertas, extracción, diagnóstico) | 0+ |
+| `extraction.py` | PROMPT_TEMPLATE, `extract_json()` con 3 estrategias de fallback | 0 (legacy) |
+| `validation.py` | `validate_params()` — validación no-bloqueante contra valores GCP | 0 (legacy) |
+| `tf_generator.py` | `safe_name()`, `generate_terraform()`, template Terraform | 0 (legacy) |
+| `mattermost.py` | Cliente HTTP async para Mattermost con retry/backoff | 1 |
+| `rag.py` | **(Planificado)** Cliente ChromaDB, ingesta, query, construcción de queries | 2 |
+| `diagnosis.py` | **(Planificado)** Prompt AIOps contextual, parsing JSON estructurado del LLM | 2 |
+| `remediation.py` | **(Planificado)** Validation layer, whitelist comandos, cliente K8s API | 3 |
 
 ## Endpoints
 
-| Método | Path | Descripción | Dependencias |
-|---|---|---|---|
-| GET | `/healthz` | Liveness probe. Siempre 200. | Ninguna |
-| GET | `/readyz` | Readiness probe. 200 si Ollama + modelo OK. | Ollama |
-| POST | `/webhook/alert` | **[NUEVO]** Recibe payloads JSON de Alertmanager, ingiere métricas y triggerea el RAG/LLM. | Ollama / Vertex / BBDD |
-| POST | `/extract` | **[LEGADO]** Extracción de parámetros desde texto a JSON. | Ollama |
-| GET | `/metrics` | Métricas Prometheus (auto-instrumentado + contadores custom). | Ninguna |
+| Método | Path | Descripción | Dependencias | Fase |
+|---|---|---|---|---|
+| GET | `/healthz` | Liveness probe. Siempre 200. | Ninguna | 0 |
+| GET | `/readyz` | Readiness probe. 200 si Ollama + modelo OK. | Ollama | 0 |
+| POST | `/webhook/alert` | Ingesta alertas Alertmanager → normaliza → RAG → diagnóstico → Mattermost | Ollama, ChromaDB, Mattermost | 1-3 |
+| POST | `/extract` | **(Legado)** Extracción de parámetros desde texto a JSON. | Ollama | 0 |
+| GET | `/metrics` | Métricas Prometheus (auto-instrumentado + contadores custom). | Ninguna | 0 |
+
+## Flujo de /webhook/alert (evolución por fases)
+
+**Fase 1 (actual)**: Recibe payload → log estructurado → formatea mensaje → envía a Mattermost (BackgroundTask).
+
+**Fase 2 (planificado)**:
+1. Recibe payload Alertmanager (validado por `AlertmanagerPayload`).
+2. Normaliza: extrae `alertname`, `pod`, `namespace`, `severity`, `description`.
+3. Construye query enriquecida para ChromaDB (no solo log raw — incluye labels + features).
+4. Genera embedding via Ollama (`nomic-embed-text`).
+5. Query ChromaDB: busca top-3 en `runbooks` + top-2 en `incidents`.
+6. Construye prompt contextual: alerta + documentos relevantes + instrucción de output JSON.
+7. LLM genera `{ diagnosis, commands[], confidence, risk, explanation }`.
+8. Envía a Mattermost: mensaje enriquecido con diagnóstico, comandos sugeridos, risk level.
+
+**Fase 3 (planificado)**:
+9. Validation layer evalúa commands contra whitelist/blacklist.
+10. Si `risk == "low"` Y `confidence >= 0.8` Y cambio `< 25%` → auto-patch via K8s API.
+11. Si no → mensaje a Mattermost con botones `[Aprobar]` / `[Rechazar]`.
+12. Resultado (success/failure/rejected) se persiste en colección `incidents` de ChromaDB.
 
 ## Flujo de /extract
 
@@ -42,6 +65,47 @@ todo estaba en `main.py`; ahora se divide en 6 módulos:
 6. Devuelve respuesta estructurada con warnings, método de extracción, duración
 
 ## Schemas
+
+### Alertmanager (Fase 1+)
+
+```
+AlertItem:
+  status:       str ("firing" | "resolved")
+  labels:       dict[str, str]    ← alertname, pod, namespace, severity
+  annotations:  dict[str, str]    ← description, summary
+  startsAt:     str
+  endsAt:       str | None
+  generatorURL: str | None
+  fingerprint:  str | None
+
+AlertmanagerPayload:
+  receiver:          str
+  status:            str ("firing" | "resolved")
+  alerts:            list[AlertItem]
+  groupLabels:       dict[str, str]
+  commonLabels:      dict[str, str]
+  commonAnnotations: dict[str, str]
+  externalURL:       str | None
+  version:           str | None
+  groupKey:          str | None
+```
+
+### Diagnóstico AIOps (Fase 2 — planificado)
+
+```
+DiagnosisResponse:
+  alert_id:     str
+  diagnosis:    str              ← explicación del problema
+  commands:     list[str]        ← comandos kubectl sugeridos
+  confidence:   float (0.0-1.0)  ← confianza del LLM en su diagnóstico
+  risk:         str              ← "low" | "medium" | "high"
+  explanation:  str              ← razonamiento detallado
+  rag_sources:  list[str]        ← IDs de documentos ChromaDB usados como contexto
+  model_used:   str
+  duration_ms:  int
+```
+
+### Extracción Legacy (Fase 0)
 
 ```
 InfraRequest:
@@ -72,17 +136,21 @@ ExtractResponse:
 
 ## Variables de entorno
 
-| Variable | Default | Descripción |
-|---|---|---|
-| `OLLAMA_URL` | `http://ollama-svc:11434/api/generate` | Endpoint de generación |
-| `OLLAMA_TAGS` | `http://ollama-svc:11434/api/tags` | Endpoint de modelos |
-| `OLLAMA_MODEL` | `tinyllama` | Modelo a usar (en K8s se sobreescribe a `qwen2.5:1.5b`) |
-| `HTTP_TIMEOUT` | `120.0` | Timeout general del cliente HTTP (segundos) |
-| `HEALTH_TIMEOUT` | `5.0` | Timeout para health checks (segundos) |
-| `RETRY_MAX_ATTEMPTS` | `3` | Intentos máximos de retry hacia Ollama |
-| `RETRY_BASE_DELAY` | `1.0` | Delay base (segundos) para backoff exponencial |
-| `RETRY_MAX_DELAY` | `10.0` | Delay máximo (segundos) entre reintentos |
-| `LOG_LEVEL` | `INFO` | Nivel de logging (DEBUG, INFO, WARNING, ERROR) |
+| Variable | Default | Descripción | Fase |
+|---|---|---|---|
+| `OLLAMA_URL` | `http://ollama-svc:11434/api/generate` | Endpoint de generación | 0+ |
+| `OLLAMA_TAGS` | `http://ollama-svc:11434/api/tags` | Endpoint de modelos | 0+ |
+| `OLLAMA_MODEL` | `tinyllama` | Modelo generativo (en K8s: `qwen2.5:1.5b`) | 0+ |
+| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | **(Planificado)** Modelo de embeddings | 2 |
+| `OLLAMA_EMBED_URL` | `http://ollama-svc:11434/api/embeddings` | **(Planificado)** Endpoint de embeddings | 2 |
+| `CHROMADB_URL` | `http://chromadb-svc:8000` | **(Planificado)** URL de ChromaDB | 2 |
+| `MATTERMOST_WEBHOOK_URL` | `None` | URL del webhook entrante de Mattermost | 1 |
+| `HTTP_TIMEOUT` | `120.0` | Timeout general del cliente HTTP (segundos) | 0+ |
+| `HEALTH_TIMEOUT` | `5.0` | Timeout para health checks (segundos) | 0+ |
+| `RETRY_MAX_ATTEMPTS` | `3` | Intentos máximos de retry hacia Ollama | 0+ |
+| `RETRY_BASE_DELAY` | `1.0` | Delay base (segundos) para backoff exponencial | 0+ |
+| `RETRY_MAX_DELAY` | `10.0` | Delay máximo (segundos) entre reintentos | 0+ |
+| `LOG_LEVEL` | `INFO` | Nivel de logging (DEBUG, INFO, WARNING, ERROR) | 0+ |
 
 ## Cliente HTTP compartido
 
