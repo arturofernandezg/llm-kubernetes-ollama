@@ -24,6 +24,7 @@
 | `service-agent.yaml` | ClusterIP :8000 | Solo accesible internamente |
 | `deployment-apache.yaml` | Deployment apache (1 réplica) | Validación de red |
 | `service-apache.yaml` | ClusterIP :80 | Validación de red |
+| `chromadb.yaml` | StatefulSet + Service chromadb (1 réplica) | PVC 10Gi, imagen 0.6.3, probes /api/v1/heartbeat |
 | `networkpolicy.yaml` | NetworkPolicy (2 políticas) | Segmentación de tráfico entre pods |
 
 ## Probes del agente
@@ -180,6 +181,17 @@ kubectl logs -l app=ollama -n arturo-llm-test --tail=50
 ### kubectl: "connection refused" en Cloud Shell
 **Causa**: no has configurado las credenciales del cluster.
 **Solución**: `gcloud container clusters get-credentials ai-infra-agent --zone europe-southwest1-a`
+
+### ChromaDB en CrashLoopBackOff — "Could not import module chromadb.app"
+**Causa**: La imagen `chromadb/chroma:0.4.24` tenía un bug — su entrypoint ejecutaba
+`uvicorn chromadb.app:app` pero ese módulo no existía en el paquete Python interno.
+Además, había incompatibilidad de versión: el cliente Python (`chromadb-client==0.6.3`)
+no era compatible con el servidor `0.4.24`.
+**Solución**: Actualizar imagen a `chromadb/chroma:0.6.3` (coincide con el cliente Python).
+Se añadieron también liveness/readiness probes (`GET /api/v1/heartbeat`).
+Si `kubectl apply` falla por un ConfigMap huérfano (`chroma-log-config`) del despliegue
+anterior, borrar el StatefulSet con `kubectl delete sts chromadb -n arturo-llm-test --cascade=orphan`
+(preserva el PVC) y re-aplicar.
 
 ### Pod del agente en CrashLoopBackOff
 **Causa probable**: la readinessProbe antigua apuntaba a /health que dependía de Ollama.

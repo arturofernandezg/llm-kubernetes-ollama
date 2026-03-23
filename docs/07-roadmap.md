@@ -53,15 +53,37 @@
 - [x] NetworkPolicy actualizada para cross-namespace (Alertmanager→Agent, Agent→Mattermost, Agent→ChromaDB).
 - [x] 3 namespaces operativos: `arturo-llm-test`, `arturo-monitoring`, `arturo-mattermost`.
 
-### Estado del cluster (2026-03-20)
+### Estado del cluster (2026-03-23)
 | Namespace | Pod | Estado |
 |---|---|---|
 | `arturo-llm-test` | agent | ✅ Running (imagen 5f64b61) |
 | `arturo-llm-test` | ollama | ✅ Running |
-| `arturo-llm-test` | chromadb-0 | ❌ CrashLoopBackOff (pendiente investigar) |
+| `arturo-llm-test` | chromadb-0 | ⏳ Fix pendiente de aplicar (ver diagnóstico abajo) |
 | `arturo-monitoring` | alertmanager | ✅ Running |
 | `arturo-mattermost` | mattermost | ✅ Running |
 | `arturo-mattermost` | postgres | ✅ Running |
+
+#### Diagnóstico ChromaDB CrashLoopBackOff (investigado 2026-03-23)
+
+**Error**: `ERROR: Error loading ASGI app. Could not import module "chromadb.app".`
+
+**Causa raíz**: La imagen `chromadb/chroma:0.4.24` tiene un bug — su script de arranque ejecuta
+`uvicorn chromadb.app:app` pero ese módulo no existe en esa versión del paquete Python interno.
+No es un problema de permisos ni de recursos.
+
+**Causa secundaria**: Incompatibilidad de versión. El cliente Python del agente usa
+`chromadb-client==0.6.3` (ver `agent/requirements.txt`) pero el servidor era `0.4.24`.
+
+**Fix aplicado en manifest**: Imagen actualizada a `chromadb/chroma:0.6.3` en
+`k8s/chromadb.yaml`. También se añadieron liveness/readiness probes apuntando a
+`GET /api/v1/heartbeat:8000`.
+
+**Nota**: el pod desplegado antes de este fix tenía un ConfigMap huérfano (`chroma-log-config`)
+montado que no está en nuestro manifest. Al hacer `kubectl apply` con el manifest actualizado,
+si falla, borrar el StatefulSet con `--cascade=orphan` (preserva PVC) y re-aplicar.
+
+**Pendiente**: aplicar el manifest en Cloud Shell con `kubectl apply -f k8s/chromadb.yaml`
+y verificar que el pod arranca correctamente.
 
 ### Entregable Fase 1
 Pipeline end-to-end: Alerta de Prometheus → Alertmanager → FastAPI webhook → notificación
@@ -70,7 +92,7 @@ formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routi
 ### Pendiente para completar Fase 1
 1. **Configurar webhook entrante en Mattermost** (obtener URL del incoming webhook).
 2. **Setear env `MATTERMOST_WEBHOOK_URL`** en el Deployment del agente.
-3. **Investigar ChromaDB CrashLoopBackOff** (logs del pod, posible problema de recursos/storage).
+3. **~~Investigar ChromaDB CrashLoopBackOff~~** — Diagnosticado (imagen rota). Fix en manifest, pendiente `kubectl apply`.
 4. **Alerting rules**: sin Prometheus operator, definir reglas en ConfigMap o evaluar alternativas.
 5. **Test end-to-end completo**: curl con payload Alertmanager válido (incluir campo `startsAt`)
    → agente procesa → notificación en Mattermost.
@@ -82,7 +104,9 @@ formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routi
 
 ### Infraestructura
 - [x] ChromaDB StatefulSet desplegado (manifiesto en `k8s/chromadb.yaml`).
-  - ⚠️ Pod en CrashLoopBackOff — pendiente investigar logs (posible problema de recursos en nodo spot).
+  - ⚠️ Imagen corregida de `0.4.24` → `0.6.3` (bug de módulo ASGI + incompatibilidad con cliente `0.6.3`).
+  - Se añadieron liveness/readiness probes (`/api/v1/heartbeat`).
+  - **Pendiente**: `kubectl apply -f k8s/chromadb.yaml` en Cloud Shell.
 - [ ] Cargar modelo de embeddings `nomic-embed-text` (274 MB) en Ollama (mismo flujo manual).
 - [x] NetworkPolicy actualizada: tráfico agent → chromadb-svc:8000 permitido.
 

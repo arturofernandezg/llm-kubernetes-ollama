@@ -46,7 +46,7 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: chromadb
-          image: chromadb/chroma:0.4.24
+          image: chromadb/chroma:0.6.3
           ports:
             - containerPort: 8000
           env:
@@ -59,6 +59,20 @@ spec:
           volumeMounts:
             - name: chromadb-data
               mountPath: /chroma/chroma
+          livenessProbe:
+            httpGet:
+              path: /api/v1/heartbeat
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/heartbeat
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
           resources:
             requests:
               cpu: "250m"
