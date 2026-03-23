@@ -20,7 +20,7 @@ python -m pytest tests/ -v
 | `test_mattermost.py` | 8 | Unitario | send_mattermost_alert: envío, retry 5xx, no-retry 4xx, ConnectError, excepción inesperada, fail-open |
 | `test_rag.py` | 12 | Unitario | build_rag_query, generate_embedding, retrieve_context, ingest_runbook (ChromaDB + Ollama mockeados) |
 | `test_diagnosis.py` | 14 | Unitario | build_alert_text, format_context_docs, generate_diagnosis, _clamp (LLM mockeado) |
-| **Total** | **98** | | |
+| **Total** | **103** | | Verificado en Cloud Build 2026-03-20 (build `1b34035f`, 1m42s) |
 
 **Nota**: los tests estaban originalmente en un único `test_main.py` (40 tests).
 Se refactorizaron y ampliaron progresivamente al añadir módulos:
@@ -123,6 +123,16 @@ que rastrea la profundidad de anidamiento. Corregido en commit 5ec78f5.
 **Causa**: usar `from conftest import ...` genera problemas de import en pytest.
 **Solución**: los helpers compartidos (mocks, constantes) van en `tests/helpers.py`.
 `conftest.py` solo contiene fixtures de pytest.
+
+### Cloud Build falla con `TypeError: unsupported operand type(s) for |: 'function' and 'NoneType'`
+**Descubierto**: 2026-03-20 durante el primer build con módulos RAG.
+**Causa**: `rag.py` usaba `chromadb.HttpClient | None = None` como type hint en parámetros
+de función. `chromadb.HttpClient` es una función factory, no una clase, así que no tiene
+`__or__` definido y la sintaxis `X | None` (PEP 604) falla en runtime en Python 3.11.
+Tipos built-in (`str`, `dict`, `int`) y clases reales sí soportan `|` en 3.10+.
+**Solución**: añadir `from __future__ import annotations` al inicio de `rag.py`.
+Esto hace que todos los type hints se evalúen como strings (lazy), evitando la ejecución
+del operador `|` en runtime. Corregido en commit `5f64b61`.
 
 ### PytestDeprecationWarning sobre asyncio_default_fixture_loop_scope
 **Causa**: pytest-asyncio 0.24 advierte sobre un cambio futuro en el scope por defecto.

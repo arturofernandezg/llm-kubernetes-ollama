@@ -80,8 +80,8 @@ del error completo y busca directamente los documentos más similares en la base
 | LLM (generación) | Ollama (qwen2.5:1.5b) | Pod K8s | 1 | 1 |
 | LLM (embeddings) | Ollama (nomic-embed-text, 768 dims) | Pod K8s (mismo) | — | 2 |
 | Vector DB | ChromaDB 0.4.24 (StatefulSet, PVC 10Gi) | Pod K8s | 1 | 2 |
-| ChatOps | Mattermost (webhook + bot) | Pod K8s | 1 | 1 |
-| Monitoring | kube-prometheus-stack (Prometheus + Alertmanager) | Pods K8s | — | 1 |
+| ChatOps | Mattermost (webhook + bot) + PostgreSQL | Pod K8s (`arturo-mattermost`) | 1 | 1 |
+| Alertmanager | Standalone (manifiesto propio, sin Prometheus operator) | Pod K8s (`arturo-monitoring`) | 1 | 1 |
 | TF Generator | Python stdlib (urllib) — legado | `generate_tf.py` | CLI local | 0 |
 | Build pipeline | Google Cloud Build | `cloudbuild.yaml` | — | 1 |
 | Infra | GKE (e2-standard-2 spot, 2 nodos) | `k8s/` | — | 1 |
@@ -238,6 +238,19 @@ Capa obligatoria entre el LLM y la ejecución:
 - **Código modularizado**: el agente se dividió en 6 módulos (commit 7ec4a3a)
   para facilitar testing unitario y preparar la integración Slack/GitHub de Fase 2.
 
+- **Alertmanager standalone** (no kube-prometheus-stack): el helm chart de
+  kube-prometheus-stack requiere `ClusterRoles` (permisos `container.clusterRoles.delete`
+  en IAM), que no están disponibles para el proyecto. Se despliega Alertmanager como
+  Deployment simple con ConfigMap propia. Trade-off: sin Prometheus metrics nativos,
+  sin alerting rules automáticas — las reglas se definen manualmente en el ConfigMap.
+- **Mattermost con PostgreSQL propio**: desplegado en `arturo-mattermost` con
+  PostgreSQL StatefulSet dedicado. Aislado del stack de IA para evitar impacto
+  cruzado. El agente se comunica via incoming webhook HTTP.
+- **`from __future__ import annotations`** en `rag.py`: necesario porque
+  `chromadb.HttpClient` es una función factory (no una clase), y la sintaxis
+  `X | None` falla en runtime en Python 3.11 para funciones. Este import hace
+  que todos los type hints sean evaluados como strings (lazy), evitando el error.
+
 ### Fase 2+ (planificadas)
 
 - **Retrieval-first, no classification-first**: el sistema busca por similitud
@@ -276,7 +289,7 @@ El proyecto usa 3 namespaces separados por grupo funcional:
 | Namespace | Componentes | Justificación |
 |---|---|---|
 | `arturo-llm-test` | agent, ollama, chromadb, apache | Core AIOps — comunicación intensiva entre sí |
-| `arturo-monitoring` | Prometheus, Alertmanager, kube-state-metrics, node-exporter | Observabilidad — convención del helm chart, separado del workload |
+| `arturo-monitoring` | Alertmanager (standalone) | Observabilidad — kube-prometheus-stack descartado por falta de permisos ClusterRole |
 | `arturo-mattermost` | Mattermost, PostgreSQL | ChatOps — DB aislada del stack de IA |
 
 ## Red interna

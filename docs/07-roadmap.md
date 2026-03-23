@@ -30,35 +30,67 @@
 - [x] Implementar endpoint `POST /webhook/alert` en FastAPI con Data Contract Alertmanager.
 - [x] Schemas Pydantic: `AlertmanagerPayload`, `AlertItem`.
 - [x] Módulo `mattermost.py` con retry y exponential backoff.
-- [ ] Instalación del stack `kube-prometheus-stack` (Prometheus + Alertmanager) en el cluster.
+- [x] Alertmanager standalone desplegado en `arturo-monitoring` (manifiesto propio, sin helm).
+  - ⚠️ kube-prometheus-stack descartado: requiere `ClusterRoles` → permisos IAM insuficientes.
+  - Alertmanager ConfigMap con receiver apuntando a `agent-svc.arturo-llm-test.svc.cluster.local:8000/webhook/alert`.
+- [x] Conectividad cross-namespace verificada: Alertmanager (`arturo-monitoring`) → Agent (`arturo-llm-test`).
+- [x] Imagen Docker nueva (tag `5f64b61`) con todos los módulos Fase 1+2 buildeada y desplegada.
+  - 103 tests pasando en Cloud Build (incluyendo tests RAG y diagnosis).
+  - Fix aplicado: `from __future__ import annotations` en `rag.py` para compatibilidad Python 3.11 runtime con type hints de `chromadb.HttpClient`.
 - [ ] Definir alerting rules para las alertas críticas: `KubePodOOMKilled`, `KubePodCrashLooping`,
   `KubeCPUOvercommit`, `KubeMemoryOvercommit`, `TargetDown`.
-- [ ] Conectar Alertmanager → webhook del agente FastAPI (receiver config).
+  - ⚠️ Requiere Prometheus (no disponible sin kube-prometheus-stack). Consultar tutor sobre permisos.
+  - Alternativa: alerting rules estáticas en ConfigMap de Alertmanager (sin Prometheus operator).
 
 ### ChatOps (Mattermost)
-- [ ] Instalar Mattermost en el cluster (helm chart o manifiesto propio).
+- [x] Instalar Mattermost en el cluster (manifiesto propio en `arturo-mattermost`).
+  - PostgreSQL StatefulSet + Mattermost Deployment operativos.
 - [ ] Configurar webhook entrante + token bot para el agente.
 - [ ] Desarrollar formateo enriquecido: diagnóstico del LLM renderizado como mensaje
   Mattermost con severity, commands sugeridos y botones de acción (Fase 3).
 
+### Infraestructura de red
+- [x] NetworkPolicy actualizada para cross-namespace (Alertmanager→Agent, Agent→Mattermost, Agent→ChromaDB).
+- [x] 3 namespaces operativos: `arturo-llm-test`, `arturo-monitoring`, `arturo-mattermost`.
+
+### Estado del cluster (2026-03-20)
+| Namespace | Pod | Estado |
+|---|---|---|
+| `arturo-llm-test` | agent | ✅ Running (imagen 5f64b61) |
+| `arturo-llm-test` | ollama | ✅ Running |
+| `arturo-llm-test` | chromadb-0 | ❌ CrashLoopBackOff (pendiente investigar) |
+| `arturo-monitoring` | alertmanager | ✅ Running |
+| `arturo-mattermost` | mattermost | ✅ Running |
+| `arturo-mattermost` | postgres | ✅ Running |
+
 ### Entregable Fase 1
 Pipeline end-to-end: Alerta de Prometheus → Alertmanager → FastAPI webhook → notificación
 formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routing + formateo.
+
+### Pendiente para completar Fase 1
+1. **Configurar webhook entrante en Mattermost** (obtener URL del incoming webhook).
+2. **Setear env `MATTERMOST_WEBHOOK_URL`** en el Deployment del agente.
+3. **Investigar ChromaDB CrashLoopBackOff** (logs del pod, posible problema de recursos/storage).
+4. **Alerting rules**: sin Prometheus operator, definir reglas en ConfigMap o evaluar alternativas.
+5. **Test end-to-end completo**: curl con payload Alertmanager válido (incluir campo `startsAt`)
+   → agente procesa → notificación en Mattermost.
+6. **Pendiente respuesta del tutor** sobre permisos de Prometheus/monitoring.
 
 ---
 
 ## Fase 2 — RAG y Diagnóstico Contextual
 
 ### Infraestructura
-- [ ] Desplegar ChromaDB StatefulSet (manifiesto ya en `k8s/chromadb.yaml`).
+- [x] ChromaDB StatefulSet desplegado (manifiesto en `k8s/chromadb.yaml`).
+  - ⚠️ Pod en CrashLoopBackOff — pendiente investigar logs (posible problema de recursos en nodo spot).
 - [ ] Cargar modelo de embeddings `nomic-embed-text` (274 MB) en Ollama (mismo flujo manual).
-- [ ] Actualizar NetworkPolicy: permitir tráfico agent → chromadb-svc:8000.
+- [x] NetworkPolicy actualizada: tráfico agent → chromadb-svc:8000 permitido.
 
 ### Módulos nuevos del agente
-- [ ] **`rag.py`**: cliente ChromaDB (chromadb-client), funciones de ingesta y query,
-  construcción de queries enriquecidas (no solo log raw).
-- [ ] **`diagnosis.py`**: prompt template AIOps contextual (alerta + contexto RAG → JSON
-  estructurado), parsing de respuesta del LLM con validación de schema.
+- [x] **`rag.py`**: cliente ChromaDB (chromadb-client), funciones de ingesta y query,
+  construcción de queries enriquecidas. 12 tests unitarios.
+- [x] **`diagnosis.py`**: prompt template AIOps contextual (alerta + contexto RAG → JSON
+  estructurado), parsing de respuesta del LLM con validación de schema. 14 tests unitarios.
 
 ### Knowledge Base
 - [ ] Crear colección `runbooks` con 15-20 runbooks semilla para alertas K8s comunes:

@@ -18,8 +18,8 @@ Versión actual: 0.5.0
 | `validation.py` | `validate_params()` — validación no-bloqueante contra valores GCP | 0 (legacy) |
 | `tf_generator.py` | `safe_name()`, `generate_terraform()`, template Terraform | 0 (legacy) |
 | `mattermost.py` | Cliente HTTP async para Mattermost con retry/backoff | 1 |
-| `rag.py` | **(Planificado)** Cliente ChromaDB, ingesta, query, construcción de queries | 2 |
-| `diagnosis.py` | **(Planificado)** Prompt AIOps contextual, parsing JSON estructurado del LLM | 2 |
+| `rag.py` | Cliente ChromaDB, ingesta (runbooks + incidents), query con embedding, construcción de queries enriquecidas | 2 |
+| `diagnosis.py` | Prompt AIOps contextual, `generate_diagnosis()`, parsing JSON estructurado del LLM, `_clamp()` | 2 |
 | `remediation.py` | **(Planificado)** Validation layer, whitelist comandos, cliente K8s API | 3 |
 
 ## Endpoints
@@ -90,7 +90,7 @@ AlertmanagerPayload:
   groupKey:          str | None
 ```
 
-### Diagnóstico AIOps (Fase 2 — planificado)
+### Diagnóstico AIOps (Fase 2 — implementado)
 
 ```
 DiagnosisResponse:
@@ -141,9 +141,10 @@ ExtractResponse:
 | `OLLAMA_URL` | `http://ollama-svc:11434/api/generate` | Endpoint de generación | 0+ |
 | `OLLAMA_TAGS` | `http://ollama-svc:11434/api/tags` | Endpoint de modelos | 0+ |
 | `OLLAMA_MODEL` | `tinyllama` | Modelo generativo (en K8s: `qwen2.5:1.5b`) | 0+ |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | **(Planificado)** Modelo de embeddings | 2 |
-| `OLLAMA_EMBED_URL` | `http://ollama-svc:11434/api/embeddings` | **(Planificado)** Endpoint de embeddings | 2 |
-| `CHROMADB_URL` | `http://chromadb-svc:8000` | **(Planificado)** URL de ChromaDB | 2 |
+| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Modelo de embeddings (768 dims) | 2 |
+| `OLLAMA_EMBED_URL` | `http://ollama-svc:11434/api/embeddings` | Endpoint de embeddings | 2 |
+| `CHROMADB_HOST` | `chromadb-svc` | Host de ChromaDB | 2 |
+| `CHROMADB_PORT` | `8000` | Puerto de ChromaDB | 2 |
 | `MATTERMOST_WEBHOOK_URL` | `None` | URL del webhook entrante de Mattermost | 1 |
 | `HTTP_TIMEOUT` | `120.0` | Timeout general del cliente HTTP (segundos) | 0+ |
 | `HEALTH_TIMEOUT` | `5.0` | Timeout para health checks (segundos) | 0+ |
