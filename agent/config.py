@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     ollama_embed_url: str = "http://ollama-svc:11434/api/embeddings"
     ollama_embed_model: str = "nomic-embed-text"
 
+    # Remediation (Fase 3)
+    remediation_enabled: bool = False
+    remediation_auto_confidence: float = 0.8
+    remediation_auto_max_risk: str = "low"
+    remediation_dry_run: bool = True          # False = ejecución real via kubectl
+    remediation_command_timeout: int = 30     # segundos por comando
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

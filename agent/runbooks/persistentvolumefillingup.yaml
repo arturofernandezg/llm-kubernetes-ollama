@@ -1,0 +1,41 @@
+id: runbook-pvfillingup-001
+error_class: PersistentVolumeFillingUp
+service: kubernetes
+severity: warning
+commands:
+  - kubectl get pvc -n <namespace>
+  - kubectl describe pvc <pvc> -n <namespace>
+  - kubectl exec <pod> -n <namespace> -- df -h
+  - kubectl get events -n <namespace> --sort-by=.lastTimestamp
+text: |
+  # PersistentVolumeFillingUp — PV disk usage above threshold
+
+  ## What is happening
+  A PersistentVolume is running out of disk space. If the volume fills up
+  completely, the application will fail with disk write errors. Databases
+  (PostgreSQL, MySQL, etcd) are especially sensitive to this — a full disk
+  can cause data corruption.
+
+  ## Common root causes
+  - Application writing too much data (logs, uploads, temp files).
+  - Database growth without regular cleanup (WAL files, old backups).
+  - Volume provisioned too small for the workload.
+  - No log rotation inside the container for data written to the PV.
+  - Backup process writing to the same volume as the application.
+
+  ## Investigation steps
+  1. kubectl exec into the pod and check disk usage: df -h
+  2. Find what is consuming space: du -sh /* (inside the container).
+  3. Check PVC size: kubectl get pvc -n <namespace>
+  4. Check if volume expansion is supported:
+     kubectl get storageclass <sc> -o jsonpath='{.allowVolumeExpansion}'
+  5. Check application logs for disk-related errors.
+
+  ## Remediation
+  - If StorageClass supports expansion: resize the PVC
+    (edit pvc, increase spec.resources.requests.storage). Pod restart may be needed.
+  - Clean up unnecessary files inside the volume (old logs, temp files).
+  - For databases: run VACUUM (PostgreSQL), OPTIMIZE TABLE (MySQL),
+    or clean up WAL/archive files.
+  - Add monitoring alert at 80% to catch this earlier.
+  - Move logs to stdout (collected by the node agent) instead of writing to PV.

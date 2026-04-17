@@ -1,0 +1,41 @@
+id: runbook-crashloopbackoff-001
+error_class: CrashLoopBackOff
+service: kubernetes
+severity: critical
+commands:
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl logs <pod> -n <namespace>
+  - kubectl logs <pod> -n <namespace> --previous
+  - kubectl get events -n <namespace> --sort-by=.lastTimestamp
+text: |
+  # CrashLoopBackOff — Container repeatedly crashing and restarting
+
+  ## What is happening
+  The container starts, crashes, and Kubernetes restarts it with exponential
+  backoff (10s, 20s, 40s... up to 5 minutes). The pod status shows
+  CrashLoopBackOff. This is not an error itself but a symptom — something
+  inside the container is failing.
+
+  ## Common root causes
+  - Application crash on startup (missing config, bad env vars, missing files).
+  - Failed health checks (liveness probe failing → kubelet kills the container).
+  - Dependency not available (database, external service, config map).
+  - OOMKilled in disguise (check exit code 137 in describe output).
+  - Wrong command or entrypoint in the container image.
+  - File permission issues on mounted volumes.
+
+  ## Investigation steps
+  1. kubectl describe pod — check "Last State", "Exit Code", and "Events".
+     Exit code 1 = app error. Exit code 137 = OOMKilled. Exit code 143 = SIGTERM.
+  2. kubectl logs --previous — see what the app printed before crashing.
+  3. Check events for volume mount failures, image pull issues, or probe failures.
+  4. Verify environment variables: kubectl get pod <pod> -o jsonpath='{.spec.containers[*].env}'
+  5. Check if configmaps/secrets referenced by the pod exist.
+
+  ## Remediation
+  - Fix the root cause (missing config, bad image tag, insufficient resources).
+  - If liveness probe is too aggressive: increase initialDelaySeconds and
+    periodSeconds in the probe configuration.
+  - If dependency issue: check if the dependent service is running and reachable.
+  - Temporary: kubectl delete pod <pod> to force a fresh restart (won't fix
+    the underlying issue but resets the backoff timer).

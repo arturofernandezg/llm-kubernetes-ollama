@@ -1,0 +1,46 @@
+b2f0ec3 feat: trying to fix ChromaDB problem
+4952c25 Ready para la sesion
+5f64b61 fix:problema build -> error rag.py
+d60479e feat: NW policy and alertmanager.yaml
+be6d71d feat: add RAG modules, Mattermost/Prometheus manifests, multi-namespace strategy
+c64b26b docs(thesis): add rejected alternatives analysis to chapter 3
+570eb47 feat(k8s): chromadb statefulset over spot nodes and final thesis chapter 3
+4d6e561 docs: formalize latex thesis structure for phase 1 validation
+852e032 fix: resolve pytest async warnings in mattermost test
+0ac0658 added: chatops auth y proyecto memoria basica
+ae1ed34 feat: add Alertmanager webhook endpoint and schemas validation
+c2546a6 From this point, the project has a different goal
+4ad1740 Updated technical documentation
+326cdc5 fix: Dockerfile COPY destino con trailing slash para múltiples .py
+9027c58 Updated technical descriptions
+5ec78f5 Pinned versions, fixed nested JSON extraction, Prometheus / metrics endpoint, securityContext
+e36ceab fix: correct test assertions for safe_name trailing underscore stripping
+07ad2e3 feat: add retry with exponential backoff + tf_generator module
+7ec4a3a Changed agent tests and modularized the code
+87675be feat: switch to qwen2.5, fix datetime deprecation, update k8s docs
+11b2018 docs: add troubleshooting for spot nodes, model loading, resource issues
+297c999 fix: reduce ollama resource requests to fit single spot node
+9f7b394 fix: reduce agent resource requests for 2-node spot cluster
+8e32b0c fix: reduce agent to 1 replica, add docs and k8s improvements
+fd3ca0f fix: updated tests for the shared httpx client
+092d6f9 Fix: removed invalid httpx request
+02f0dbf Fixed points 0 and 1 - probes, shared client, PDB, COMMIT_SHA
+83c28ab Project descriptions added
+3d615db Fixed bug about the output directory in generate_tf.py
+9ee2aa0 Before trying to fix OUTPUT_DIR problem
+5949bdd Updated generate_tf.py, small fix
+813be20 generate_tf.py v1
+f8ffccc Added tests and fixed some bugs
+aa02188 JSON Formatting
+13cd7bf Updated space, before -> 4 Gi, now 20 Gi
+ac76bcb README updated
+799148c Agent and servide deployments YAMLs done
+8604d2c fix: update image registry to Artifact Registry
+30cca2a feat: Spanish requests supported
+0891af3 fix: rename Dockerfile and fix project ID in cloudbuild.yaml
+4be025a Dockerfile update
+800a48d Added a FastAPI agent with Cloud Build config
+2735524 README updated
+d2a946a Added Apache deployment to verify inter-service communication with Ollama
+b48f045 Feat: Ollama deployment in GKE with PVC
+8677292 Ollama LLM deployment on Kubernetes

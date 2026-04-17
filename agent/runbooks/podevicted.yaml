@@ -1,0 +1,41 @@
+id: runbook-podevicted-001
+error_class: PodEvicted
+service: kubernetes
+severity: warning
+commands:
+  - kubectl get pods -n <namespace> --field-selector=status.phase=Failed
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl describe node <node>
+  - kubectl top node
+text: |
+  # PodEvicted — Pod was evicted from the node
+
+  ## What is happening
+  The kubelet evicted the pod because the node was under resource pressure
+  (disk, memory, or PID). Evicted pods show status "Failed" with reason
+  "Evicted". The pod is not restarted on the same node.
+
+  ## Common root causes
+  - DiskPressure on the node (ephemeral storage full — logs, container images).
+  - MemoryPressure on the node (total memory usage exceeds node capacity).
+  - Spot/preemptible node was reclaimed by the cloud provider.
+  - Too many pods on the node (PID pressure).
+  - Pods without resource requests get evicted first (BestEffort QoS class).
+
+  ## Investigation steps
+  1. kubectl describe pod — check "Status" and "Message" for eviction reason.
+  2. kubectl describe node — look at "Conditions" section for DiskPressure,
+     MemoryPressure, PIDPressure.
+  3. kubectl top node — check current resource usage.
+  4. Check if the pod had resource requests set (pods without requests are
+     evicted first under pressure).
+  5. For spot nodes: check cloud provider console for preemption events.
+
+  ## Remediation
+  - Always set resource requests on pods (moves them from BestEffort to
+    Burstable or Guaranteed QoS class, making them harder to evict).
+  - If disk pressure: clean up unused images (docker/crictl image prune),
+    reduce log volume, add ephemeral storage limits.
+  - If memory pressure: reduce pod count or add nodes to the pool.
+  - For spot nodes: use PodDisruptionBudgets to limit simultaneous evictions.
+  - Clean up evicted pods: kubectl delete pods --field-selector=status.phase=Failed -n <namespace>

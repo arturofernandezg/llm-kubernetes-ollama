@@ -1,0 +1,37 @@
+id: runbook-highcpu-001
+error_class: HighCPU
+service: kubernetes
+severity: warning
+commands:
+  - kubectl top pod -n <namespace> --sort-by=cpu
+  - kubectl top node
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl exec <pod> -n <namespace> -- top -bn1 -o %CPU | head -20
+text: |
+  # HighCPU — Container CPU usage sustained above threshold
+
+  ## What is happening
+  A container is consuming more CPU than expected over a sustained period.
+  If the container has CPU limits set, it will be throttled (not killed).
+  CPU throttling degrades performance but does not cause crashes.
+
+  ## Common root causes
+  - Compute-intensive workload spike (batch processing, ML inference).
+  - Infinite loop or busy-wait bug in the application.
+  - Excessive logging or serialization overhead.
+  - GC storms in JVM/Go applications under memory pressure.
+  - Crypto operations (TLS handshakes) under high connection rate.
+
+  ## Investigation steps
+  1. kubectl top pod — confirm which pod(s) are consuming high CPU.
+  2. kubectl top node — check if the node itself is under pressure.
+  3. Check CPU requests vs limits in the pod spec (describe pod).
+  4. Look at application-level metrics (if exposed via /metrics endpoint).
+  5. If possible, exec into the pod and run top/htop to find the hot process.
+
+  ## Remediation
+  - If traffic spike: scale horizontally (increase replicas in the deployment).
+  - If CPU limit too low: increase resources.limits.cpu. Common values: 250m, 500m, 1000m.
+  - If application bug: check recent deployments, rollback if necessary.
+  - Add HPA (Horizontal Pod Autoscaler) to handle future spikes automatically.
+  - Monitor CPU throttling metric: container_cpu_cfs_throttled_periods_total.

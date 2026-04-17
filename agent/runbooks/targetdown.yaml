@@ -1,0 +1,40 @@
+id: runbook-targetdown-001
+error_class: TargetDown
+service: prometheus
+severity: warning
+commands:
+  - kubectl get pods -n <namespace> -o wide
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl get svc -n <namespace>
+  - kubectl get endpoints -n <namespace>
+text: |
+  # TargetDown — Prometheus cannot scrape a target
+
+  ## What is happening
+  Prometheus is unable to reach a scrape target (a /metrics endpoint). The
+  target appears as DOWN in the Prometheus targets page. This means metrics
+  from that target are missing — alerts and dashboards depending on those
+  metrics will be unreliable.
+
+  ## Common root causes
+  - The target pod is not running (crashed, evicted, pending).
+  - The metrics endpoint is not exposed or is on a different port.
+  - NetworkPolicy blocking Prometheus from reaching the target.
+  - Service/Endpoints mismatch (label selector does not match pod labels).
+  - The target application crashed but the pod is still Running (process dead).
+  - Prometheus ServiceMonitor or scrape config pointing to wrong port/path.
+
+  ## Investigation steps
+  1. Check if the target pod is running: kubectl get pods -n <namespace>
+  2. Verify the service has endpoints: kubectl get endpoints <service> -n <namespace>
+     Empty endpoints = label selector mismatch or no running pods.
+  3. Test the metrics endpoint manually:
+     kubectl exec -n <prometheus-ns> <prometheus-pod> -- wget -qO- http://<target-svc>:<port>/metrics
+  4. Check NetworkPolicies between Prometheus namespace and target namespace.
+  5. Verify ServiceMonitor/PodMonitor configuration matches the target.
+
+  ## Remediation
+  - If pod is down: investigate and fix the pod issue (see relevant runbook).
+  - If network issue: update NetworkPolicy to allow Prometheus scraping.
+  - If endpoint mismatch: fix label selectors on the Service.
+  - If port mismatch: update the ServiceMonitor or scrape config.

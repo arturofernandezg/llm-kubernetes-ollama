@@ -13,26 +13,31 @@ python -m pytest tests/ -v
 
 | Archivo | Tests | Tipo | Qué verifica |
 |---|---|---|---|
-| `test_endpoints.py` | 26 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics |
+| `test_endpoints.py` | 33 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics, formatter con remediation, feedback loop (persist + fail-open) |
 | `test_extraction.py` | 11 | Unitario | extract_json: direct, markdown_block, regex con bracket counting, nested JSON, edge cases |
 | `test_tf_generator.py` | 16 | Unitario | safe_name, generate_terraform (template, defaults, labels) |
 | `test_validation.py` | 11 | Unitario | validate_params: regiones, instance types, campos null |
 | `test_mattermost.py` | 8 | Unitario | send_mattermost_alert: envío, retry 5xx, no-retry 4xx, ConnectError, excepción inesperada, fail-open |
-| `test_rag.py` | 12 | Unitario | build_rag_query, generate_embedding, retrieve_context, ingest_runbook (ChromaDB + Ollama mockeados) |
+| `test_rag.py` | 31 | Unitario | build_rag_query, generate_embedding, retrieve_context, ingest_runbook, load_runbooks_from_dir, ingest_all_runbooks, build_incident_document, ingest_incident (ChromaDB + Ollama mockeados) |
 | `test_diagnosis.py` | 14 | Unitario | build_alert_text, format_context_docs, generate_diagnosis, _clamp (LLM mockeado) |
-| **Total** | **103** | | Verificado en Cloud Build 2026-03-20 (build `1b34035f`, 1m42s) |
+| `test_remediation.py` | 54 | Unitario | classify_command (SAFE/MUTATING/BLOCKED/UNKNOWN), validate_commands, decide_action (7 reglas), execute_commands (dry-run + real mode mock), process_remediation |
+| **Total** | **193** | | Verificado local 2026-04-07 (< 0.5s) |
 
 **Nota**: los tests estaban originalmente en un único `test_main.py` (40 tests).
 Se refactorizaron y ampliaron progresivamente al añadir módulos:
 - Fase 0 refactor (commit 7ec4a3a): 4 ficheros, 64 tests. Verificado con Cloud Build 2026-03-18.
 - Fase 1 (2026-03-20): +8 tests para `mattermost.py`.
 - Fase 2 (2026-03-20): +12 tests para `rag.py`, +14 tests para `diagnosis.py`.
+- Fase 3 S4 (2026-03-31): +47 tests para `remediation.py` (classify, validate, decide, dry-run, pipeline).
+- Fase 3 S5 (2026-04-06): +5 tests en `test_endpoints.py` (formatter + pipeline integration), +7 tests en `test_remediation.py` (real execution mode con subprocess mock).
+- Fase 3 S6 (2026-04-07): +8 tests en `test_rag.py` (build_incident_document + ingest_incident), +2 tests en `test_endpoints.py` (feedback loop: persist + fail-open).
 
 ### Ficheros de soporte
 
 - `helpers.py` — Constantes compartidas (`VALID_PARAMS`, `VALID_JSON_STR`) y factorías de mocks:
   `mock_http_client()`, `mock_ollama_unreachable()`, `mock_ollama_model_not_loaded()`,
-  `mock_http_client_with_retries(fail_count)`
+  `mock_http_client_with_retries(fail_count)`, `mock_diagnosis_auto_remediate()`,
+  `mock_diagnosis_escalate()`
 - `conftest.py` — Fixture `api_client` (TestClient con `asyncio.sleep` parcheado para evitar delays reales en tests de retry)
 
 ## Cómo funciona el mocking

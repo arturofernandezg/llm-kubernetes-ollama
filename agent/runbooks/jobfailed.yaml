@@ -1,0 +1,39 @@
+id: runbook-jobfailed-001
+error_class: JobFailed
+service: kubernetes
+severity: warning
+commands:
+  - kubectl describe job <job> -n <namespace>
+  - kubectl get pods -n <namespace> -l job-name=<job>
+  - kubectl logs <pod> -n <namespace>
+  - kubectl get events -n <namespace> --sort-by=.lastTimestamp
+text: |
+  # JobFailed — Job or CronJob completed with failure
+
+  ## What is happening
+  A Kubernetes Job has failed after exhausting its backoffLimit (default: 6
+  retries). The Job status shows "Failed". For CronJobs, the most recent
+  execution failed. The pods created by the Job exited with a non-zero code.
+
+  ## Common root causes
+  - Application error in the job script (bad input, missing dependency).
+  - Timeout: job ran longer than activeDeadlineSeconds.
+  - Resource limits hit (OOMKilled during job execution).
+  - Volume or config issues (same as pod startup issues).
+  - CronJob schedule overlapping with previous execution still running.
+
+  ## Investigation steps
+  1. kubectl describe job — check "Conditions" for failure reason and pod statuses.
+  2. Find the job's pods: kubectl get pods -l job-name=<job> -n <namespace>
+  3. Check logs of the failed pod: kubectl logs <pod> -n <namespace>
+  4. Check if the pod was OOMKilled (exit code 137 in describe output).
+  5. For CronJobs: check if previous runs are still active
+     (concurrencyPolicy setting).
+
+  ## Remediation
+  - Fix the application error and create a new Job (Jobs are immutable).
+  - If timeout: increase activeDeadlineSeconds or optimize the job.
+  - If OOMKilled: increase memory limits.
+  - For CronJobs: set concurrencyPolicy=Forbid to prevent overlapping runs.
+  - Increase backoffLimit if transient failures are expected.
+  - Clean up failed jobs: kubectl delete job <job> -n <namespace>

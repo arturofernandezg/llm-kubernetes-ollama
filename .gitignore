@@ -16,7 +16,8 @@ desktop.ini
 # Environment files
 .env
 *.env
-
+.venv
+*.venv
 # Python (por si se añade después)
 __pycache__/
 *.pyc

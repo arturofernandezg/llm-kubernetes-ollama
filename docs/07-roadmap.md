@@ -117,16 +117,23 @@ formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routi
   estructurado), parsing de respuesta del LLM con validación de schema. 14 tests unitarios.
 
 ### Knowledge Base
-- [ ] Crear colección `runbooks` con 15-20 runbooks semilla para alertas K8s comunes:
+- [x] 16 runbooks semilla en `agent/runbooks/*.yaml` para alertas K8s comunes:
   OOMKilled, CrashLoopBackOff, ImagePullBackOff, HighCPU, HighMemory, PodEvicted,
-  NodeNotReady, DiskPressure, NetworkUnavailable, etc.
+  NodeNotReady, DiskPressure, NetworkUnavailable, TargetDown, KubeCPUOvercommit,
+  KubeMemoryOvercommit, PodNotReady, ContainerWaiting, JobFailed, PersistentVolumeFillingUp.
+- [x] Función batch `ingest_all_runbooks()` + `load_runbooks_from_dir()` en `rag.py`.
+  11 tests nuevos (parsing, ingesta, resiliencia). Dependencia: PyYAML==6.0.2.
 - [ ] Crear colección `incidents` (vacía inicialmente, se llena con feedback loop).
-- [ ] Definir metadata schema: `type`, `error_class`, `service`, `severity`, `commands`.
+- [x] Metadata schema definido: `error_class`, `service`, `severity`, `commands` (string).
 
 ### Pipeline RAG completo
-- [ ] Flujo: alerta → normalizar → embedding → query ChromaDB → construir prompt
+- [x] Flujo: alerta → normalizar → embedding → query ChromaDB → construir prompt
   con contexto → LLM genera JSON estructurado → formatear para Mattermost.
-- [ ] Output del LLM: `{ diagnosis, commands[], confidence, risk, explanation }`.
+  - Implementado en `main.py`: `_process_alert_with_diagnosis()` (BackgroundTask) + `_format_diagnosis_message()`.
+  - Triple fail-open: ChromaDB down → contexto vacío; Ollama down → diagnosis=None; ambos → raw fallback.
+  - Prometheus counter `aiops_diagnosis_total` con labels: `success`, `rag_ok`, `rag_failed`, `llm_failed`, `pipeline_failed`.
+  - 124/124 tests pasando (9 tests nuevos para el pipeline + fix de conftest.py).
+- [x] Output del LLM: `{ diagnosis, commands[], confidence, risk, explanation }`.
 
 ### Entregable Fase 2
 Pipeline end-to-end con RAG: misma alerta ahora genera un diagnóstico contextualizado
@@ -138,18 +145,28 @@ en Mattermost.
 ## Fase 3 — Remediación Autónoma y Feedback Loop
 
 ### Auto-remediación
-- [ ] **`remediation.py`**: validation layer (whitelist/blacklist de comandos), cliente K8s
-  API (kubernetes python client), lógica de auto-patch con umbrales.
-- [ ] RBAC least-privilege: Role + RoleBinding para el ServiceAccount del agente con
+- [x] **`remediation.py`**: validation layer (whitelist/blacklist de comandos via regex),
+  motor de decisión con 7 reglas en cascada, executor con dual mode (dry-run / real). 54 tests unitarios.
+  - Config-gated: `REMEDIATION_ENABLED=false` y `REMEDIATION_DRY_RUN=true` por defecto.
+  - Ejecución real via `asyncio.create_subprocess_exec` con timeout configurable.
+  - Solo ejecuta comandos `kubectl` — cualquier otra cosa se rechaza con [SKIP].
+- [x] Integrar `process_remediation()` en el pipeline de `main.py`.
+  - Prometheus counter `aiops_remediation_total` con labels: `auto_remediate`, `escalate`, `suggest_only`, `skipped`.
+  - Formatter actualizado con bloques auto-remediation/escalation.
+  - 5 tests de integración en `test_endpoints.py`.
+- [x] RBAC least-privilege: Role + RoleBinding para el ServiceAccount del agente con
   permisos solo de `patch` y `get` sobre `deployments`, `pods`, `limitranges` en el namespace.
+  Manifiesto en `k8s/rbac.yaml`. Pendiente de aplicar en cluster (`kubectl apply -f k8s/rbac.yaml`).
 - [ ] Umbrales de auto-ejecución:
-  - `risk == "low"` Y `confidence >= 0.8` Y cambio de recursos `< 25%` → **auto-patch**.
-  - Todo lo demás → **escalar a humano** en Mattermost.
+  - `risk == "low"` Y `confidence >= 0.8` Y todos los comandos validados → **auto-patch (dry-run)**.
+  - Comando BLOCKED → **escalar a humano** en Mattermost.
+  - Todo lo demás → **suggest only** (comportamiento actual).
 
 ### Feedback Loop (Memoria Semántica)
-- [ ] Tras cada remediación (aprobada o rechazada), persistir el incidente completo
-  en la colección `incidents` de ChromaDB.
-- [ ] Estructura: alerta original + diagnóstico + fix propuesto + outcome (resolved/rejected/escalated).
+- [x] Tras cada remediación (aprobada o rechazada), persistir el incidente completo
+  en la colección `incidents` de ChromaDB. Implementado en `main.py` con `FEEDBACK_COUNTER` Prometheus.
+- [x] Estructura: alerta original + diagnóstico + fix propuesto + outcome (auto_remediate/escalate/suggest_only/no_remediation).
+  Builder en `rag.py`: `build_incident_document()`. Fail-open: si ChromaDB falla, el pipeline continúa.
 - [ ] Monitorización de bucle cerrado: verificar en Prometheus que la alerta cesa tras
   aplicar el fix. Si cesa → `outcome: resolved`. Si persiste → `outcome: failed`, escalar.
 

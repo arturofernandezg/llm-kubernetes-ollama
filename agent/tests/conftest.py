@@ -14,6 +14,7 @@ from tests.helpers import mock_http_client
 # ── Inicializar app.state.http_client para tests ─────────────────────────────
 # El TestClient no ejecuta el lifespan, así que creamos un mock por defecto.
 app.state.http_client = mock_http_client("")
+app.state.chroma_client = None
 
 
 @pytest.fixture

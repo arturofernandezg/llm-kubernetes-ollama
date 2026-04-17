@@ -1,0 +1,39 @@
+id: runbook-containerwaiting-001
+error_class: ContainerWaiting
+service: kubernetes
+severity: warning
+commands:
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl get events -n <namespace> --sort-by=.lastTimestamp
+  - kubectl get pod <pod> -n <namespace> -o jsonpath='{.status.containerStatuses}'
+text: |
+  # ContainerWaiting — Container is stuck in Waiting state
+
+  ## What is happening
+  One or more containers in the pod are in the "Waiting" state and cannot
+  start. The pod shows a status like ContainerCreating, Init:0/1, or
+  PodInitializing for an extended period.
+
+  ## Common root causes
+  - Image being pulled (large image over slow connection).
+  - ImagePullBackOff (see ImagePullBackOff runbook).
+  - Init container has not completed yet.
+  - Volume mount pending (PVC not bound, CSI driver issue).
+  - ConfigMap or Secret referenced by the pod does not exist.
+  - Resource constraints preventing container start.
+
+  ## Investigation steps
+  1. kubectl describe pod — check "State" for each container and "Events" section.
+     The "Waiting" reason tells you exactly why:
+     - ContainerCreating: still pulling image or mounting volumes.
+     - CrashLoopBackOff: init container keeps crashing.
+     - CreateContainerConfigError: missing configmap/secret.
+  2. Check events for specific errors (volume, image, config).
+  3. If init container: check its logs: kubectl logs <pod> -c <init-container-name>
+  4. If volume issue: kubectl get pvc -n <namespace> — check if PVC is Bound.
+
+  ## Remediation
+  - Missing ConfigMap/Secret: create the missing resource.
+  - PVC not bound: check StorageClass and provisioner.
+  - Init container failing: fix the init container (same as CrashLoopBackOff).
+  - Large image: consider using smaller base images or pre-pulling.

@@ -10,10 +10,13 @@ Manages two ChromaDB collections:
 Embeddings are generated in-cluster via Ollama (nomic-embed-text).
 """
 
+import time
+from pathlib import Path
 from typing import Optional
 
 import chromadb
 import httpx
+import yaml
 
 from config import settings, logger
 
@@ -102,6 +105,81 @@ async def ingest_runbook(
     logger.info("Ingested runbook %s (%d chars)", doc_id, len(text))
 
 
+# ── Batch ingestion from YAML files ─────────────────────────────────────────
+
+RUNBOOK_REQUIRED_FIELDS = {"id", "error_class", "service", "severity", "commands", "text"}
+
+
+def load_runbooks_from_dir(runbooks_dir: str | Path) -> list[dict]:
+    """
+    Load and validate all YAML runbook files from a directory.
+
+    Each YAML file must contain: id, error_class, service, severity, commands, text.
+    Returns a list of parsed dicts. Skips files with missing fields (logs a warning).
+    """
+    runbooks_dir = Path(runbooks_dir)
+    loaded = []
+
+    for yaml_file in sorted(runbooks_dir.glob("*.yaml")):
+        with open(yaml_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        if not isinstance(data, dict):
+            logger.warning("Skipping %s: not a valid YAML mapping", yaml_file.name)
+            continue
+
+        missing = RUNBOOK_REQUIRED_FIELDS - set(data.keys())
+        if missing:
+            logger.warning("Skipping %s: missing fields %s", yaml_file.name, missing)
+            continue
+
+        loaded.append(data)
+
+    logger.info("Loaded %d runbooks from %s", len(loaded), runbooks_dir)
+    return loaded
+
+
+async def ingest_all_runbooks(
+    runbooks_dir: str | Path,
+    http_client: httpx.AsyncClient,
+    chroma_client: Optional[chromadb.HttpClient] = None,
+) -> dict:
+    """
+    Load all YAML runbooks from a directory and ingest them into ChromaDB.
+
+    Returns:
+        {"ingested": int, "errors": int, "total": int}
+    """
+    runbooks = load_runbooks_from_dir(runbooks_dir)
+    stats = {"ingested": 0, "errors": 0, "total": len(runbooks)}
+
+    for rb in runbooks:
+        try:
+            metadata = {
+                "error_class": rb["error_class"],
+                "service": rb["service"],
+                "severity": rb["severity"],
+                "commands": ", ".join(rb["commands"]),
+            }
+            await ingest_runbook(
+                doc_id=rb["id"],
+                text=rb["text"],
+                metadata=metadata,
+                http_client=http_client,
+                chroma_client=chroma_client,
+            )
+            stats["ingested"] += 1
+        except Exception as exc:
+            logger.error("Failed to ingest runbook %s: %s", rb.get("id"), exc)
+            stats["errors"] += 1
+
+    logger.info(
+        "Batch ingestion complete: %d ingested, %d errors, %d total",
+        stats["ingested"], stats["errors"], stats["total"],
+    )
+    return stats
+
+
 async def ingest_incident(
     doc_id: str,
     text: str,
@@ -133,6 +211,85 @@ async def ingest_incident(
         metadatas=[metadata],
     )
     logger.info("Persisted incident %s (outcome=%s)", doc_id, metadata.get("outcome"))
+
+
+# ── Incident document builder (feedback loop) ─────────────────────────────────
+
+def build_incident_document(
+    alert: dict,
+    diagnosis: dict,
+    remediation: dict | None,
+) -> tuple[str, str, dict]:
+    """
+    Build (doc_id, text, metadata) for incident persistence in ChromaDB.
+
+    Args:
+        alert:       {"labels": {...}, "annotations": {...}}
+        diagnosis:   Output of generate_diagnosis() — keys: diagnosis, commands,
+                     confidence, risk, explanation
+        remediation: Output of process_remediation() — keys: action, safe_commands,
+                     blocked_commands, execution_log. None if remediation was skipped.
+
+    Returns:
+        doc_id:   "incident-{alertname}-{epoch}"
+        text:     Human-readable summary (alert + diagnosis + action + execution)
+        metadata: ChromaDB filterable primitives
+    """
+    labels = alert.get("labels", {})
+    annotations = alert.get("annotations", {})
+    alertname = labels.get("alertname", "UnknownAlert")
+    pod = labels.get("pod", "unknown-pod")
+    namespace = labels.get("namespace", "unknown-ns")
+    severity = labels.get("severity", "unknown")
+    description = annotations.get("description", "")
+
+    now = int(time.time())
+    doc_id = f"incident-{alertname}-{now}"
+
+    # Determine outcome from remediation action
+    if remediation is None:
+        outcome = "no_remediation"
+        action_str = "none"
+        execution_str = ""
+        fix_applied = "none"
+    else:
+        outcome = remediation["action"].value  # "auto_remediate" | "escalate" | "suggest_only"
+        action_str = outcome
+        execution_str = remediation.get("execution_log", "")
+        safe_cmds = remediation.get("safe_commands", [])
+        fix_applied = ", ".join(safe_cmds) if safe_cmds else "none"
+
+    confidence_pct = int(diagnosis["confidence"] * 100)
+    commands = diagnosis.get("commands", [])
+    commands_str = "\n".join(f"  {c}" for c in commands) if commands else "  (none)"
+
+    text_parts = [
+        f"Alert: {alertname} on pod {pod} in namespace {namespace}",
+        f"Severity: {severity}",
+    ]
+    if description:
+        text_parts.append(f"Description: {description}")
+    text_parts += [
+        f"Diagnosis: {diagnosis['diagnosis']}",
+        f"Risk: {diagnosis['risk']} | Confidence: {confidence_pct}%",
+        f"Commands:\n{commands_str}",
+        f"Action: {action_str}",
+    ]
+    if execution_str:
+        text_parts.append(f"Execution:\n{execution_str}")
+
+    text = "\n".join(text_parts)
+
+    metadata = {
+        "error_class": alertname,
+        "outcome": outcome,
+        "fix_applied": fix_applied,
+        "confidence": diagnosis["confidence"],
+        "risk": diagnosis["risk"],
+        "timestamp": str(now),
+    }
+
+    return doc_id, text, metadata
 
 
 # ── Query construction ────────────────────────────────────────────────────────

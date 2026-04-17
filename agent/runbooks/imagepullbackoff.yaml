@@ -1,0 +1,38 @@
+id: runbook-imagepullbackoff-001
+error_class: ImagePullBackOff
+service: kubernetes
+severity: warning
+commands:
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl get events -n <namespace> --field-selector reason=Failed
+  - kubectl get secret -n <namespace>
+text: |
+  # ImagePullBackOff — Cannot pull container image
+
+  ## What is happening
+  Kubernetes cannot download the container image specified in the pod spec.
+  The kubelet retries with exponential backoff. The pod stays in Pending state
+  with status ImagePullBackOff or ErrImagePull.
+
+  ## Common root causes
+  - Image tag does not exist (typo, tag deleted, wrong version).
+  - Private registry without imagePullSecrets configured.
+  - Registry is down or unreachable (network issue, no Cloud NAT for private clusters).
+  - Docker Hub rate limiting (anonymous pulls limited to 100/6h).
+  - Artifact Registry permission denied (missing IAM roles on node service account).
+
+  ## Investigation steps
+  1. kubectl describe pod — look at Events section for the exact pull error.
+     "manifest unknown" = tag does not exist.
+     "unauthorized" = auth/credentials issue.
+     "timeout" = network issue.
+  2. Verify the image exists: check the registry UI or use crane/skopeo.
+  3. Check if imagePullSecrets is set: kubectl get pod <pod> -o jsonpath='{.spec.imagePullSecrets}'
+  4. For GKE: verify the node service account has artifactregistry.reader role.
+  5. For private clusters: check if Cloud NAT is configured for external registries.
+
+  ## Remediation
+  - Wrong tag: fix the image tag in the deployment spec and re-apply.
+  - Missing secret: create imagePullSecret and reference it in the pod spec.
+  - Rate limiting: use a pull-through cache or authenticate with Docker Hub.
+  - Network: ensure nodes can reach the registry (check NetworkPolicy, firewall rules).

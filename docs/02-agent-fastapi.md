@@ -20,7 +20,7 @@ Versión actual: 0.5.0
 | `mattermost.py` | Cliente HTTP async para Mattermost con retry/backoff | 1 |
 | `rag.py` | Cliente ChromaDB, ingesta (runbooks + incidents), query con embedding, construcción de queries enriquecidas | 2 |
 | `diagnosis.py` | Prompt AIOps contextual, `generate_diagnosis()`, parsing JSON estructurado del LLM, `_clamp()` | 2 |
-| `remediation.py` | **(Planificado)** Validation layer, whitelist comandos, cliente K8s API | 3 |
+| `remediation.py` | Validation layer (classify/validate commands), decision engine (7 reglas cascada), executor stub (dry-run) | 3 |
 
 ## Endpoints
 

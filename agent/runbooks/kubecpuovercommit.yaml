@@ -1,0 +1,36 @@
+id: runbook-kubecpuovercommit-001
+error_class: KubeCPUOvercommit
+service: kubernetes
+severity: warning
+commands:
+  - kubectl top nodes
+  - kubectl describe nodes | grep -A5 "Allocated resources"
+  - kubectl get pods --all-namespaces -o custom-columns=NS:.metadata.namespace,POD:.metadata.name,CPU_REQ:.spec.containers[*].resources.requests.cpu
+text: |
+  # KubeCPUOvercommit — Cluster CPU requests exceed capacity
+
+  ## What is happening
+  The total CPU requested by all pods exceeds the cluster's allocatable CPU
+  capacity. This means if all pods actually used their requested CPU, there
+  would not be enough. New pods may fail to schedule (Pending with
+  "Insufficient cpu").
+
+  ## Common root causes
+  - Too many pods deployed relative to cluster size.
+  - CPU requests set too high relative to actual usage (over-provisioned).
+  - Cluster autoscaler disabled or at max node count.
+  - Large deployment scaled up without adding capacity.
+
+  ## Investigation steps
+  1. kubectl top nodes — see actual CPU usage vs capacity.
+  2. Check allocated resources: kubectl describe nodes | grep -A5 "Allocated resources"
+  3. Compare requests vs actual usage: if requests >> usage, pods are over-requesting.
+  4. Check if any pods are Pending: kubectl get pods --all-namespaces --field-selector=status.phase=Pending
+  5. Check cluster autoscaler status: kubectl get configmap cluster-autoscaler-status -n kube-system
+
+  ## Remediation
+  - Reduce CPU requests on over-provisioned pods (right-sizing).
+  - Scale down non-essential deployments.
+  - Add nodes: increase node pool max count or add a new node pool.
+  - Enable cluster autoscaler if not already enabled.
+  - Use VPA (Vertical Pod Autoscaler) recommendations for right-sizing.

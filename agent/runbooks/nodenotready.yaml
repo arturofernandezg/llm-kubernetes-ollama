@@ -1,0 +1,41 @@
+id: runbook-nodenotready-001
+error_class: NodeNotReady
+service: kubernetes
+severity: critical
+commands:
+  - kubectl get nodes
+  - kubectl describe node <node>
+  - kubectl get pods --all-namespaces --field-selector spec.nodeName=<node>
+  - kubectl get events --field-selector involvedObject.kind=Node
+text: |
+  # NodeNotReady — Node is not available for scheduling
+
+  ## What is happening
+  A node in the cluster has transitioned to NotReady status. The kubelet on
+  that node has stopped reporting to the API server. Pods on the node may be
+  evicted after the pod-eviction-timeout (default 5 minutes).
+
+  ## Common root causes
+  - Node ran out of resources (disk, memory, CPU exhaustion).
+  - Kubelet process crashed or was OOM-killed on the node.
+  - Network partition between the node and the control plane.
+  - Node VM was shut down, preempted (spot), or terminated.
+  - Kernel panic or OS-level failure.
+  - Container runtime (containerd/docker) unresponsive.
+
+  ## Investigation steps
+  1. kubectl get nodes — identify which node(s) are NotReady.
+  2. kubectl describe node — check Conditions, especially:
+     Ready, MemoryPressure, DiskPressure, PIDPressure.
+  3. Check cloud provider console for VM status (running, stopped, preempted).
+  4. If accessible via SSH: check kubelet logs (journalctl -u kubelet).
+  5. Check which pods were running on the affected node.
+
+  ## Remediation
+  - If spot node preempted: the node pool auto-scaler will provision a replacement.
+    Pods with PDBs will be rescheduled.
+  - If kubelet crashed: SSH to node and restart kubelet (systemctl restart kubelet).
+  - If disk full: SSH and clean up (/var/lib/docker, /var/log).
+  - If unrecoverable: cordon and drain the node, then delete it.
+    kubectl cordon <node> && kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+  - Ensure workloads use pod anti-affinity to spread across nodes.

@@ -1,0 +1,38 @@
+id: runbook-diskpressure-001
+error_class: DiskPressure
+service: kubernetes
+severity: warning
+commands:
+  - kubectl describe node <node>
+  - kubectl get pods --all-namespaces --field-selector spec.nodeName=<node> -o wide
+  - kubectl top node
+text: |
+  # DiskPressure — Node disk usage above eviction threshold
+
+  ## What is happening
+  The kubelet has detected that the node's disk usage exceeds the eviction
+  threshold (default: 85% for nodefs, 85% for imagefs). The node condition
+  is set to DiskPressure=True. Pods will start being evicted, starting with
+  those using the most ephemeral storage.
+
+  ## Common root causes
+  - Container logs filling up disk (no log rotation configured).
+  - Too many container images cached on the node.
+  - Pods writing large files to emptyDir volumes (which use node disk).
+  - /var/lib/containerd or /var/lib/docker growing unbounded.
+  - PersistentVolumes mounted from node-local storage filling up.
+
+  ## Investigation steps
+  1. kubectl describe node — check Conditions for DiskPressure=True.
+  2. If SSH is available: df -h on the node to find which filesystem is full.
+  3. Check which pods on the node use emptyDir or hostPath volumes.
+  4. Check container log sizes: /var/log/containers/ on the node.
+  5. Check image cache size: crictl images or docker images.
+
+  ## Remediation
+  - Immediate: clean up unused images (crictl rmi --prune or docker image prune).
+  - Configure log rotation in the container runtime (maxSize, maxFile).
+  - Add ephemeral-storage limits to pod specs to prevent individual pods
+    from consuming all node disk.
+  - Increase node disk size in the node pool configuration.
+  - Move persistent workloads to PersistentVolumes (PDs) instead of emptyDir.

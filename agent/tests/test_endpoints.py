@@ -9,12 +9,16 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx as _httpx
+import pytest
 
-from main import app
+from main import app, _format_diagnosis_message
+from schemas import AlertItem
 from tests.helpers import (
     VALID_PARAMS, VALID_JSON_STR,
     mock_http_client, mock_ollama_unreachable, mock_ollama_model_not_loaded,
     mock_http_client_with_retries,
+    mock_chroma_client, mock_rag_context, mock_diagnosis_result,
+    mock_diagnosis_auto_remediate, mock_diagnosis_escalate,
 )
 
 
@@ -309,6 +313,319 @@ class TestAlertmanagerWebhook:
         }
         r = api_client.post("/webhook/alert", json=payload)
         assert r.status_code == 422
+
+
+# ── Webhook con RAG + Diagnosis ───────────────────────────────────────────────
+
+FIRING_PAYLOAD = {
+    "receiver": "webhook",
+    "status": "firing",
+    "alerts": [
+        {
+            "status": "firing",
+            "labels": {"alertname": "OOMKilled", "pod": "engine-pod", "namespace": "prod", "severity": "critical"},
+            "annotations": {"description": "Container exceeded memory limit"},
+            "startsAt": "2026-03-30T10:00:00Z",
+        }
+    ],
+    "groupLabels": {},
+    "commonLabels": {},
+    "commonAnnotations": {},
+}
+
+RESOLVED_PAYLOAD = {
+    "receiver": "webhook",
+    "status": "resolved",
+    "alerts": [
+        {
+            "status": "resolved",
+            "labels": {"alertname": "OOMKilled", "pod": "engine-pod", "namespace": "prod", "severity": "critical"},
+            "annotations": {"description": "Container exceeded memory limit"},
+            "startsAt": "2026-03-30T10:00:00Z",
+            "endsAt": "2026-03-30T10:05:00Z",
+        }
+    ],
+    "groupLabels": {},
+    "commonLabels": {},
+    "commonAnnotations": {},
+}
+
+
+class TestWebhookWithDiagnosis:
+    """Tests del webhook con pipeline RAG + diagnosis integrado."""
+
+    def test_webhook_firing_queues_diagnosis_task(self, api_client):
+        """Alerta firing encola _process_alert_with_diagnosis como background task."""
+        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_task:
+            r = api_client.post("/webhook/alert", json=FIRING_PAYLOAD)
+        assert r.status_code == 200
+        assert r.json()["alerts_processed"] == 1
+        mock_task.assert_called_once()
+
+    def test_webhook_resolved_skips_diagnosis(self, api_client):
+        """Alerta resolved NO encola diagnosis — va directo a Mattermost como texto simple."""
+        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_diag, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            r = api_client.post("/webhook/alert", json=RESOLVED_PAYLOAD)
+        assert r.status_code == 200
+        mock_diag.assert_not_called()
+
+    def test_process_alert_full_pipeline_success(self, api_client):
+        """Pipeline completo: RAG OK + Diagnosis OK → mensaje formateado a Mattermost."""
+        alert_data = FIRING_PAYLOAD["alerts"][0]
+        alert = AlertItem(**alert_data)
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_mm:
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client())
+            )
+
+        mock_mm.assert_called_once()
+        sent_msg = mock_mm.call_args[0][0]
+        assert "OOMKilled" in sent_msg
+        assert "Diagnosis" in sent_msg
+        assert "85%" in sent_msg  # confidence
+
+    def test_process_alert_rag_failure_still_diagnoses(self, api_client):
+        """ChromaDB down → contexto vacío → diagnosis sigue funcionando."""
+        alert_data = FIRING_PAYLOAD["alerts"][0]
+        alert = AlertItem(**alert_data)
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, side_effect=Exception("ChromaDB down")), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()) as mock_diag, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), None)
+            )
+
+        # generate_diagnosis fue llamado con contexto vacío
+        call_kwargs = mock_diag.call_args
+        rag_ctx = call_kwargs[0][3]  # 4th positional arg
+        assert rag_ctx["runbooks"] == []
+        assert rag_ctx["incidents"] == []
+
+    def test_process_alert_ollama_failure_sends_fallback(self, api_client):
+        """Ollama down → diagnosis=None → mensaje con 'Diagnosis unavailable'."""
+        alert_data = FIRING_PAYLOAD["alerts"][0]
+        alert = AlertItem(**alert_data)
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=Exception("Ollama timeout")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_mm:
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client())
+            )
+
+        sent_msg = mock_mm.call_args[0][0]
+        assert "Diagnosis unavailable" in sent_msg
+        assert "OOMKilled" in sent_msg
+
+    def test_process_alert_calls_remediation_after_diagnosis(self, api_client):
+        """Pipeline llama a process_remediation cuando diagnosis tiene éxito."""
+        alert_data = FIRING_PAYLOAD["alerts"][0]
+        alert = AlertItem(**alert_data)
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value={
+                 "action": "suggest_only", "execution_log": "", "blocked_commands": [], "safe_commands": [],
+             }) as mock_rem, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client())
+            )
+
+        mock_rem.assert_called_once()
+
+    def test_process_alert_remediation_failure_is_fail_open(self, api_client):
+        """Si process_remediation lanza excepción, el mensaje se envía igual (fail-open)."""
+        alert_data = FIRING_PAYLOAD["alerts"][0]
+        alert = AlertItem(**alert_data)
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, side_effect=Exception("remediation crash")), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_mm:
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client())
+            )
+
+        # Mattermost fue llamado a pesar del crash de remediation
+        mock_mm.assert_called_once()
+        sent_msg = mock_mm.call_args[0][0]
+        assert "OOMKilled" in sent_msg
+
+    def test_pipeline_persists_incident_after_remediation(self, api_client):
+        """Después de remediation, ingest_incident es llamado con los datos del incidente."""
+        from remediation import RemediationAction
+        alert_data = FIRING_PAYLOAD["alerts"][0]
+        alert = AlertItem(**alert_data)
+        remediation_result = {
+            "action": RemediationAction.AUTO_REMEDIATE,
+            "execution_log": "[DRY-RUN] kubectl patch ...",
+            "blocked_commands": [],
+            "safe_commands": ["kubectl patch deployment ..."],
+        }
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value=remediation_result), \
+             patch("main.ingest_incident", new_callable=AsyncMock) as mock_ingest, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client())
+            )
+
+        mock_ingest.assert_called_once()
+        call_kwargs = mock_ingest.call_args[1]
+        assert call_kwargs["doc_id"].startswith("incident-OOMKilled-")
+        assert "OOMKilled" in call_kwargs["text"]
+        assert call_kwargs["metadata"]["outcome"] == "auto_remediate"
+
+    def test_pipeline_feedback_failure_is_fail_open(self, api_client):
+        """Si ingest_incident falla, Mattermost recibe el mensaje igual (fail-open)."""
+        alert_data = FIRING_PAYLOAD["alerts"][0]
+        alert = AlertItem(**alert_data)
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value={
+                 "action": "suggest_only", "execution_log": "", "blocked_commands": [], "safe_commands": [],
+             }), \
+             patch("main.ingest_incident", new_callable=AsyncMock, side_effect=Exception("ChromaDB write failed")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_mm:
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client())
+            )
+
+        mock_mm.assert_called_once()
+        sent_msg = mock_mm.call_args[0][0]
+        assert "OOMKilled" in sent_msg
+
+    def test_process_alert_full_failure_sends_raw(self, api_client):
+        """Fallo total del pipeline → envía mensaje raw de la alerta."""
+        alert_data = FIRING_PAYLOAD["alerts"][0]
+        alert = AlertItem(**alert_data)
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, side_effect=Exception("ChromaDB down")), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=Exception("Ollama down")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_mm:
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), None)
+            )
+
+        # Mattermost fue llamado (fallback)
+        mock_mm.assert_called_once()
+        sent_msg = mock_mm.call_args[0][0]
+        assert "OOMKilled" in sent_msg
+
+
+class TestFormatDiagnosisMessage:
+    """Tests de _format_diagnosis_message()."""
+
+    def _make_alert(self, status="firing") -> AlertItem:
+        return AlertItem(
+            status=status,
+            labels={"alertname": "OOMKilled", "pod": "engine-pod", "namespace": "prod", "severity": "critical"},
+            annotations={"description": "Container exceeded memory limit"},
+            startsAt="2026-03-30T10:00:00Z",
+        )
+
+    def test_format_with_full_diagnosis(self):
+        alert = self._make_alert()
+        msg = _format_diagnosis_message(alert, mock_diagnosis_result())
+        assert "🔴" in msg
+        assert "OOMKilled" in msg
+        assert "Container exceeded memory limit" in msg
+        assert "85%" in msg
+        assert "HIGH" in msg
+        assert "kubectl describe pod" in msg
+        assert "runbook-oomkilled-001" in msg
+
+    def test_format_without_diagnosis(self):
+        alert = self._make_alert()
+        msg = _format_diagnosis_message(alert, None)
+        assert "Diagnosis unavailable" in msg
+        assert "OOMKilled" in msg
+        assert "Container exceeded memory limit" in msg
+
+    def test_format_with_empty_commands(self):
+        diag = {**mock_diagnosis_result(), "commands": []}
+        alert = self._make_alert()
+        msg = _format_diagnosis_message(alert, diag)
+        assert "Suggested commands" not in msg
+        assert "Diagnosis" in msg
+
+    def test_format_resolved_alert(self):
+        alert = self._make_alert(status="resolved")
+        msg = _format_diagnosis_message(alert, None)
+        assert "🟢" in msg
+
+    def test_format_with_auto_remediation(self):
+        from remediation import RemediationAction
+        alert = self._make_alert()
+        diag = mock_diagnosis_auto_remediate()
+        remediation = {
+            "action": RemediationAction.AUTO_REMEDIATE,
+            "execution_log": "[DRY-RUN] kubectl set resources deployment engine --limits=memory=512Mi -n prod",
+            "blocked_commands": [],
+            "safe_commands": ["kubectl describe pod engine-pod -n prod"],
+        }
+        msg = _format_diagnosis_message(alert, diag, remediation)
+        assert "Auto-remediated" in msg
+        assert "DRY-RUN" in msg
+        assert "Requires human approval" not in msg
+
+    def test_format_with_escalation(self):
+        from remediation import RemediationAction
+        alert = self._make_alert()
+        diag = mock_diagnosis_escalate()
+        remediation = {
+            "action": RemediationAction.ESCALATE,
+            "execution_log": "",
+            "blocked_commands": ["kubectl drain node-1 --ignore-daemonsets"],
+            "safe_commands": [],
+        }
+        msg = _format_diagnosis_message(alert, diag, remediation)
+        assert "Requires human approval" in msg
+        assert "kubectl drain" in msg
+        assert "⛔" in msg
+        assert "Auto-remediated" not in msg
+
+    def test_format_suggest_only_no_remediation_block(self):
+        from remediation import RemediationAction
+        alert = self._make_alert()
+        diag = mock_diagnosis_result()
+        remediation = {
+            "action": RemediationAction.SUGGEST_ONLY,
+            "execution_log": "",
+            "blocked_commands": [],
+            "safe_commands": [],
+        }
+        msg = _format_diagnosis_message(alert, diag, remediation)
+        assert "Auto-remediated" not in msg
+        assert "Requires human approval" not in msg
+        assert "Diagnosis" in msg
 
 
 # ── GET /metrics ─────────────────────────────────────────────────────────────

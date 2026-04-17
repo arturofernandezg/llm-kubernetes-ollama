@@ -1,0 +1,38 @@
+id: runbook-highmemory-001
+error_class: HighMemory
+service: kubernetes
+severity: warning
+commands:
+  - kubectl top pod -n <namespace> --sort-by=memory
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl top node
+  - kubectl logs <pod> -n <namespace> --tail=100
+text: |
+  # HighMemory — Container memory usage approaching limit
+
+  ## What is happening
+  A container's memory usage is high relative to its configured limit. This is
+  a warning — the container has not been killed yet, but is at risk of OOMKill
+  if memory continues to grow.
+
+  ## Common root causes
+  - Normal workload growth (more data in cache, more connections).
+  - Memory leak (gradual increase over hours/days without release).
+  - In-memory cache without eviction policy (unbounded growth).
+  - Large file processing loading entire files into memory.
+  - Connection pool exhaustion keeping objects alive.
+
+  ## Investigation steps
+  1. kubectl top pod — check current memory usage vs limit.
+  2. Compare usage over time in monitoring (is it growing steadily?).
+  3. Check if the pod has been running for a long time without restart
+     (long-running pods accumulate memory leaks).
+  4. Look at application logs for warnings about memory, cache size, etc.
+  5. If JVM: check heap usage via JMX or application metrics endpoint.
+
+  ## Remediation
+  - If limit is genuinely too low: increase resources.limits.memory.
+  - If memory leak: schedule periodic restarts as a stopgap while investigating.
+  - Add memory-based alerts at 80% and 90% of limit for early warning.
+  - For caches: configure max size and eviction policies.
+  - Consider vertical pod autoscaler (VPA) for automatic right-sizing.

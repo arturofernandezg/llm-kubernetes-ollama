@@ -20,11 +20,17 @@ from prometheus_client import Counter
 from config import settings, logger
 from schemas import (
     InfraRequest, ExtractedParams, ExtractResponse,
-    AlertmanagerPayload
+    AlertmanagerPayload, AlertItem,
 )
 from extraction import PROMPT_TEMPLATE, extract_json
 from validation import validate_params
 from mattermost import send_mattermost_alert
+from rag import (
+    build_rag_query, retrieve_context, get_chroma_client, ensure_collections,
+    build_incident_document, ingest_incident,
+)
+from diagnosis import generate_diagnosis
+from remediation import process_remediation, RemediationAction
 
 # ── Métricas Prometheus ──────────────────────────────────────────────────────
 RETRY_COUNTER = Counter(
@@ -36,6 +42,21 @@ EXTRACTION_COUNTER = Counter(
     "aiops_extraction_total",
     "Extraction attempts by method",
     ["method"],  # "direct" | "markdown_block" | "regex_search" | "failed"
+)
+DIAGNOSIS_COUNTER = Counter(
+    "aiops_diagnosis_total",
+    "Diagnosis attempts by outcome",
+    ["outcome"],  # "success" | "rag_failed" | "llm_failed" | "pipeline_failed"
+)
+REMEDIATION_COUNTER = Counter(
+    "aiops_remediation_total",
+    "Remediation decisions by action",
+    ["action"],  # "auto_remediate" | "escalate" | "suggest_only" | "skipped"
+)
+FEEDBACK_COUNTER = Counter(
+    "aiops_feedback_total",
+    "Incident persistence attempts",
+    ["outcome"],  # "persisted" | "skipped" | "failed"
 )
 
 
@@ -54,6 +75,18 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.http_client = httpx.AsyncClient(timeout=settings.http_timeout)
+
+    # ChromaDB client (fail-open: None if unavailable at startup)
+    try:
+        app.state.chroma_client = get_chroma_client()
+        ensure_collections(app.state.chroma_client)
+        logger.info(
+            "ChromaDB connected at %s:%s",
+            settings.chromadb_host, settings.chromadb_port,
+        )
+    except Exception as exc:
+        app.state.chroma_client = None
+        logger.warning("ChromaDB unavailable at startup: %s", exc)
 
     try:
         r = await app.state.http_client.get(settings.ollama_tags, timeout=10.0)
@@ -153,6 +186,138 @@ async def health():
     return RedirectResponse(url="/readyz", status_code=307)
 
 
+# ── Diagnosis helpers ─────────────────────────────────────────────────────────
+
+def _format_diagnosis_message(
+    alert: AlertItem,
+    diagnosis: dict | None,
+    remediation: dict | None = None,
+) -> str:
+    """Format alert + diagnosis + remediation into a Mattermost-ready Markdown message."""
+    icon = "🔴" if alert.status == "firing" else "🟢"
+    severity = alert.labels.get("severity", "critical").upper()
+    alert_name = alert.labels.get("alertname", "UnknownAlert")
+    pod = alert.labels.get("pod", "unknown-pod")
+    namespace = alert.labels.get("namespace", "unknown-ns")
+
+    header = f"{icon} **[{severity}] {alert_name}** | Pod: `{pod}` | NS: `{namespace}`"
+
+    if diagnosis is None:
+        desc = alert.annotations.get("description", "Sin descripcion")
+        return f"{header}\n> {desc}\n\n_⚠️ Diagnosis unavailable_"
+
+    confidence_pct = int(diagnosis["confidence"] * 100)
+    risk = diagnosis["risk"].upper()
+
+    parts = [
+        header,
+        f"\n**Diagnosis:** {diagnosis['diagnosis']}",
+        f"**Risk:** {risk} | **Confidence:** {confidence_pct}%",
+    ]
+
+    if diagnosis.get("commands"):
+        cmds = "\n".join(f"  {c}" for c in diagnosis["commands"])
+        parts.append(f"**Suggested commands:**\n```\n{cmds}\n```")
+
+    if diagnosis.get("explanation"):
+        parts.append(f"> {diagnosis['explanation']}")
+
+    if diagnosis.get("rag_sources"):
+        sources = ", ".join(diagnosis["rag_sources"])
+        parts.append(f"_Sources: {sources}_")
+
+    if remediation is not None:
+        action = remediation["action"]
+        if action == RemediationAction.AUTO_REMEDIATE:
+            parts.append(
+                f"\n✅ **Auto-remediated (dry-run):**\n```\n{remediation['execution_log']}\n```"
+            )
+        elif action == RemediationAction.ESCALATE:
+            blocked = remediation.get("blocked_commands", [])
+            if blocked:
+                blocked_str = "\n".join(f"  ⛔ {c}" for c in blocked)
+                parts.append(f"\n⚠️ **Requires human approval:**\n{blocked_str}")
+            else:
+                parts.append("\n⚠️ **Requires human approval** (high risk)")
+
+    return "\n".join(parts)
+
+
+async def _process_alert_with_diagnosis(
+    alert: AlertItem,
+    http_client: httpx.AsyncClient,
+    chroma_client,
+) -> None:
+    """Background task: RAG query → retrieve context → LLM diagnosis → Mattermost."""
+    alert_name = alert.labels.get("alertname", "UnknownAlert")
+    try:
+        description = alert.annotations.get("description", "")
+        query = build_rag_query(alert.labels, description)
+
+        # RAG retrieval (fail-open: empty context if ChromaDB down)
+        try:
+            rag_context = await retrieve_context(query, http_client, chroma_client)
+            DIAGNOSIS_COUNTER.labels(outcome="rag_ok").inc()
+        except Exception as exc:
+            logger.warning("RAG retrieval failed for %s, proceeding without context: %s", alert_name, exc)
+            rag_context = {"runbooks": [], "incidents": [], "query": query}
+            DIAGNOSIS_COUNTER.labels(outcome="rag_failed").inc()
+
+        # LLM diagnosis (fail-open: None if Ollama down)
+        try:
+            diagnosis = await generate_diagnosis(
+                alert.labels, alert.annotations, alert.status,
+                rag_context, http_client,
+            )
+            DIAGNOSIS_COUNTER.labels(outcome="success").inc()
+        except Exception as exc:
+            logger.warning("Diagnosis generation failed for %s: %s", alert_name, exc)
+            diagnosis = None
+            DIAGNOSIS_COUNTER.labels(outcome="llm_failed").inc()
+
+        remediation_result = None
+        if diagnosis is not None:
+            try:
+                remediation_result = await process_remediation(diagnosis)
+                REMEDIATION_COUNTER.labels(action=remediation_result["action"].value).inc()
+            except Exception as exc:
+                logger.warning("Remediation processing failed for %s: %s", alert_name, exc)
+                REMEDIATION_COUNTER.labels(action="skipped").inc()
+
+        # Feedback loop: persist incident in ChromaDB (fail-open)
+        if diagnosis is not None:
+            try:
+                alert_data = {"labels": alert.labels, "annotations": alert.annotations}
+                doc_id, text, metadata = build_incident_document(
+                    alert_data, diagnosis, remediation_result,
+                )
+                await ingest_incident(
+                    doc_id=doc_id, text=text, metadata=metadata,
+                    http_client=http_client, chroma_client=chroma_client,
+                )
+                FEEDBACK_COUNTER.labels(outcome="persisted").inc()
+            except Exception as exc:
+                logger.warning("Failed to persist incident for %s: %s", alert_name, exc)
+                FEEDBACK_COUNTER.labels(outcome="failed").inc()
+        else:
+            FEEDBACK_COUNTER.labels(outcome="skipped").inc()
+
+        msg = _format_diagnosis_message(alert, diagnosis, remediation_result)
+        await send_mattermost_alert(msg)
+
+    except Exception as exc:
+        # Last resort: send raw alert
+        logger.error("Full diagnosis pipeline failed for %s: %s", alert_name, exc)
+        DIAGNOSIS_COUNTER.labels(outcome="pipeline_failed").inc()
+        icon = "🔴" if alert.status == "firing" else "🟢"
+        severity = alert.labels.get("severity", "critical").upper()
+        pod = alert.labels.get("pod", "unknown-pod")
+        namespace = alert.labels.get("namespace", "unknown-ns")
+        desc = alert.annotations.get("description", "Sin descripcion")
+        fallback = f"{icon} **[{severity}] {alert_name}** en Pod `{pod}` (NS: `{namespace}`)\n> {desc}"
+        await send_mattermost_alert(fallback)
+
+
 @app.post(
     "/webhook/alert",
     summary="Recibe alertas de Prometheus Alertmanager (AIOps Ingestion)",
@@ -174,28 +339,29 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
     
     for idx, alert in enumerate(payload.alerts):
         alert_name = alert.labels.get("alertname", "UnknownAlert")
-        pod = alert.labels.get("pod", "unknown-pod")
-        namespace = alert.labels.get("namespace", "unknown-ns")
-        severity = alert.labels.get("severity", "critical").upper()
-        
+
         logger.info(
-            f"Processing alert {idx+1}/{len(payload.alerts)}",
+            "Processing alert %d/%d",
+            idx + 1, len(payload.alerts),
             extra={
                 "alertname": alert_name,
-                "target_pod": pod,
-                "target_namespace": namespace,
                 "firing_status": alert.status,
-            }
+            },
         )
-        
-        # Formatear el mensaje raw para ChatOps
-        icon = "🔴" if alert.status == "firing" else "🟢"
-        desc = alert.annotations.get("description", "Sin descripción detallada")
-        msg = f"{icon} **[{severity}] {alert_name}** en Pod `{pod}` (NS: `{namespace}`)\n> {desc}"
-        
-        # Delegate a capa de ChatOps (Fire & Forget)
-        background_tasks.add_task(send_mattermost_alert, msg)
-        logger.info(f"Queued background task to Mattermost for alert: {alert_name}")
+
+        if alert.status == "firing":
+            # Full RAG + diagnosis pipeline for firing alerts
+            background_tasks.add_task(
+                _process_alert_with_diagnosis,
+                alert, app.state.http_client, app.state.chroma_client,
+            )
+        else:
+            # Resolved alerts: simple notification, no diagnosis needed
+            severity = alert.labels.get("severity", "critical").upper()
+            pod = alert.labels.get("pod", "unknown-pod")
+            namespace = alert.labels.get("namespace", "unknown-ns")
+            msg = f"🟢 **[RESOLVED] [{severity}] {alert_name}** | Pod: `{pod}` | NS: `{namespace}`"
+            background_tasks.add_task(send_mattermost_alert, msg)
         
     return {
         "status": "success",

@@ -7,3 +7,4 @@ python-json-logger==3.2.1
 prometheus-client==0.21.1
 prometheus-fastapi-instrumentator==7.0.2
 chromadb-client==0.6.3
+PyYAML==6.0.2

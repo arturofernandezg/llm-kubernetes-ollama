@@ -1,0 +1,29 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aiops-agent-role
+  namespace: arturo-llm-test
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["limitranges"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aiops-agent-binding
+  namespace: arturo-llm-test
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: arturo-llm-test
+roleRef:
+  kind: Role
+  name: aiops-agent-role
+  apiGroup: rbac.authorization.k8s.io

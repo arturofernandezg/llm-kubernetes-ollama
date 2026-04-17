@@ -1,0 +1,40 @@
+id: runbook-podnotready-001
+error_class: PodNotReady
+service: kubernetes
+severity: warning
+commands:
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl get pod <pod> -n <namespace> -o jsonpath='{.status.conditions}'
+  - kubectl logs <pod> -n <namespace>
+  - kubectl get endpoints -n <namespace>
+text: |
+  # PodNotReady — Pod exists but is not passing readiness checks
+
+  ## What is happening
+  The pod is Running but one or more containers are not passing their readiness
+  probe. A pod that is not Ready is removed from Service endpoints — it receives
+  no traffic. This can cause service degradation if many pods are not ready.
+
+  ## Common root causes
+  - Application is still starting up (slow initialization).
+  - Readiness probe misconfigured (wrong port, path, or thresholds).
+  - Application is unhealthy (dependency down, deadlock, resource exhaustion).
+  - Configuration error causing the app to start but not serve requests.
+  - Database migration running, application waiting for it to complete.
+
+  ## Investigation steps
+  1. kubectl describe pod — check "Readiness" probe configuration and recent events.
+     Look for "Readiness probe failed" messages.
+  2. Check pod conditions: kubectl get pod <pod> -o jsonpath='{.status.conditions}'
+     Look at the "Ready" condition.
+  3. Check application logs for errors during startup or health check failures.
+  4. Test the readiness endpoint manually:
+     kubectl exec <pod> -- wget -qO- http://localhost:<port>/<readiness-path>
+  5. Check if the dependent services are available.
+
+  ## Remediation
+  - If slow startup: increase initialDelaySeconds on the readiness probe.
+  - If probe misconfigured: fix port, path, or protocol in the probe spec.
+  - If application issue: check logs, fix the bug, redeploy.
+  - If dependency issue: fix the dependency first.
+  - Temporary: remove the readiness probe (not recommended for production).

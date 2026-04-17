@@ -1,0 +1,39 @@
+id: runbook-networkunavailable-001
+error_class: NetworkUnavailable
+service: kubernetes
+severity: critical
+commands:
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl get events -n <namespace> --sort-by=.lastTimestamp
+  - kubectl get networkpolicy -n <namespace>
+  - kubectl exec <pod> -n <namespace> -- nslookup kubernetes.default
+text: |
+  # NetworkUnavailable — Pod cannot communicate over the network
+
+  ## What is happening
+  The pod or node has lost network connectivity. This can manifest as DNS
+  failures, connection timeouts to other services, or the node condition
+  NetworkUnavailable=True. Pods may appear Running but fail all health checks.
+
+  ## Common root causes
+  - CNI plugin failure (Calico, Cilium, or GKE native CNI crashed).
+  - NetworkPolicy blocking traffic (overly restrictive ingress/egress rules).
+  - DNS resolution failure (CoreDNS pod down or overloaded).
+  - Node network interface down or misconfigured.
+  - Cloud provider network issue (VPC, subnet, firewall rules).
+  - Pod IP exhaustion in the subnet (no more IPs available for new pods).
+
+  ## Investigation steps
+  1. kubectl describe pod — check if there are network-related events.
+  2. Test DNS from inside the pod: kubectl exec <pod> -- nslookup kubernetes.default
+  3. Test connectivity to a known service: kubectl exec <pod> -- wget -qO- http://<service>
+  4. Check NetworkPolicies: kubectl get networkpolicy -n <namespace> -o yaml
+  5. Check CoreDNS pods: kubectl get pods -n kube-system -l k8s-app=kube-dns
+  6. Check node conditions: kubectl describe node <node>
+
+  ## Remediation
+  - If NetworkPolicy issue: review and update the policy to allow required traffic.
+  - If DNS issue: restart CoreDNS pods (kubectl rollout restart deployment/coredns -n kube-system).
+  - If CNI issue: check CNI plugin pods in kube-system namespace.
+  - If IP exhaustion: expand the pod CIDR range or reduce pod count.
+  - For cross-namespace traffic: ensure NetworkPolicy allows the specific namespace.

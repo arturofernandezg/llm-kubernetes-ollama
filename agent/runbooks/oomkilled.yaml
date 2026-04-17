@@ -1,0 +1,39 @@
+id: runbook-oomkilled-001
+error_class: OOMKilled
+service: kubernetes
+severity: critical
+commands:
+  - kubectl describe pod <pod> -n <namespace>
+  - kubectl top pod -n <namespace>
+  - kubectl get pod <pod> -n <namespace> -o jsonpath='{.spec.containers[*].resources}'
+  - kubectl logs <pod> -n <namespace> --previous
+text: |
+  # OOMKilled — Container exceeded memory limit
+
+  ## What is happening
+  The container was terminated because it tried to use more memory than its
+  configured limit (resources.limits.memory). The Linux OOM killer inside the
+  cgroup killed the process. Exit code is 137.
+
+  ## Common root causes
+  - Memory limit set too low for the workload.
+  - Memory leak in the application (heap grows unbounded over time).
+  - Spike in traffic causing higher-than-normal memory allocation.
+  - JVM-based apps: heap not capped with -Xmx, grows beyond container limit.
+  - Sidecar containers (istio-proxy, fluentd) consuming unexpected memory.
+
+  ## Investigation steps
+  1. Check current memory limits: kubectl describe pod <pod> -n <namespace>
+     Look for "Limits" and "Last State" sections.
+  2. Check actual memory usage before the kill: kubectl top pod -n <namespace>
+  3. Look at previous container logs for clues: kubectl logs <pod> --previous
+  4. Check if the pod has restarted multiple times (restartCount in describe).
+  5. Compare memory usage trend in monitoring (Prometheus/Grafana).
+
+  ## Remediation
+  - If limit is too low: increase resources.limits.memory in the deployment spec.
+    Typical increments: 128Mi -> 256Mi -> 512Mi. Never exceed node capacity.
+  - If memory leak: investigate application logs, enable heap dumps, check for
+    known issues in the application version.
+  - For JVM apps: set -Xmx to ~75% of the container memory limit.
+  - Short term: restart the pod (it will restart automatically via CrashLoopBackOff).

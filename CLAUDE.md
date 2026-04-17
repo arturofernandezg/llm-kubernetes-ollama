@@ -33,7 +33,7 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ Mattermost + PostgreSQL en `arturo-mattermost`.
   - ✅ Módulo `mattermost.py` con retry/backoff.
   - ✅ Conectividad cross-namespace verificada (Alertmanager → Agent, Agent → Mattermost).
-  - ✅ Cloud Build exitoso: 103 tests + imagen `aiops-agent:5f64b61` desplegada.
+  - ✅ Cloud Build exitoso: 124 tests + imagen `aiops-agent:5f64b61` desplegada.
   - ✅ Redeploy del agente con imagen nueva (incluye rag.py, diagnosis.py, mattermost.py, webhook).
   - ⏳ Pendiente: webhook entrante de Mattermost, test end-to-end con payload completo (incluir `startsAt`), alerting rules.
 - **Fase 2 (RAG)**: Módulos escritos, infraestructura parcial.
@@ -58,7 +58,7 @@ agent/tf_generator.py   → Generación de template Terraform (Fase 0 legacy)
 agent/mattermost.py     → Cliente HTTP async Mattermost con retry/backoff
 agent/rag.py            → Cliente ChromaDB, ingesta, query, embeddings via Ollama
 agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON estructurado
-agent/tests/            → 103 tests en 7 ficheros
+agent/tests/            → 124 tests en 7 ficheros
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
 k8s/                    → Manifiestos K8s (agent, ollama, chromadb, networkpolicy)
 k8s/alertmanager.yaml   → Alertmanager standalone en arturo-monitoring
