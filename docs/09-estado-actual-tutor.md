@@ -1,7 +1,7 @@
 # Estado Actual del Proyecto — Briefing para Reuniones
 
 > Documento pensado para repasar antes de cada reunión con el tutor.
-> Última actualización: 2026-04-07 (post S6)
+> Última actualización: 2026-04-09 (post S7)
 
 ---
 
@@ -79,7 +79,7 @@ Prometheus detecta problema
 ## Infraestructura desplegada
 
 ```
-Namespace arturo-llm-test:     agent ✅, ollama ✅, chromadb ⏳ (fix pendiente de aplicar)
+Namespace arturo-llm-test:     agent ✅, ollama ✅, chromadb ✅
 Namespace arturo-monitoring:   alertmanager ✅
 Namespace arturo-mattermost:   mattermost ✅, postgres ✅
 ```
@@ -90,13 +90,13 @@ Namespace arturo-mattermost:   mattermost ✅, postgres ✅
 |---|---|---|
 | **Fase 0** (Legado) | Extracción de params + generación Terraform | Completa (en desuso) |
 | **Fase 1** (Observabilidad) | Webhook de alertas + Mattermost + routing | ~90% (faltan alerting rules, webhook entrante Mattermost) |
-| **Fase 2** (RAG) | ChromaDB + runbooks + diagnóstico con LLM | Módulos escritos y testeados. ChromaDB pendiente de fix en cluster |
+| **Fase 2** (RAG) | ChromaDB + runbooks + diagnóstico con LLM | Módulos escritos y testeados. ChromaDB running. Pendiente: runbooks semilla + integrar RAG en webhook |
 | **Fase 3** (Remediación) | Validation layer + auto-patch + feedback loop | ~90% (validación + integración + ejecución real + RBAC + feedback loop hechos; falta cluster deploy + e2e) |
 
 ## Qué falta por hacer (próximos pasos)
 
 ### Inmediato (próxima sesión — cluster)
-1. **Aplicar fix de ChromaDB** en el cluster (`kubectl apply -f k8s/chromadb.yaml`)
+1. ~~**Aplicar fix de ChromaDB**~~ ✅ (2026-04-09, ConfigMap log stdout-only)
 2. **Aplicar RBAC** — (`kubectl apply -f k8s/rbac.yaml`) — manifiesto ya preparado
 3. **Build + deploy** — nueva imagen con remediación + feedback loop integrados, deploy en cluster
 4. **Alerting rules** — definir qué alertas disparan el sistema (consultar tutor sobre permisos Prometheus)

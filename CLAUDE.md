@@ -24,7 +24,7 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 
-## Estado actual (2026-03-20)
+## Estado actual (2026-04-09)
 
 - **Fase 0 (Legado)**: Completa (agente modular + Ollama local + Terraform endpoints + K8s base). Se mantienen los archivos sin borrar.
 - **Fase 1 (Observabilidad)**: En curso (~90%).
@@ -38,8 +38,9 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ⏳ Pendiente: webhook entrante de Mattermost, test end-to-end con payload completo (incluir `startsAt`), alerting rules.
 - **Fase 2 (RAG)**: Módulos escritos, infraestructura parcial.
   - ✅ `rag.py` y `diagnosis.py` escritos y testeados (26 tests).
-  - ✅ ChromaDB StatefulSet desplegado — **pod en Error/CrashLoopBackOff**, pendiente investigar logs.
-  - ⏳ Pendiente: fix ChromaDB, cargar `nomic-embed-text`, runbooks semilla, integrar RAG en webhook.
+  - ✅ ChromaDB StatefulSet desplegado — **Running** (fix: ConfigMap `chroma-log-config` con stdout-only logging, imagen 0.6.3).
+  - ✅ `nomic-embed-text:latest` cargado en Ollama (subida blob a blob, sin Cloud NAT).
+  - ⏳ Pendiente: cargar runbooks semilla, integrar RAG en webhook.
 - **Fase 3 (Remediación Autónoma)**: Pendiente (RBAC para k8s updates automáticos basados en sugerencia segura del LLM).
 
 ## Stack
@@ -72,6 +73,7 @@ cloudbuild.yaml         → Pipeline: tests (gate) + build + push
 - **Namespaces**: `arturo-llm-test` (core), `arturo-monitoring` (alertmanager), `arturo-mattermost` (chatops)
 - **Registry**: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent
 - **Imagen actual**: `aiops-agent:5f64b61` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
+- **Ollama models**: qwen2.5:1.5b (generación), nomic-embed-text:latest (embeddings)
 - **NO hay Python local en Windows** — tests se ejecutan en GCloud Shell
 - **Sin Cloud NAT** — pods no tienen internet, modelos se cargan manualmente
 - **Sin permisos ClusterRole** — no se puede instalar kube-prometheus-stack ni recursos cluster-scoped
