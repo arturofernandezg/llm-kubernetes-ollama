@@ -16,13 +16,14 @@ desktop.ini
 # Environment files
 .env
 *.env
+
+# Python
+__pycache__/
+*.pyc
 .venv
 .venv/
 *.venv
-
-# Python (por si se añade después)
-__pycache__/
-*.pyc
+venv/
 
 # Mac system files
 .AppleDouble
