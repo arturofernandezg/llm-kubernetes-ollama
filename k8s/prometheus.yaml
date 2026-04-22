@@ -139,6 +139,7 @@ data:
   prometheus.yml: |
     global:
       scrape_interval: 30s
+      scrape_timeout: 20s
       evaluation_interval: 30s
 
     alerting:
@@ -427,7 +428,11 @@ spec:
         fsGroup: 65534
       containers:
         - name: kube-state-metrics
-          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+          # Mirror a Artifact Registry porque los nodos spot no tienen Cloud NAT
+          # → registry.k8s.io no es alcanzable. Mismo patrón que la imagen del agente.
+          # imagePullPolicy: Always para forzar re-pull si se actualiza el mirror en AR.
+          image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/kube-state-metrics:v2.13.0
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
               name: http-metrics
