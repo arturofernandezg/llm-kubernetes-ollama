@@ -5,7 +5,7 @@
 | Fase | Descripción | Estado |
 |---|---|---|
 | Fase 0 (Legado) | Agente + Ollama + extracción de params + generación .tf | Completa (En desuso activo) |
-| Fase 1 (Observabilidad) | kube-prometheus-stack, webhook Alertmanager, Mattermost ChatOps | En curso |
+| Fase 1 (Observabilidad) | Prometheus standalone + Alertmanager, webhook, Mattermost ChatOps | En curso (~95%) |
 | Fase 2 (RAG) | ChromaDB dual-collection, embeddings in-cluster, diagnóstico contextual | Pendiente |
 | Fase 3 (Remediación) | Auto-patch K8s API, validation layer, feedback loop cerrado | Pendiente |
 
@@ -37,10 +37,11 @@
 - [x] Imagen Docker nueva (tag `5f64b61`) con todos los módulos Fase 1+2 buildeada y desplegada.
   - 103 tests pasando en Cloud Build (incluyendo tests RAG y diagnosis).
   - Fix aplicado: `from __future__ import annotations` en `rag.py` para compatibilidad Python 3.11 runtime con type hints de `chromadb.HttpClient`.
-- [ ] Definir alerting rules para las alertas críticas: `KubePodOOMKilled`, `KubePodCrashLooping`,
-  `KubeCPUOvercommit`, `KubeMemoryOvercommit`, `TargetDown`.
-  - ⚠️ Requiere Prometheus (no disponible sin kube-prometheus-stack). Consultar tutor sobre permisos.
-  - Alternativa: alerting rules estáticas en ConfigMap de Alertmanager (sin Prometheus operator).
+- [x] Prometheus standalone desplegado en `arturo-monitoring` (decisión tutor 2026-04-20: mínimo, no kube-prometheus-stack).
+  - `k8s/prometheus.yaml`: Prometheus + kube-state-metrics + ClusterRole de lectura + 5 reglas AIOps.
+  - 5 reglas: `KubePodOOMKilled`, `KubePodCrashLoopBackOff`, `HighMemory`, `HighCPU`, `TargetDown`.
+  - Scrape del agente vía annotations `prometheus.io/scrape=true` en `service-agent.yaml`.
+  - `prometheus-rules.yaml` (CRD obsoleto) y `prometheus-stack-values.yaml` eliminados.
 
 ### ChatOps (Mattermost)
 - [x] Instalar Mattermost en el cluster (manifiesto propio en `arturo-mattermost`).
@@ -92,11 +93,13 @@ formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routi
 ### Pendiente para completar Fase 1
 1. **Configurar webhook entrante en Mattermost** (obtener URL del incoming webhook).
 2. **Setear env `MATTERMOST_WEBHOOK_URL`** en el Deployment del agente.
-3. **~~Investigar ChromaDB CrashLoopBackOff~~** — Diagnosticado (imagen rota). Fix en manifest, pendiente `kubectl apply`.
-4. **Alerting rules**: sin Prometheus operator, definir reglas en ConfigMap o evaluar alternativas.
-5. **Test end-to-end completo**: curl con payload Alertmanager válido (incluir campo `startsAt`)
-   → agente procesa → notificación en Mattermost.
-6. **Pendiente respuesta del tutor** sobre permisos de Prometheus/monitoring.
+
+### Próximas sesiones (Fase 1 → Fase 3, orden acordado con tutor 2026-04-20)
+1. **Grafana** — datasource `prometheus-svc.arturo-monitoring:9090`, dashboard con métricas `aiops_*`, webhook desde Grafana.
+2. **`remediation.py`** — auto-ejecutar si acción=aumentar memory.limits y nuevo valor ≤ 2× actual; bloquear si implica reinicio.
+3. **NetworkPolicy de scrape** — regla `ingress` explícita en `arturo-llm-test` desde pods `app=prometheus` → puerto 8000.
+4. **Modo proactivo** — loop periódico que consulta `prometheus-svc:9090/api/v1/query`, detecta tendencias y actúa antes de la alerta.
+5. **Codex de OpenAI** — pendiente confirmación disponibilidad.
 
 ---
 

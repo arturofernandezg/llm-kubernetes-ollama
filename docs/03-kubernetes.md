@@ -26,6 +26,69 @@
 | `service-apache.yaml` | ClusterIP :80 | Validación de red |
 | `chromadb.yaml` | StatefulSet + Service chromadb (1 réplica) | PVC 10Gi, imagen 0.6.3, probes /api/v1/heartbeat |
 | `networkpolicy.yaml` | NetworkPolicy (2 políticas) | Segmentación de tráfico entre pods |
+| `prometheus.yaml` | ServiceAccounts, ClusterRoles, ConfigMaps, Deployments, Services para Prometheus + KSM | Monitoring stack en `arturo-monitoring` |
+| `alertmanager.yaml` | Deployment + ConfigMap + Service para Alertmanager | Routing de alertas a webhook del agente |
+| `rbac.yaml` | Role + RoleBinding en `arturo-llm-test` | RBAC para remediación autónoma del agente |
+
+## Prometheus standalone
+
+Desplegado en `arturo-monitoring` vía `k8s/prometheus.yaml`. Componentes:
+
+| Recurso | Descripción |
+|---|---|
+| `ServiceAccount prometheus` | SA del pod Prometheus |
+| `ClusterRole prometheus-viewer` | Lectura de nodes, pods, services, endpoints + `/metrics/cadvisor` |
+| `ClusterRoleBinding prometheus-viewer` | Vincula SA `prometheus` al ClusterRole |
+| `ServiceAccount kube-state-metrics` | SA del pod KSM |
+| `ClusterRole kube-state-metrics-viewer` | Lectura de todos los recursos que KSM expone |
+| `ConfigMap prometheus-config` | `prometheus.yml`: scrape_configs + alertmanager URL + rule_files |
+| `ConfigMap prometheus-rules` | 5 reglas de alerting AIOps (ver abajo) |
+| `Deployment prometheus` | `prom/prometheus:v2.54.0`, emptyDir storage (2h retención), :9090 |
+| `Service prometheus-svc` | ClusterIP :9090 — datasource de Grafana (futura sesión) |
+| `Deployment kube-state-metrics` | `kube-state-metrics:v2.13.0`, expone métricas K8s en :8080 |
+| `Service kube-state-metrics-svc` | ClusterIP :8080, annotado con `prometheus.io/scrape=true` |
+
+**Nota ClusterRole**: necesario (no namespace-scoped) porque el scrape de kubelet/cAdvisor
+requiere `list/watch` de nodes y acceso a `/api/v1/nodes/<name>/proxy/metrics/cadvisor`.
+Permisos de admin confirmados por el tutor (2026-04-20).
+
+### Scrape targets
+
+Prometheus descubre targets en dos jobs:
+
+1. **`kubernetes-endpoints`**: servicios anotados con `prometheus.io/scrape=true` en namespaces
+   `arturo-llm-test` y `arturo-monitoring`. Actualmente: `agent-svc` (port 8000) y `kube-state-metrics-svc` (port 8080).
+2. **`kubernetes-cadvisor`**: kubelet cAdvisor en todos los nodos vía proxy API
+   (`/api/v1/nodes/<name>/proxy/metrics/cadvisor`).
+
+Para añadir un nuevo target: añadir las annotations a su Service:
+```yaml
+annotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "XXXX"
+  prometheus.io/path: "/metrics"
+```
+
+### 5 reglas de alerting
+
+| Alerta | Expresión | For | Severity |
+|---|---|---|---|
+| `KubePodOOMKilled` | `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1` | 0m | critical |
+| `KubePodCrashLoopBackOff` | `increase(kube_pod_container_status_restarts_total[15m]) > 3` | 5m | critical |
+| `HighMemory` | `container_memory_working_set_bytes / kube_pod_container_resource_limits{resource="memory"} > 0.9` | 5m | warning |
+| `HighCPU` | `rate(container_cpu_usage_seconds_total[5m]) / kube_pod_container_resource_limits{resource="cpu"} > 0.9` | 5m | warning |
+| `TargetDown` | `up == 0` | 2m | critical |
+
+Todas tienen `labels.team: aiops` — Alertmanager las enruta al webhook del agente.
+
+### Verificación
+
+```bash
+kubectl get pods -n arturo-monitoring
+kubectl port-forward svc/prometheus-svc 9090:9090 -n arturo-monitoring
+# http://localhost:9090/targets  → agent-svc + kube-state-metrics-svc + cadvisor UP
+# http://localhost:9090/rules    → 5 reglas cargadas
+```
 
 ## Probes del agente
 

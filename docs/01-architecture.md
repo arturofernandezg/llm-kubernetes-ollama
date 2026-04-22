@@ -81,6 +81,8 @@ del error completo y busca directamente los documentos más similares en la base
 | LLM (embeddings) | Ollama (nomic-embed-text, 768 dims) | Pod K8s (mismo) | — | 2 |
 | Vector DB | ChromaDB 0.4.24 (StatefulSet, PVC 10Gi) | Pod K8s | 1 | 2 |
 | ChatOps | Mattermost (webhook + bot) + PostgreSQL | Pod K8s (`arturo-mattermost`) | 1 | 1 |
+| Prometheus | Standalone (manifiesto propio, sin operador) | Pod K8s (`arturo-monitoring`) | 1 | 1 |
+| kube-state-metrics | v2.13.0 — expone métricas K8s a Prometheus | Pod K8s (`arturo-monitoring`) | 1 | 1 |
 | Alertmanager | Standalone (manifiesto propio, sin Prometheus operator) | Pod K8s (`arturo-monitoring`) | 1 | 1 |
 | TF Generator | Python stdlib (urllib) — legado | `generate_tf.py` | CLI local | 0 |
 | Build pipeline | Google Cloud Build | `cloudbuild.yaml` | — | 1 |
@@ -238,11 +240,12 @@ Capa obligatoria entre el LLM y la ejecución:
 - **Código modularizado**: el agente se dividió en 6 módulos (commit 7ec4a3a)
   para facilitar testing unitario y preparar la integración Slack/GitHub de Fase 2.
 
-- **Alertmanager standalone** (no kube-prometheus-stack): el helm chart de
-  kube-prometheus-stack requiere `ClusterRoles` (permisos `container.clusterRoles.delete`
-  en IAM), que no están disponibles para el proyecto. Se despliega Alertmanager como
-  Deployment simple con ConfigMap propia. Trade-off: sin Prometheus metrics nativos,
-  sin alerting rules automáticas — las reglas se definen manualmente en el ConfigMap.
+- **Prometheus + Alertmanager standalone** (no kube-prometheus-stack): decisión del tutor
+  (2026-04-20) — simplicidad sobre potencia, aunque los permisos de admin están confirmados.
+  `k8s/prometheus.yaml` despliega Prometheus v2.54 + kube-state-metrics v2.13 con
+  ClusterRole de solo lectura (necesario para scrape de kubelet/cAdvisor vía proxy API).
+  5 reglas: OOMKilled, CrashLoopBackOff, HighMemory, HighCPU, TargetDown.
+  Flujo: Prometheus scrape → evalúa reglas → dispara a Alertmanager → webhook agent.
 - **Mattermost con PostgreSQL propio**: desplegado en `arturo-mattermost` con
   PostgreSQL StatefulSet dedicado. Aislado del stack de IA para evitar impacto
   cruzado. El agente se comunica via incoming webhook HTTP.
@@ -289,7 +292,7 @@ El proyecto usa 3 namespaces separados por grupo funcional:
 | Namespace | Componentes | Justificación |
 |---|---|---|
 | `arturo-llm-test` | agent, ollama, chromadb, apache | Core AIOps — comunicación intensiva entre sí |
-| `arturo-monitoring` | Alertmanager (standalone) | Observabilidad — kube-prometheus-stack descartado por falta de permisos ClusterRole |
+| `arturo-monitoring` | Prometheus, kube-state-metrics, Alertmanager (standalone) | Observabilidad — stack mínimo por decisión del tutor (2026-04-20) |
 | `arturo-mattermost` | Mattermost, PostgreSQL | ChatOps — DB aislada del stack de IA |
 
 ## Red interna

@@ -24,24 +24,29 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 
-## Estado actual (2026-04-09)
+## Estado actual (2026-04-22)
 
 - **Fase 0 (Legado)**: Completa (agente modular + Ollama local + Terraform endpoints + K8s base). Se mantienen los archivos sin borrar.
-- **Fase 1 (Observabilidad)**: En curso (~90%).
-  - ✅ Webhook `/webhook/alert` operativo con schema Alertmanager — **verificado en cluster** (responde 422 con validación Pydantic correcta).
-  - ✅ Alertmanager standalone desplegado en `arturo-monitoring` (kube-prometheus-stack descartado por falta de ClusterRole).
+- **Fase 1 (Observabilidad)**: En curso (~95%).
+  - ✅ Webhook `/webhook/alert` operativo con schema Alertmanager — **verificado en cluster**.
+  - ✅ Prometheus standalone + kube-state-metrics desplegados en `arturo-monitoring` (`k8s/prometheus.yaml`).
+    - 5 reglas: KubePodOOMKilled, KubePodCrashLoopBackOff, HighMemory, HighCPU, TargetDown.
+    - Agente scrapeado via `prometheus.io/scrape=true` en `service-agent.yaml`.
+    - ClusterRole de lectura (tutor confirmó admin en 2026-04-20 — necesario para cAdvisor).
+  - ✅ Alertmanager standalone en `arturo-monitoring` — receiver → `agent-svc:8000/webhook/alert`.
   - ✅ Mattermost + PostgreSQL en `arturo-mattermost`.
   - ✅ Módulo `mattermost.py` con retry/backoff.
-  - ✅ Conectividad cross-namespace verificada (Alertmanager → Agent, Agent → Mattermost).
   - ✅ Cloud Build exitoso: 124 tests + imagen `aiops-agent:5f64b61` desplegada.
-  - ✅ Redeploy del agente con imagen nueva (incluye rag.py, diagnosis.py, mattermost.py, webhook).
-  - ⏳ Pendiente: webhook entrante de Mattermost, test end-to-end con payload completo (incluir `startsAt`), alerting rules.
+  - ✅ E2E completo verificado (2026-04-20): alerta → webhook → RAG → LLM → Mattermost.
+  - ✅ RBAC aplicado: Role + RoleBinding en `arturo-llm-test` (k8s/rbac.yaml).
+  - ⏳ Pendiente: webhook entrante de Mattermost, verificar alerta real disparada desde Prometheus.
 - **Fase 2 (RAG)**: Módulos escritos, infraestructura parcial.
   - ✅ `rag.py` y `diagnosis.py` escritos y testeados (26 tests).
-  - ✅ ChromaDB StatefulSet desplegado — **Running** (fix: ConfigMap `chroma-log-config` con stdout-only logging, imagen 0.6.3).
-  - ✅ `nomic-embed-text:latest` cargado en Ollama (subida blob a blob, sin Cloud NAT).
+  - ✅ ChromaDB StatefulSet desplegado — **Running** (imagen 0.6.3).
+  - ✅ `nomic-embed-text:latest` cargado en Ollama.
   - ⏳ Pendiente: cargar runbooks semilla, integrar RAG en webhook.
-- **Fase 3 (Remediación Autónoma)**: Pendiente (RBAC para k8s updates automáticos basados en sugerencia segura del LLM).
+- **Fase 3 (Remediación Autónoma)**: Pendiente.
+  - Lógica con condiciones del tutor: auto si `memory.limits` nuevo ≤ 2× actual; bloquear si implica reinicio.
 
 ## Stack
 
@@ -62,8 +67,10 @@ agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON 
 agent/tests/            → 124 tests en 7 ficheros
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
 k8s/                    → Manifiestos K8s (agent, ollama, chromadb, networkpolicy)
+k8s/prometheus.yaml     → Prometheus + kube-state-metrics + ClusterRoles + 5 reglas
 k8s/alertmanager.yaml   → Alertmanager standalone en arturo-monitoring
 k8s/mattermost.yaml     → Mattermost + PostgreSQL en arturo-mattermost
+k8s/rbac.yaml           → Role + RoleBinding para remediación autónoma (arturo-llm-test)
 cloudbuild.yaml         → Pipeline: tests (gate) + build + push
 ```
 
@@ -76,7 +83,7 @@ cloudbuild.yaml         → Pipeline: tests (gate) + build + push
 - **Ollama models**: qwen2.5:1.5b (generación), nomic-embed-text:latest (embeddings)
 - **NO hay Python local en Windows** — tests se ejecutan en GCloud Shell
 - **Sin Cloud NAT** — pods no tienen internet, modelos se cargan manualmente
-- **Sin permisos ClusterRole** — no se puede instalar kube-prometheus-stack ni recursos cluster-scoped
+- **Permisos de admin confirmados** (tutor, 2026-04-20) — se usan ClusterRoles de lectura para Prometheus (necesario para cAdvisor). Mantener convención de no ClusterRoles de escritura.
 
 ## Convenciones
 
