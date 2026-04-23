@@ -6,7 +6,7 @@
 |---|---|---|
 | Fase 0 (Legado) | Agente + Ollama + extracción de params + generación .tf | Completa (En desuso activo) |
 | Fase 1 (Observabilidad) | Prometheus standalone + Alertmanager, webhook, Mattermost ChatOps | En curso (~95%) |
-| Fase 2 (RAG) | ChromaDB dual-collection, embeddings in-cluster, diagnóstico contextual | Pendiente |
+| Fase 2 (RAG) | ChromaDB dual-collection, embeddings in-cluster, diagnóstico contextual | En curso (~99%) |
 | Fase 3 (Remediación) | Auto-patch K8s API, validation layer, feedback loop cerrado | Pendiente |
 
 ---
@@ -94,12 +94,18 @@ formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routi
 1. **Configurar webhook entrante en Mattermost** (obtener URL del incoming webhook).
 2. **Setear env `MATTERMOST_WEBHOOK_URL`** en el Deployment del agente.
 
-### Próximas sesiones (Fase 1 → Fase 3, orden acordado con tutor 2026-04-20)
-1. **Grafana** — datasource `prometheus-svc.arturo-monitoring:9090`, dashboard con métricas `aiops_*`, webhook desde Grafana.
-2. **`remediation.py`** — auto-ejecutar si acción=aumentar memory.limits y nuevo valor ≤ 2× actual; bloquear si implica reinicio.
-3. **NetworkPolicy de scrape** — regla `ingress` explícita en `arturo-llm-test` desde pods `app=prometheus` → puerto 8000.
-4. **Modo proactivo** — loop periódico que consulta `prometheus-svc:9090/api/v1/query`, detecta tendencias y actúa antes de la alerta.
-5. **Codex de OpenAI** — pendiente confirmación disponibilidad.
+### Completado en sesiones posteriores (2026-04-22)
+- ✅ **NetworkPolicy de scrape** — regla `ingress` en `arturo-llm-test` desde `app=prometheus` en `arturo-monitoring` → puerto 8000 (`networkpolicy.yaml`).
+- ✅ **KSM mirror a AR** — `registry.k8s.io` inaccesible sin Cloud NAT; imagen copiada con `crane copy --platform linux/amd64` a AR. `imagePullPolicy: Always` para re-pulls futuros.
+- ✅ **scrape_timeout: 20s** — añadido al `global:` de Prometheus (default 10s era insuficiente con el agente procesando diagnósticos LLM).
+- ✅ **Targets UP** — kube-state-metrics y agent-svc ambos UP en `/targets`.
+
+### Completado en sesiones posteriores (cont.)
+- ✅ **Grafana** (2026-04-22) — datasource Prometheus + dashboard "AIOps Agent — Overview" (9 paneles, 4 filas) + contact point `aiops-agent-webhook` provisionados vía ConfigMap. Stateless (`emptyDir`). Secret `grafana-admin` externo (patrón `secrets-setup.sh`). Acceso vía `kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring`. NetworkPolicy actualizada: Grafana (`arturo-monitoring`) → agent webhook port 8000. Manifiesto: `k8s/grafana.yaml`.
+
+### Próximas sesiones
+1. **`remediation.py` umbrales** — auto-ejecutar si `risk=low` + `confidence≥0.8`; bloquear si implica reinicio.
+2. **Modo proactivo** — loop periódico que consulta `prometheus-svc:9090/api/v1/query`, detecta tendencias y actúa antes de la alerta.
 
 ---
 
@@ -126,6 +132,7 @@ formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routi
   KubeMemoryOvercommit, PodNotReady, ContainerWaiting, JobFailed, PersistentVolumeFillingUp.
 - [x] Función batch `ingest_all_runbooks()` + `load_runbooks_from_dir()` en `rag.py`.
   11 tests nuevos (parsing, ingesta, resiliencia). Dependencia: PyYAML==6.0.2.
+- [x] CLI `agent/ingest_runbooks.py` + K8s Job `k8s/job-ingest-runbooks.yaml` para ingesta idempotente en cluster (2026-04-23). Pendiente: ejecutar Job y verificar E2E.
 - [ ] Crear colección `incidents` (vacía inicialmente, se llena con feedback loop).
 - [x] Metadata schema definido: `error_class`, `service`, `severity`, `commands` (string).
 

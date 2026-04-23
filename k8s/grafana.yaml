@@ -1,0 +1,514 @@
+# =============================================================================
+# Grafana — Stateless, provisioned via ConfigMaps
+# Namespace: arturo-monitoring
+#
+# Prerrequisito — crear el Secret antes del primer apply:
+#   kubectl create secret generic grafana-admin -n arturo-monitoring \
+#     --from-literal=admin-user=admin \
+#     --from-literal=admin-password='<pass-fuerte>'
+#
+# Apply:
+#   kubectl apply -f k8s/grafana.yaml
+#   kubectl apply -f k8s/networkpolicy.yaml   (Grafana → agent webhook)
+#
+# Verificar:
+#   kubectl rollout status deploy/grafana -n arturo-monitoring --timeout=120s
+#   kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring
+#   # abrir http://localhost:3000
+#
+# Checks:
+#   Connections → Prometheus → Test   (datasource verde)
+#   Dashboards  → "AIOps Agent — Overview"  (cargado sin importar nada)
+#   Alerting    → Contact points → aiops-agent-webhook → Test
+# =============================================================================
+
+# ── ConfigMap: datasource Prometheus ─────────────────────────────────────────
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: arturo-monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-svc.arturo-monitoring.svc.cluster.local:9090
+        isDefault: true
+        jsonData:
+          timeInterval: "30s"
+          httpMethod: POST
+
+---
+
+# ── ConfigMap: provider de dashboards ────────────────────────────────────────
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-provider
+  namespace: arturo-monitoring
+data:
+  provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: aiops-dashboards
+        type: file
+        disableDeletion: true
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+
+---
+
+# ── ConfigMap: dashboard AIOps ────────────────────────────────────────────────
+# 4 filas:
+#   1. Pipeline AIOps      — aiops_diagnosis_total, aiops_remediation_total, aiops_feedback_total
+#   2. Latencia Webhook    — p95/p50 de http_request_duration_seconds + req/s
+#   3. Salud del Sistema   — up{} por job + pod phases por namespace
+#   4. Debug Interno       — aiops_ollama_retries_total, aiops_extraction_total
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-aiops
+  namespace: arturo-monitoring
+data:
+  aiops.json: |
+    {
+      "annotations": {"list": []},
+      "description": "AIOps Agent pipeline metrics — Fase 1 TFM",
+      "editable": false,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+          "id": 10,
+          "title": "Pipeline AIOps",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 1},
+          "id": 1,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "rate(aiops_diagnosis_total[5m])",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Diagnoses / s",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 8, "x": 8, "y": 1},
+          "id": 2,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "rate(aiops_remediation_total[5m])",
+              "legendFormat": "{{action}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Remediation decisions / s",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 8, "x": 16, "y": 1},
+          "id": 3,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "rate(aiops_feedback_total[5m])",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Incident feedback / s",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
+          "id": 11,
+          "title": "Latencia Webhook",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {
+            "defaults": {"unit": "s"},
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "p95"},
+                "properties": [{"id": "custom.lineWidth", "value": 2}]
+              }
+            ]
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+          "id": 4,
+          "options": {
+            "legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{handler=\"/webhook/alert\"}[5m])))",
+              "legendFormat": "p95",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{handler=\"/webhook/alert\"}[5m])))",
+              "legendFormat": "p50",
+              "refId": "B"
+            }
+          ],
+          "title": "Webhook latency p95 / p50",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
+          "id": 5,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "rate(http_requests_total{handler=\"/webhook/alert\"}[5m])",
+              "legendFormat": "{{method}} {{status}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Webhook requests / s",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 18},
+          "id": 12,
+          "title": "Salud del Sistema",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {
+                  "options": {
+                    "0": {"color": "red", "index": 0, "text": "DOWN"},
+                    "1": {"color": "green", "index": 1, "text": "UP"}
+                  },
+                  "type": "value"
+                }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 19},
+          "id": 6,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "expr": "up",
+              "legendFormat": "{{job}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Scrape targets",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 19},
+          "id": 7,
+          "options": {
+            "footer": {"show": false},
+            "showHeader": true,
+            "sortBy": [{"desc": false, "displayName": "namespace"}]
+          },
+          "targets": [
+            {
+              "expr": "kube_pod_status_phase{namespace=~\"arturo-.*\"} == 1",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "",
+              "refId": "A"
+            }
+          ],
+          "title": "Pods por namespace (arturo-*)",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "Value": true,
+                  "job": true,
+                  "instance": true,
+                  "service": true,
+                  "pod": true
+                }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 25},
+          "id": 13,
+          "title": "Debug Interno",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
+          "id": 8,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "rate(aiops_ollama_retries_total[5m])",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Ollama retries / s",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26},
+          "id": 9,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "rate(aiops_extraction_total[5m])",
+              "legendFormat": "{{method}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Extraction methods / s",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 38,
+      "tags": ["aiops", "kubernetes"],
+      "templating": {
+        "list": [
+          {
+            "current": {},
+            "hide": 2,
+            "includeAll": false,
+            "multi": false,
+            "name": "DS_PROMETHEUS",
+            "options": [],
+            "query": "prometheus",
+            "refresh": 1,
+            "type": "datasource"
+          }
+        ]
+      },
+      "time": {"from": "now-1h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "AIOps Agent — Overview",
+      "uid": "aiops-agent-overview",
+      "version": 1
+    }
+
+---
+
+# ── ConfigMap: contact point alerting ────────────────────────────────────────
+# Solo declara el receiver. Sin reglas en Grafana — las 5 reglas AIOps
+# siguen en Prometheus/Alertmanager (fuente única).
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-contact-points
+  namespace: arturo-monitoring
+data:
+  contact-points.yaml: |
+    apiVersion: 1
+    contactPoints:
+      - orgId: 1
+        name: aiops-agent-webhook
+        receivers:
+          - uid: aiops-webhook-uid-1
+            type: webhook
+            settings:
+              url: http://agent-svc.arturo-llm-test.svc.cluster.local:8000/webhook/alert
+              httpMethod: POST
+            disableResolveMessage: false
+
+---
+
+# ── Deployment Grafana ────────────────────────────────────────────────────────
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: arturo-monitoring
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      tolerations:
+        - key: cloud.google.com/gke-spot
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.2.0
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-password
+            - name: GF_SERVER_HTTP_PORT
+              value: "3000"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboard-aiops
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+            - name: contact-points
+              mountPath: /etc/grafana/provisioning/alerting
+              readOnly: true
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: grafana-storage
+          emptyDir: {}
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboards-provider
+        - name: dashboard-aiops
+          configMap:
+            name: grafana-dashboard-aiops
+        - name: contact-points
+          configMap:
+            name: grafana-contact-points
+
+---
+
+# ── Service Grafana ───────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-svc
+  namespace: arturo-monitoring
+  labels:
+    app: grafana
+spec:
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+  type: ClusterIP

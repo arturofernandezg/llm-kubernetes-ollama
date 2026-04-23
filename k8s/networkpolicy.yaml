@@ -79,6 +79,28 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
+    # Prometheus scrape (namespace: arturo-monitoring)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: arturo-monitoring
+          podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Grafana contact point test (namespace: arturo-monitoring)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: arturo-monitoring
+          podSelector:
+            matchLabels:
+              app: grafana
+      ports:
+        - protocol: TCP
+          port: 8000
 
 ---
 

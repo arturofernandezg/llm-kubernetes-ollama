@@ -27,24 +27,32 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 ## Estado actual (2026-04-22)
 
 - **Fase 0 (Legado)**: Completa (agente modular + Ollama local + Terraform endpoints + K8s base). Se mantienen los archivos sin borrar.
-- **Fase 1 (Observabilidad)**: En curso (~95%).
+- **Fase 1 (Observabilidad)**: En curso (~98%).
   - ✅ Webhook `/webhook/alert` operativo con schema Alertmanager — **verificado en cluster**.
   - ✅ Prometheus standalone + kube-state-metrics desplegados en `arturo-monitoring` (`k8s/prometheus.yaml`).
     - 5 reglas: KubePodOOMKilled, KubePodCrashLoopBackOff, HighMemory, HighCPU, TargetDown.
     - Agente scrapeado via `prometheus.io/scrape=true` en `service-agent.yaml`.
     - ClusterRole de lectura (tutor confirmó admin en 2026-04-20 — necesario para cAdvisor).
+    - `scrape_timeout: 20s` en global config (antes 10s, timeout con agente ocupado).
+    - KSM imagen mirroreada a AR (`crane copy --platform linux/amd64`) — `registry.k8s.io` inaccesible sin Cloud NAT.
+    - `imagePullPolicy: Always` en KSM para forzar re-pull si se actualiza el mirror.
   - ✅ Alertmanager standalone en `arturo-monitoring` — receiver → `agent-svc:8000/webhook/alert`.
   - ✅ Mattermost + PostgreSQL en `arturo-mattermost`.
   - ✅ Módulo `mattermost.py` con retry/backoff.
   - ✅ Cloud Build exitoso: 124 tests + imagen `aiops-agent:5f64b61` desplegada.
   - ✅ E2E completo verificado (2026-04-20): alerta → webhook → RAG → LLM → Mattermost.
   - ✅ RBAC aplicado: Role + RoleBinding en `arturo-llm-test` (k8s/rbac.yaml).
-  - ⏳ Pendiente: webhook entrante de Mattermost, verificar alerta real disparada desde Prometheus.
-- **Fase 2 (RAG)**: Módulos escritos, infraestructura parcial.
+  - ✅ NetworkPolicy scrape: regla ingress `app=prometheus` → puerto 8000 del agente añadida.
+  - ✅ Targets Prometheus UP: kube-state-metrics UP; agent UP (NetworkPolicy scrape aplicada 2026-04-22).
+  - ✅ Grafana desplegado en `arturo-monitoring` — stateless (emptyDir), datasource Prometheus + dashboard "AIOps Agent — Overview" (9 paneles: aiops_* counters, latencia p95 webhook, targets UP, pod phases, retries/extraction) + contact point `aiops-agent-webhook` → `agent-svc:8000/webhook/alert`. Secret `grafana-admin` externo. Manifiesto: `k8s/grafana.yaml`. NetworkPolicy actualizada (Grafana → agent port 8000).
+  - ⏳ Pendiente: webhook entrante de Mattermost.
+- **Fase 2 (RAG)**: En curso (~99%).
   - ✅ `rag.py` y `diagnosis.py` escritos y testeados (26 tests).
   - ✅ ChromaDB StatefulSet desplegado — **Running** (imagen 0.6.3).
   - ✅ `nomic-embed-text:latest` cargado en Ollama.
-  - ⏳ Pendiente: cargar runbooks semilla, integrar RAG en webhook.
+  - ✅ Pipeline RAG integrado en `main.py` (`_process_alert_with_diagnosis`) — triple fail-open.
+  - ✅ CLI `agent/ingest_runbooks.py` + K8s Job `k8s/job-ingest-runbooks.yaml` — ingesta idempotente de 16 runbooks semilla (2026-04-23).
+  - ⏳ Pendiente: ejecutar Job en cluster y verificar E2E enriquecido.
 - **Fase 3 (Remediación Autónoma)**: Pendiente.
   - Lógica con condiciones del tutor: auto si `memory.limits` nuevo ≤ 2× actual; bloquear si implica reinicio.
 

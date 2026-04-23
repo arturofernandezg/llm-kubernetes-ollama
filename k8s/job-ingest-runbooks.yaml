@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: runbooks-ingest
+  namespace: arturo-llm-test
+  labels:
+    app: runbooks-ingest
+    managed-by: aiops-agent
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        # same label as the agent Deployment → inherits NetworkPolicy egress
+        # rules to chromadb-svc:8000 and ollama-svc:11434
+        app: agent
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: ingest
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:latest
+        imagePullPolicy: Always
+        command: ["python", "ingest_runbooks.py"]
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      tolerations:
+      - key: "cloud.google.com/gke-spot"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
