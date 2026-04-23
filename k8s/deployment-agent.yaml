@@ -30,6 +30,7 @@ spec:
             cpu: "300m"
         securityContext:
           runAsNonRoot: true
+          runAsUser: 1000
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
@@ -65,6 +66,8 @@ spec:
           value: "http://ollama-svc:11434/api/tags"
         - name: OLLAMA_MODEL
           value: "qwen2.5:1.5b"
+        - name: HTTP_TIMEOUT
+          value: "240"
         - name: MATTERMOST_WEBHOOK_URL
           valueFrom:
             secretKeyRef:
