@@ -96,12 +96,50 @@ El flujo AUTO_REMEDIATE solo se activa si el LLM propone exclusivamente comandos
 
 ---
 
+## E2E en cluster verificado (2026-04-24, imagen c3b0975)
+
+### Cloud Build + rollout
+- Cloud Build: 81 tests gate → imagen `c3b0975` (`sha256:9c22a3fca9...`) en AR. Duración: 1m41s.
+- `kubectl set image deployment/agent agent=...aiops-agent:c3b0975 -n arturo-llm-test` → rollout OK.
+
+### Escenario A — webhook E2E
+Alerta KubePodOOMKilled → RAG → LLM → `action=escalate, risk=high, confidence=0.85, commands_total=3`.
+- LLM generó comandos read-only/annotate esta iteración → regla 5 (risk=high) disparó antes que la 4.5.
+- `outcome=escalate` persistido en ChromaDB. Mensaje en Mattermost OK.
+- Nota: `qwen2.5:1.5b` no determinista — en sesiones anteriores generó `set resources deployment` (regla 4.5). En esta iteración tomó otro camino. Ambos comportamientos son correctos.
+
+### Escenario B — kubectl exec sobre binario desplegado (determinista)
+
+Método: `kubectl exec -n arturo-llm-test agent-859cd44489-s52f4 -- python -c "..."` importando `remediation` del pod.
+
+| Test | Regla | Input | `action` | `reason_code` |
+|---|---|---|---|---|
+| 4.5 | `set resources deployment` | `escalate` | `set_resources_triggers_rollout` |
+| 4.6 B.1 | `256Mi → 1Gi` (4×) | `escalate` | `memory_exceeds_2x` |
+| 4.6 B.2 | `256Mi → 512Mi` (2×, límite) | `auto_remediate` | — |
+| 4.6 B.3 | `256XYZ` inválido | `escalate` | `unparseable_memory` |
+
+Todos los `reason_code` y valores logueados como JSON estructurado en el pod (visible en `kubectl logs`).
+
+### Métricas verificadas
+```
+aiops_remediation_total{action="escalate"} 2.0
+aiops_diagnosis_total{outcome="success"}   2.0
+aiops_feedback_total{outcome="persisted"}  2.0
+```
+Los 2 escalates corresponden a los dos runs del webhook (13:52 y 13:59). Feedback loop activo.
+Nota: `curl ... | grep aiops` (minúsculas) — el primer intento falló por buffer vacío, no por ausencia de métricas.
+
+### Pendiente
+- Screenshot Grafana (port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring).
+
+---
+
 ## Pendiente para próxima sesión
 
-1. **E2E en cluster**: verificar `reason_code=pod_restart_blocked` en logs del agent (`kubectl logs`) → mensaje en Mattermost → contador `aiops_remediation_total` en Grafana.
-2. **Conversación con el tutor**: presentar la regla 4.5 estricta. Preguntar: ¿el rolling update en un deployment con ≥2 réplicas (y `maxUnavailable=0`) es aceptable? Si sí → añadir `replicas_observed` a `proposed_action` y condicionar la regla 4.5 al número de réplicas. Si el tutor prefiere in-place resize (k8s 1.27+), explorar esa vía.
+1. **Grafana + métricas**: investigar `/metrics` vacío y verificar paneles del dashboard.
+2. **Conversación con el tutor**: presentar regla 4.5 estricta + evidencia E2E. Preguntar: ¿rolling update en HA (≥2 réplicas, `maxUnavailable=0`) es aceptable? ¿In-place resize (k8s 1.27+)?
 3. **Webhook entrante Mattermost** (pendiente cierre Fase 1).
-4. **Cloud Build**: correr tests con nueva imagen antes de `kubectl apply`.
 
 ---
 

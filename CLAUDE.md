@@ -64,7 +64,9 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
     - Regla 4.6: si `proposed_action.field == resources.limits.memory`, bloquea si `new > 2 × current` → `reason_code: memory_exceeds_2x`.
     - Schema LLM extendido: campo opcional `proposed_action` con `current_value/new_value/field`.
     - `parse_memory_to_bytes()` + `implies_pod_restart()` como helpers reutilizables.
-  - ⏳ Pendiente E2E cluster: verificar `reason_code` en logs + métricas Grafana.
+  - ✅ E2E cluster verificado (2026-04-24, imagen c3b0975): regla 4.5 → `reason_code: set_resources_triggers_rollout` (kubectl exec sobre binario desplegado). Regla 4.6 → `memory_exceeds_2x` (256Mi→1Gi), `auto_remediate` (256Mi→512Mi, 2× exacto), `unparseable_memory` (fail-safe). Webhook E2E: `action=escalate` por regla 5 (risk=high), `outcome=escalate` persistido en ChromaDB + Mattermost.
+  - ✅ Métricas verificadas: `aiops_remediation_total{action="escalate"} 2`, `aiops_feedback_total{outcome="persisted"} 2`.
+  - ⏳ Pendiente: screenshot Grafana dashboard.
   - ⏳ Pendiente: confirmar con tutor excepción a regla 4.5 (in-place resize k8s 1.27+, rolling HA...). Pasar a `DRY_RUN=false` requiere acuerdo con tutor.
 
 ## Stack

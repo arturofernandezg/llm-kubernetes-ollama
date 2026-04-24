@@ -177,6 +177,7 @@ en Mattermost.
   - Schema LLM extendido: campo opcional `proposed_action` con `kind/name/namespace/container/field/current_value/new_value`.
   - `REMEDIATION_DRY_RUN=true` sigue activo — paso a real requiere acuerdo con tutor.
   - Pendiente confirmar con tutor: ¿excepciones a regla 4.5? (in-place resize k8s 1.27+, rolling update en HA...).
+- [x] **E2E cluster verificado (2026-04-24, imagen c3b0975)**: regla 4.5 (`set_resources_triggers_rollout`) y regla 4.6 (`memory_exceeds_2x`, `auto_remediate` en límite 2×, `unparseable_memory`) confirmados via `kubectl exec` sobre binario desplegado. Webhook E2E: escalate → Mattermost → ChromaDB persistence.
 
 ### Feedback Loop (Memoria Semántica)
 - [x] Tras cada remediación (aprobada o rechazada), persistir el incidente completo
