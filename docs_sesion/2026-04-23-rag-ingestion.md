@@ -80,7 +80,23 @@ Verificar:
 
 ## Estado final
 
-⏳ Pendiente de aplicar en cluster.
+✅ **Fase 2 completa** (2026-04-23 09:17 UTC).
+
+### Resultado E2E verificado
+
+```
+09:14:14  POST /webhook/alert → 200 OK
+09:14:14  RAG retrieval: 3 runbooks, 2 incidents for query: KubePodOOMKilled ...
+09:17:21  Diagnosis generated: confidence=0.85 risk=high duration=186961ms
+09:17:21  Remediation decision: action=suggest_only, commands_total=3, blocked=0
+09:17:22  Persisted incident incident-KubePodOOMKilled-1776935841 (outcome=suggest_only)
+09:17:22  Successfully sent alert to Mattermost (Attempt 1)
+```
+
+- LLM terminó en **187s** (dentro del límite HTTP_TIMEOUT=240s).
+- `confidence=0.85`, `risk=high` → decisión `suggest_only` (correcto: alto riesgo bloquea auto-remediate).
+- Incidente persistido en colección `incidents` de ChromaDB (feedback loop activo).
+- Mattermost recibió mensaje enriquecido con `diagnosis`, `commands[]`, `confidence`, `risk`, `explanation`.
 
 ## Próxima sesión (Fase 3)
 

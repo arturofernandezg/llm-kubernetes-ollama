@@ -6,7 +6,7 @@
 |---|---|---|
 | Fase 0 (Legado) | Agente + Ollama + extracción de params + generación .tf | Completa (En desuso activo) |
 | Fase 1 (Observabilidad) | Prometheus standalone + Alertmanager, webhook, Mattermost ChatOps | En curso (~95%) |
-| Fase 2 (RAG) | ChromaDB dual-collection, embeddings in-cluster, diagnóstico contextual | En curso (~99%) |
+| Fase 2 (RAG) | ChromaDB dual-collection, embeddings in-cluster, diagnóstico contextual | **Completa** (2026-04-23) |
 | Fase 3 (Remediación) | Auto-patch K8s API, validation layer, feedback loop cerrado | Pendiente |
 
 ---
@@ -104,8 +104,8 @@ formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routi
 - ✅ **Grafana** (2026-04-22) — datasource Prometheus + dashboard "AIOps Agent — Overview" (9 paneles, 4 filas) + contact point `aiops-agent-webhook` provisionados vía ConfigMap. Stateless (`emptyDir`). Secret `grafana-admin` externo (patrón `secrets-setup.sh`). Acceso vía `kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring`. NetworkPolicy actualizada: Grafana (`arturo-monitoring`) → agent webhook port 8000. Manifiesto: `k8s/grafana.yaml`.
 
 ### Próximas sesiones
-1. **`remediation.py` umbrales** — auto-ejecutar si `risk=low` + `confidence≥0.8`; bloquear si implica reinicio.
-2. **Modo proactivo** — loop periódico que consulta `prometheus-svc:9090/api/v1/query`, detecta tendencias y actúa antes de la alerta.
+1. ~~**`remediation.py` umbrales**~~ — implementado (2026-04-25): condición del tutor aplicada, ver Fase 3.
+2. **Modo proactivo** — loop periódico que consulta `prometheus-svc:9090/api/v1/query`, detecta tendencias y actúa antes de la alerta. Presentar al tutor antes de implementar.
 
 ---
 
@@ -132,7 +132,8 @@ formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routi
   KubeMemoryOvercommit, PodNotReady, ContainerWaiting, JobFailed, PersistentVolumeFillingUp.
 - [x] Función batch `ingest_all_runbooks()` + `load_runbooks_from_dir()` en `rag.py`.
   11 tests nuevos (parsing, ingesta, resiliencia). Dependencia: PyYAML==6.0.2.
-- [x] CLI `agent/ingest_runbooks.py` + K8s Job `k8s/job-ingest-runbooks.yaml` para ingesta idempotente en cluster (2026-04-23). Pendiente: ejecutar Job y verificar E2E.
+- [x] CLI `agent/ingest_runbooks.py` + K8s Job `k8s/job-ingest-runbooks.yaml` para ingesta idempotente en cluster (2026-04-23). 16 runbooks ingestados. `runAsUser: 1000` requerido en GKE (runAsNonRoot con UID simbólico rechazado por kubelet).
+- [x] E2E RAG verificado (2026-04-23): KubePodOOMKilled → RAG 3 runbooks + 2 incidents → LLM 187s (confidence=0.85, risk=high, suggest_only) → Mattermost enriquecido. `HTTP_TIMEOUT=240` en deployment-agent.yaml.
 - [ ] Crear colección `incidents` (vacía inicialmente, se llena con feedback loop).
 - [x] Metadata schema definido: `error_class`, `service`, `severity`, `commands` (string).
 
@@ -166,11 +167,16 @@ en Mattermost.
   - 5 tests de integración en `test_endpoints.py`.
 - [x] RBAC least-privilege: Role + RoleBinding para el ServiceAccount del agente con
   permisos solo de `patch` y `get` sobre `deployments`, `pods`, `limitranges` en el namespace.
-  Manifiesto en `k8s/rbac.yaml`. Pendiente de aplicar en cluster (`kubectl apply -f k8s/rbac.yaml`).
-- [ ] Umbrales de auto-ejecución:
-  - `risk == "low"` Y `confidence >= 0.8` Y todos los comandos validados → **auto-patch (dry-run)**.
-  - Comando BLOCKED → **escalar a humano** en Mattermost.
-  - Todo lo demás → **suggest only** (comportamiento actual).
+  Manifiesto en `k8s/rbac.yaml`. Aplicado en cluster (2026-04-24).
+- [x] `REMEDIATION_ENABLED=true` + `REMEDIATION_DRY_RUN=true` en `deployment-agent.yaml` (2026-04-24).
+  E2E verificado: KubePodOOMKilled → `action=escalate` (confidence=0.90, risk=high). Motor activo.
+- [x] Umbrales de auto-ejecución — **condición tutor implementada (2026-04-25)**:
+  - Regla 4.5: cualquier comando MUTATING que implique reinicio de pod → **ESCALATE** (`reason_code: pod_restart_blocked`). Aplica a: `rollout restart`, `set resources`, `scale`, `patch deployment/statefulset/daemonset`.
+  - Regla 4.6: si `proposed_action.field == resources.limits.memory` y `new_value > 2 × current_value` → **ESCALATE** (`reason_code: memory_exceeds_2x`). Fail-safe en error de parseo (`reason_code: unparseable_memory`).
+  - Backward-compatible: sin `proposed_action` → regla 4.6 se salta, legacy risk/confidence deciden.
+  - Schema LLM extendido: campo opcional `proposed_action` con `kind/name/namespace/container/field/current_value/new_value`.
+  - `REMEDIATION_DRY_RUN=true` sigue activo — paso a real requiere acuerdo con tutor.
+  - Pendiente confirmar con tutor: ¿excepciones a regla 4.5? (in-place resize k8s 1.27+, rolling update en HA...).
 
 ### Feedback Loop (Memoria Semántica)
 - [x] Tras cada remediación (aprobada o rechazada), persistir el incidente completo

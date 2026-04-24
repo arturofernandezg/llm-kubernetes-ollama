@@ -21,7 +21,8 @@ python -m pytest tests/ -v
 | `test_rag.py` | 31 | Unitario | build_rag_query, generate_embedding, retrieve_context, ingest_runbook, load_runbooks_from_dir, ingest_all_runbooks, build_incident_document, ingest_incident (ChromaDB + Ollama mockeados) |
 | `test_diagnosis.py` | 14 | Unitario | build_alert_text, format_context_docs, generate_diagnosis, _clamp (LLM mockeado) |
 | `test_remediation.py` | 54 | Unitario | classify_command (SAFE/MUTATING/BLOCKED/UNKNOWN), validate_commands, decide_action (7 reglas), execute_commands (dry-run + real mode mock), process_remediation |
-| **Total** | **193** | | Verificado local 2026-04-07 (< 0.5s) |
+| `test_ingest_runbooks.py` | 3 | Unitario | CLI `ingest_runbooks.run()`: exit 0 sin errores, exit 1 con errores, runbooks_dir correcto (mocks `ingest_all_runbooks`) |
+| **Total** | **196** | | Verificado Cloud Build 2026-04-23 (<0.5s) |
 
 **Nota**: los tests estaban originalmente en un único `test_main.py` (40 tests).
 Se refactorizaron y ampliaron progresivamente al añadir módulos:
@@ -31,6 +32,7 @@ Se refactorizaron y ampliaron progresivamente al añadir módulos:
 - Fase 3 S4 (2026-03-31): +47 tests para `remediation.py` (classify, validate, decide, dry-run, pipeline).
 - Fase 3 S5 (2026-04-06): +5 tests en `test_endpoints.py` (formatter + pipeline integration), +7 tests en `test_remediation.py` (real execution mode con subprocess mock).
 - Fase 3 S6 (2026-04-07): +8 tests en `test_rag.py` (build_incident_document + ingest_incident), +2 tests en `test_endpoints.py` (feedback loop: persist + fail-open).
+- Fase 2 cierre (2026-04-23): +3 tests en `test_ingest_runbooks.py` para el nuevo CLI de ingesta idempotente usado por el Job `k8s/job-ingest-runbooks.yaml`.
 
 ### Ficheros de soporte
 

@@ -24,7 +24,7 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 
-## Estado actual (2026-04-22)
+## Estado actual (2026-04-23)
 
 - **Fase 0 (Legado)**: Completa (agente modular + Ollama local + Terraform endpoints + K8s base). Se mantienen los archivos sin borrar.
 - **Fase 1 (Observabilidad)**: En curso (~98%).
@@ -46,15 +46,26 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ Targets Prometheus UP: kube-state-metrics UP; agent UP (NetworkPolicy scrape aplicada 2026-04-22).
   - ✅ Grafana desplegado en `arturo-monitoring` — stateless (emptyDir), datasource Prometheus + dashboard "AIOps Agent — Overview" (9 paneles: aiops_* counters, latencia p95 webhook, targets UP, pod phases, retries/extraction) + contact point `aiops-agent-webhook` → `agent-svc:8000/webhook/alert`. Secret `grafana-admin` externo. Manifiesto: `k8s/grafana.yaml`. NetworkPolicy actualizada (Grafana → agent port 8000).
   - ⏳ Pendiente: webhook entrante de Mattermost.
-- **Fase 2 (RAG)**: En curso (~99%).
+- **Fase 2 (RAG)**: **Completa** (2026-04-23).
   - ✅ `rag.py` y `diagnosis.py` escritos y testeados (26 tests).
   - ✅ ChromaDB StatefulSet desplegado — **Running** (imagen 0.6.3).
   - ✅ `nomic-embed-text:latest` cargado en Ollama.
   - ✅ Pipeline RAG integrado en `main.py` (`_process_alert_with_diagnosis`) — triple fail-open.
-  - ✅ CLI `agent/ingest_runbooks.py` + K8s Job `k8s/job-ingest-runbooks.yaml` — ingesta idempotente de 16 runbooks semilla (2026-04-23).
-  - ⏳ Pendiente: ejecutar Job en cluster y verificar E2E enriquecido.
-- **Fase 3 (Remediación Autónoma)**: Pendiente.
-  - Lógica con condiciones del tutor: auto si `memory.limits` nuevo ≤ 2× actual; bloquear si implica reinicio.
+  - ✅ CLI `agent/ingest_runbooks.py` + K8s Job `k8s/job-ingest-runbooks.yaml` — 16 runbooks ingestados en ChromaDB (2026-04-23). `runAsUser: 1000` requerido en GKE.
+  - ✅ E2E verificado (2026-04-23): KubePodOOMKilled → RAG (3 runbooks + 2 incidents) → LLM (187s, confidence=0.85, risk=high) → suggest_only → Mattermost. `HTTP_TIMEOUT=240` en deployment-agent.yaml.
+- **Fase 3 (Remediación Autónoma)**: En curso (dry-run activo, 2026-04-25).
+  - ✅ `remediation.py` — validation layer + motor de decisión (9 reglas) + executor dual-mode. ~70 tests.
+  - ✅ `process_remediation()` integrado en pipeline `main.py`. Counter `aiops_remediation_total`.
+  - ✅ RBAC aplicado (`k8s/rbac.yaml`): Role `patch deployments/get pods/limitranges` en `arturo-llm-test`.
+  - ✅ `REMEDIATION_ENABLED=true`, `REMEDIATION_DRY_RUN=true` en `deployment-agent.yaml`.
+  - ✅ E2E verificado (2026-04-24): KubePodOOMKilled → RAG → LLM (211s, confidence=0.90, risk=high) → **escalate** → Mattermost. Motor activo.
+  - ✅ Condición del tutor implementada (2026-04-25):
+    - Regla 4.5: bloquea TODO comando MUTATING que implique reinicio de pod (`set resources`, `scale`, `rollout restart`, `patch deployment`...) → `reason_code: pod_restart_blocked`. Bloqueo conservador hasta confirmación del tutor.
+    - Regla 4.6: si `proposed_action.field == resources.limits.memory`, bloquea si `new > 2 × current` → `reason_code: memory_exceeds_2x`.
+    - Schema LLM extendido: campo opcional `proposed_action` con `current_value/new_value/field`.
+    - `parse_memory_to_bytes()` + `implies_pod_restart()` como helpers reutilizables.
+  - ⏳ Pendiente E2E cluster: verificar `reason_code` en logs + métricas Grafana.
+  - ⏳ Pendiente: confirmar con tutor excepción a regla 4.5 (in-place resize k8s 1.27+, rolling HA...). Pasar a `DRY_RUN=false` requiere acuerdo con tutor.
 
 ## Stack
 
@@ -65,7 +76,7 @@ Python 3.11 | FastAPI | httpx | Pydantic v2 | Ollama (qwen2.5:1.5b en K8s, tinyl
 ```
 agent/main.py           → FastAPI app (endpoints, retry, metrics, webhook)
 agent/config.py         → Settings (pydantic-settings) + JSON logging
-agent/schemas.py        → Modelos Pydantic v2 (AlertmanagerPayload, AlertItem, ExtractResponse...)
+agent/schemas.py        → Modelos Pydantic v2 (AlertmanagerPayload, AlertItem, ProposedAction, ExtractResponse...)
 agent/extraction.py     → 3 estrategias de extracción JSON
 agent/validation.py     → Validación de parámetros GCP
 agent/tf_generator.py   → Generación de template Terraform (Fase 0 legacy)

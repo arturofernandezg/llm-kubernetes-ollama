@@ -32,8 +32,23 @@ OUTPUT SCHEMA:
   "commands": ["kubectl ...", "kubectl ..."],
   "confidence": 0.0,
   "risk": "low|medium|high",
-  "explanation": "Detailed reasoning (2-3 sentences max)"
+  "explanation": "Detailed reasoning (2-3 sentences max)",
+  "proposed_action": {{
+    "kind": "Deployment",
+    "name": "<resource-name>",
+    "namespace": "<namespace>",
+    "container": "<container-name>",
+    "field": "resources.limits.memory",
+    "current_value": "<current-memory-limit, e.g. 256Mi>",
+    "new_value": "<proposed-memory-limit, e.g. 512Mi>"
+  }}
 }}
+
+PROPOSED ACTION RULES:
+- Include "proposed_action" ONLY when a command modifies resources.limits.memory on a specific workload.
+- "current_value" must reflect the memory limit in the alert labels or context; omit proposed_action if unknown.
+- "new_value" must match the value used in the corresponding kubectl command.
+- If no memory limit change is proposed, omit the "proposed_action" field entirely.
 
 --- ALERT ---
 {alert_text}
@@ -135,6 +150,12 @@ async def generate_diagnosis(
     )
 
     if parsed:
+        # Extract proposed_action if present and structurally valid
+        raw_pa = parsed.get("proposed_action")
+        proposed_action = None
+        if isinstance(raw_pa, dict) and raw_pa.get("field") and raw_pa.get("current_value") and raw_pa.get("new_value"):
+            proposed_action = raw_pa
+
         # Enforce expected fields with safe defaults
         result = {
             "diagnosis": parsed.get("diagnosis", "Unable to determine root cause"),
@@ -142,6 +163,7 @@ async def generate_diagnosis(
             "confidence": _clamp(parsed.get("confidence", 0.0), 0.0, 1.0),
             "risk": parsed.get("risk", "high") if parsed.get("risk") in ("low", "medium", "high") else "high",
             "explanation": parsed.get("explanation", ""),
+            "proposed_action": proposed_action,
             "model_used": settings.ollama_model,
             "duration_ms": duration_ms,
             "rag_sources": rag_sources,
@@ -158,6 +180,7 @@ async def generate_diagnosis(
             "confidence": 0.0,
             "risk": "high",
             "explanation": f"Raw LLM response could not be parsed: {raw[:200]}",
+            "proposed_action": None,
             "model_used": settings.ollama_model,
             "duration_ms": duration_ms,
             "rag_sources": rag_sources,

@@ -68,6 +68,10 @@ spec:
           value: "qwen2.5:1.5b"
         - name: HTTP_TIMEOUT
           value: "240"
+        - name: REMEDIATION_ENABLED
+          value: "true"
+        - name: REMEDIATION_DRY_RUN
+          value: "true"
         - name: MATTERMOST_WEBHOOK_URL
           valueFrom:
             secretKeyRef:

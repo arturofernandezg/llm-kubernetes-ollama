@@ -40,6 +40,7 @@ BLOCKED_PATTERNS = [
     r"kubectl\s+delete\s+node",
     r"kubectl\s+delete\s+clusterrole",
     r"kubectl\s+delete\s+--all",
+    r"kubectl\s+delete\s+pod\b",   # eliminación directa de pod → siempre BLOCKED
     r"rm\s+-rf",
     r"kubectl.*--force.*--grace-period=0",
     r"kubectl\s+drain\s",
@@ -72,6 +73,80 @@ _SAFETY_REASONS: dict[CommandSafety, str] = {
     CommandSafety.BLOCKED: "destructive command — requires human review",
     CommandSafety.UNKNOWN: "unrecognized command pattern",
 }
+
+
+# ── Condición del tutor: patrones de reinicio de pod ─────────────────────────
+# Fail-safe: comandos MUTATING no reconocidos explícitamente como seguros cuentan como restart.
+
+_RESTART_PATTERNS: list[tuple[str, str]] = [
+    # Comandos MUTATING que implican reinicio/recreación de pods — condición del tutor.
+    # (kubectl delete pod está en BLOCKED_PATTERNS → nunca llega aquí)
+    (r"kubectl\s+rollout\s+restart\b", "rollout_restart"),
+    (r"kubectl\s+scale\b", "scale_command"),
+    (r"kubectl\s+set\s+resources\s+(deployment|statefulset|daemonset)\b", "set_resources_triggers_rollout"),
+    (r"kubectl\s+patch\s+(deployment|statefulset|daemonset)\b", "patch_workload_triggers_rollout"),
+]
+
+_SAFE_MUTATING_PATTERNS: list[str] = [
+    r"^kubectl\s+label\s",
+    r"^kubectl\s+annotate\s",
+]
+
+
+def parse_memory_to_bytes(value: str) -> int:
+    """Parse Kubernetes memory string to bytes. Raises ValueError on invalid input.
+
+    Supports IEC (Ki/Mi/Gi/Ti), SI (K/M/G/T) and raw integer bytes.
+    """
+    value = value.strip()
+    if not value:
+        raise ValueError("empty memory value")
+
+    _IEC = [("ti", 1024 ** 4), ("gi", 1024 ** 3), ("mi", 1024 ** 2), ("ki", 1024)]
+    _SI  = [("t", 1000 ** 4), ("g", 1000 ** 3), ("m", 1000 ** 2), ("k", 1000)]
+
+    lower = value.lower()
+    for suffix, mult in _IEC:
+        if lower.endswith(suffix):
+            num_str = lower[: -len(suffix)]
+            try:
+                return int(float(num_str) * mult)
+            except ValueError:
+                raise ValueError(f"invalid memory value: {value!r}")
+    for suffix, mult in _SI:
+        if lower.endswith(suffix):
+            num_str = lower[: -len(suffix)]
+            try:
+                return int(float(num_str) * mult)
+            except ValueError:
+                raise ValueError(f"invalid memory value: {value!r}")
+    try:
+        return int(value)
+    except ValueError:
+        raise ValueError(f"invalid memory value: {value!r}")
+
+
+def implies_pod_restart(command: str) -> tuple[bool, str]:
+    """True + reason_code if the command will restart or recreate pods.
+
+    Fail-safe: MUTATING commands not explicitly listed as safe are treated as
+    restart-implying until the tutor confirms an exception.
+    """
+    cmd = command.strip()
+
+    for pattern, reason_code in _RESTART_PATTERNS:
+        if re.search(pattern, cmd, re.IGNORECASE):
+            return True, reason_code
+
+    for pattern in _SAFE_MUTATING_PATTERNS:
+        if re.search(pattern, cmd, re.IGNORECASE):
+            return False, ""
+
+    for pattern in SAFE_PATTERNS:
+        if re.search(pattern, cmd, re.IGNORECASE):
+            return False, ""
+
+    return True, "unknown_mutating_command_fail_safe"
 
 
 # ── Clasificación de comandos ─────────────────────────────────────────────────
@@ -134,6 +209,8 @@ def decide_action(
     2. Sin comandos → SUGGEST_ONLY
     3. Algún comando BLOCKED → ESCALATE (LLM produjo algo peligroso)
     4. Algún comando UNKNOWN → SUGGEST_ONLY (incertidumbre)
+    4.5 (tutor) Algún comando MUTATING implica reinicio de pod → ESCALATE
+    4.6 (tutor) proposed_action en memory.limits: new > 2× current → ESCALATE
     5. risk > remediation_auto_max_risk → ESCALATE
     6. confidence < remediation_auto_confidence → SUGGEST_ONLY
     7. Todo OK → AUTO_REMEDIATE
@@ -151,6 +228,43 @@ def decide_action(
 
     if CommandSafety.UNKNOWN in safeties:
         return RemediationAction.SUGGEST_ONLY
+
+    # Rule 4.5 — tutor condition: block any command that restarts pods
+    for v in command_validations:
+        if v["safety"] == CommandSafety.MUTATING:
+            restarts, reason_code = implies_pod_restart(v["command"])
+            if restarts:
+                logger.info(
+                    "Remediation blocked: command implies pod restart",
+                    extra={"reason_code": reason_code, "command": v["command"]},
+                )
+                return RemediationAction.ESCALATE
+
+    # Rule 4.6 — tutor condition: new memory limit must be ≤ 2× current
+    proposed_action = diagnosis.get("proposed_action")
+    if (
+        isinstance(proposed_action, dict)
+        and proposed_action.get("field") == "resources.limits.memory"
+    ):
+        try:
+            current_bytes = parse_memory_to_bytes(proposed_action.get("current_value", ""))
+            new_bytes = parse_memory_to_bytes(proposed_action.get("new_value", ""))
+            if new_bytes > 2 * current_bytes:
+                logger.info(
+                    "Remediation blocked: proposed memory exceeds 2x current",
+                    extra={
+                        "reason_code": "memory_exceeds_2x",
+                        "current_value": proposed_action.get("current_value"),
+                        "new_value": proposed_action.get("new_value"),
+                    },
+                )
+                return RemediationAction.ESCALATE
+        except ValueError as exc:
+            logger.info(
+                "Remediation blocked: cannot parse memory values",
+                extra={"reason_code": "unparseable_memory", "error": str(exc)},
+            )
+            return RemediationAction.ESCALATE
 
     risk = diagnosis.get("risk", "high")
     max_risk = settings.remediation_auto_max_risk

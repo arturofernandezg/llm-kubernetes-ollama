@@ -21,6 +21,8 @@ from remediation import (
     decide_action,
     execute_commands,
     process_remediation,
+    parse_memory_to_bytes,
+    implies_pod_restart,
 )
 from tests.helpers import mock_diagnosis_auto_remediate, mock_diagnosis_escalate, mock_diagnosis_result
 
@@ -206,10 +208,11 @@ class TestDecideAction:
         monkeypatch.setattr("remediation.settings.remediation_enabled", True)
         monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
         monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
-        diagnosis = mock_diagnosis_auto_remediate()  # risk=low, confidence=0.9, safe+mutating cmds
+        # non-restart commands only (annotate is safe mutating, no rollout triggered)
+        diagnosis = mock_diagnosis_auto_remediate()  # risk=low, confidence=0.9
         validations = self._validations(
             "kubectl describe pod engine-pod -n prod",
-            "kubectl set resources deployment engine --limits=memory=512Mi -n prod",
+            "kubectl annotate deployment engine aiops-checked=true -n prod",
         )
         assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
 
@@ -371,3 +374,207 @@ class TestProcessRemediation:
         result = await process_remediation(diagnosis)
         assert result["action"] == RemediationAction.SUGGEST_ONLY
         assert result["executed"] is False
+
+
+# ── TestParseMemoryToBytes ────────────────────────────────────────────────────
+
+class TestParseMemoryToBytes:
+
+    def test_mebibytes(self):
+        assert parse_memory_to_bytes("256Mi") == 256 * 1024 ** 2
+
+    def test_gibibytes(self):
+        assert parse_memory_to_bytes("1Gi") == 1024 ** 3
+
+    def test_kibibytes(self):
+        assert parse_memory_to_bytes("512Ki") == 512 * 1024
+
+    def test_raw_bytes(self):
+        assert parse_memory_to_bytes("1024") == 1024
+
+    def test_megabytes_si(self):
+        assert parse_memory_to_bytes("500M") == 500 * 1000 ** 2
+
+    def test_case_insensitive(self):
+        assert parse_memory_to_bytes("256mi") == parse_memory_to_bytes("256Mi")
+
+    def test_invalid_raises(self):
+        import pytest
+        with pytest.raises(ValueError):
+            parse_memory_to_bytes("garbage")
+
+    def test_empty_raises(self):
+        import pytest
+        with pytest.raises(ValueError):
+            parse_memory_to_bytes("")
+
+
+# ── TestImpliesPodRestart ─────────────────────────────────────────────────────
+
+class TestImpliesPodRestart:
+
+    def test_rollout_restart_is_restart(self):
+        restarts, reason = implies_pod_restart("kubectl rollout restart deployment engine -n prod")
+        assert restarts is True
+        assert reason == "rollout_restart"
+
+    def test_set_resources_deployment_is_restart(self):
+        restarts, reason = implies_pod_restart(
+            "kubectl set resources deployment engine --limits=memory=512Mi -n prod"
+        )
+        assert restarts is True
+        assert reason == "set_resources_triggers_rollout"
+
+    def test_scale_is_restart(self):
+        restarts, reason = implies_pod_restart("kubectl scale deployment engine --replicas=2 -n prod")
+        assert restarts is True
+        assert reason == "scale_command"
+
+    def test_patch_deployment_is_restart(self):
+        restarts, reason = implies_pod_restart(
+            'kubectl patch deployment engine -n prod -p \'{"spec":{"template":{"metadata":{"labels":{"ts":"1"}}}}}\'')
+        assert restarts is True
+        assert reason == "patch_workload_triggers_rollout"
+
+    def test_scale_to_zero_is_restart(self):
+        restarts, reason = implies_pod_restart("kubectl scale deployment engine --replicas=0 -n prod")
+        assert restarts is True
+        assert reason == "scale_command"
+
+    def test_annotate_is_not_restart(self):
+        restarts, _ = implies_pod_restart("kubectl annotate deployment engine note=ok -n prod")
+        assert restarts is False
+
+    def test_label_is_not_restart(self):
+        restarts, _ = implies_pod_restart("kubectl label deployment engine env=prod -n prod")
+        assert restarts is False
+
+    def test_safe_get_is_not_restart(self):
+        restarts, _ = implies_pod_restart("kubectl get pods -n prod")
+        assert restarts is False
+
+    def test_unknown_mutating_fail_safe(self):
+        restarts, reason = implies_pod_restart("kubectl exec -it engine-pod -- /bin/sh")
+        assert restarts is True
+        assert reason == "unknown_mutating_command_fail_safe"
+
+
+# ── TestDecideActionTutorRule ─────────────────────────────────────────────────
+
+class TestDecideActionTutorRule:
+    """Reglas 4.5 y 4.6 introducidas por condición del tutor."""
+
+    def _validations(self, *commands):
+        return validate_commands(list(commands))
+
+    def _base_monkeypatch(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+
+    # ── Rule 4.5: restart-implying commands → ESCALATE ────────────────────────
+
+    def test_set_resources_deployment_escalates(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {**mock_diagnosis_auto_remediate(), "risk": "low", "confidence": 0.9}
+        validations = self._validations(
+            "kubectl set resources deployment engine --limits=memory=512Mi -n prod"
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_rollout_restart_escalates(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {**mock_diagnosis_auto_remediate(), "risk": "low", "confidence": 0.9}
+        validations = self._validations("kubectl rollout restart deployment engine -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_patch_deployment_spec_template_escalates(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {**mock_diagnosis_auto_remediate(), "risk": "low", "confidence": 0.9}
+        validations = self._validations(
+            'kubectl patch deployment engine -n prod -p \'{"spec":{"template":{"metadata":{"labels":{"ts":"1"}}}}}\''
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_scale_command_escalates(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {**mock_diagnosis_auto_remediate(), "risk": "low", "confidence": 0.9}
+        validations = self._validations("kubectl scale deployment engine --replicas=0 -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_restart_rule_overrides_low_risk(self, monkeypatch):
+        """risk=low + confidence alta no basta si el comando reinicia pods."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {"risk": "low", "confidence": 0.99, "proposed_action": None}
+        validations = self._validations("kubectl rollout restart deployment engine -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    # ── Rule 4.6: memory > 2× current → ESCALATE ─────────────────────────────
+
+    def test_memory_4x_escalates(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "prod",
+                "container": "engine", "field": "resources.limits.memory",
+                "current_value": "256Mi", "new_value": "1Gi",
+            },
+        }
+        validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_memory_2x_non_restart_auto_remediates(self, monkeypatch):
+        """256Mi → 512Mi (exactamente 2×) con comando no-restart → AUTO_REMEDIATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "prod",
+                "container": "engine", "field": "resources.limits.memory",
+                "current_value": "256Mi", "new_value": "512Mi",
+            },
+        }
+        validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+    def test_memory_unparseable_escalates(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "prod",
+                "container": "engine", "field": "resources.limits.memory",
+                "current_value": "256Mi", "new_value": "not-a-value",
+            },
+        }
+        validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_no_proposed_action_falls_back_to_legacy(self, monkeypatch):
+        """Sin proposed_action, regla 4.6 se salta; decision la toman risk/confidence."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {**mock_diagnosis_auto_remediate(), "proposed_action": None}
+        validations = self._validations(
+            "kubectl describe pod engine-pod -n prod",
+            "kubectl annotate deployment engine note=ok -n prod",
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+    def test_proposed_action_non_memory_field_skipped(self, monkeypatch):
+        """proposed_action con field distinto a resources.limits.memory → no aplica regla 4.6."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "prod",
+                "container": "engine", "field": "spec.replicas",
+                "current_value": "1", "new_value": "3",
+            },
+        }
+        validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE

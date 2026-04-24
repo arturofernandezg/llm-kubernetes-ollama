@@ -33,6 +33,19 @@ class AlertmanagerPayload(BaseModel):
     groupKey: str | None = None
 
 
+# ── Remediation Schemas (Fase 3) ─────────────────────────────────────────────
+
+class ProposedAction(BaseModel):
+    """Acción de remediación estructurada que el LLM propone para un recurso concreto."""
+    kind: str = Field(description="Deployment | StatefulSet | DaemonSet | LimitRange ...")
+    name: str = Field(description="Nombre del recurso")
+    namespace: str = Field(description="Namespace del recurso")
+    container: str | None = Field(default=None, description="Contenedor afectado (si aplica)")
+    field: str = Field(description="Campo que se modifica, p.ej. resources.limits.memory")
+    current_value: str = Field(description="Valor actual del campo, p.ej. 256Mi")
+    new_value: str = Field(description="Valor propuesto por el LLM, p.ej. 512Mi")
+
+
 # ── Legacy Extraction Schemas (Fase 0) ────────────────────────────────────────
 class InfraRequest(BaseModel):
     message: str

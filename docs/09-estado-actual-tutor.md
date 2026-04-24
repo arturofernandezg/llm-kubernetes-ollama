@@ -1,7 +1,7 @@
 # Estado Actual del Proyecto — Briefing para Reuniones
 
 > Documento pensado para repasar antes de cada reunión con el tutor.
-> Última actualización: 2026-04-09 (post S7)
+> Última actualización: 2026-04-23 (Fase 1 + Fase 2 cerradas)
 
 ---
 
@@ -46,10 +46,13 @@ Prometheus detecta problema
   - **SAFE** (solo lectura): `kubectl describe`, `kubectl get`, `kubectl logs`
   - **MUTATING** (permitido): `kubectl scale`, `kubectl patch`, `kubectl set resources`
   - **BLOCKED** (peligroso): `kubectl delete namespace`, `kubectl drain`, `rm -rf`
-- Motor de decisión con 7 reglas en cascada:
-  - `risk=low` + `confidence>=80%` + comandos validados → **auto-remedia**
-  - Comando peligroso detectado → **escala a humano**
+- Motor de decisión con 9 reglas en cascada (2026-04-25 — condición del tutor):
+  - Regla 4.5: comando MUTATING implica reinicio de pod → **ESCALATE** (bloqueo hasta confirmación tutor)
+  - Regla 4.6: `proposed_action` en `resources.limits.memory` con `new > 2 × current` → **ESCALATE**
+  - `risk=low` + `confidence>=80%` + comandos validados (sin restart) → **auto-remedia**
+  - Comando BLOCKED/peligroso detectado → **escala a humano**
   - Baja confianza o riesgo alto → **solo sugiere**
+  - `REMEDIATION_DRY_RUN=true` activo — ejecución real requiere acuerdo con tutor
 - Desactivado por defecto (`REMEDIATION_ENABLED=false`). Se activa con variable de entorno.
 
 ### 4. ChatOps (Mattermost)
@@ -57,8 +60,14 @@ Prometheus detecta problema
 - El agente envía notificaciones formateadas con diagnóstico, comandos sugeridos y nivel de riesgo
 - Retry con exponential backoff si Mattermost no responde
 
-### 5. Tests
-- **193 tests** unitarios, todos pasando (<0.5s)
+### 5. Observabilidad completa (Fase 1 cerrada 2026-04-22)
+- **Prometheus standalone** en `arturo-monitoring` + kube-state-metrics (mirror a Artifact Registry vía `crane`, `registry.k8s.io` inaccesible sin Cloud NAT). 5 reglas de alerta AIOps activas (OOMKilled, CrashLoop, HighCPU, HighMemory, TargetDown).
+- **Alertmanager standalone** → webhook del agente.
+- **Grafana stateless + provisioned** (dashboard "AIOps Agent — Overview": 9 paneles, 4 filas) + contact point webhook hacia el agente. Persistencia `emptyDir` (patrón enterprise: provisioning-as-code, no drift local).
+- E2E verificado en cluster: alerta real → webhook → RAG → LLM → Mattermost.
+
+### 6. Tests
+- **196 tests** unitarios, todos pasando (<0.5s)
 - Mocking completo: no necesitan cluster ni LLM para ejecutarse
 - CI/CD: Cloud Build ejecuta todos los tests antes de construir la imagen
 
@@ -79,8 +88,8 @@ Prometheus detecta problema
 ## Infraestructura desplegada
 
 ```
-Namespace arturo-llm-test:     agent ✅, ollama ✅, chromadb ✅
-Namespace arturo-monitoring:   alertmanager ✅
+Namespace arturo-llm-test:     agent ✅, ollama ✅, chromadb ✅ (16 runbooks ingestados)
+Namespace arturo-monitoring:   prometheus ✅, kube-state-metrics ✅, alertmanager ✅, grafana ✅
 Namespace arturo-mattermost:   mattermost ✅, postgres ✅
 ```
 
@@ -89,24 +98,24 @@ Namespace arturo-mattermost:   mattermost ✅, postgres ✅
 | Fase | Qué hace | Estado |
 |---|---|---|
 | **Fase 0** (Legado) | Extracción de params + generación Terraform | Completa (en desuso) |
-| **Fase 1** (Observabilidad) | Webhook de alertas + Mattermost + routing | ~90% (faltan alerting rules, webhook entrante Mattermost) |
-| **Fase 2** (RAG) | ChromaDB + runbooks + diagnóstico con LLM | Módulos escritos y testeados. ChromaDB running. Pendiente: runbooks semilla + integrar RAG en webhook |
-| **Fase 3** (Remediación) | Validation layer + auto-patch + feedback loop | ~90% (validación + integración + ejecución real + RBAC + feedback loop hechos; falta cluster deploy + e2e) |
+| **Fase 1** (Observabilidad) | Prometheus + Alertmanager + Grafana + webhook + Mattermost | **Completa** (2026-04-22). E2E verificado |
+| **Fase 2** (RAG) | ChromaDB + runbooks + diagnóstico contextual con LLM | **Completa** (2026-04-23). 16 runbooks ingestados vía K8s Job idempotente; E2E verificado (KubePodOOMKilled → RAG 3 runbooks + 2 incidents → LLM 187s, confidence=0.85, risk=high → Mattermost enriquecido) |
+| **Fase 3** (Remediación) | Activar validation layer + auto-patch + feedback loop en cluster | Código listo y testeado. Pendiente: activar `REMEDIATION_ENABLED=true, REMEDIATION_DRY_RUN=true` y aplicar `k8s/rbac.yaml` (Role namespace-scoped, no bloqueado por IAM) |
 
 ## Qué falta por hacer (próximos pasos)
 
-### Inmediato (próxima sesión — cluster)
-1. ~~**Aplicar fix de ChromaDB**~~ ✅ (2026-04-09, ConfigMap log stdout-only)
-2. **Aplicar RBAC** — (`kubectl apply -f k8s/rbac.yaml`) — manifiesto ya preparado
-3. **Build + deploy** — nueva imagen con remediación + feedback loop integrados, deploy en cluster
-4. **Alerting rules** — definir qué alertas disparan el sistema (consultar tutor sobre permisos Prometheus)
+### Inmediato (próxima sesión — activar Fase 3 dry-run)
+1. **Aplicar RBAC** — `kubectl apply -f k8s/rbac.yaml` (Role + RoleBinding namespace-scoped; `container.roles.create` IAM ya no es bloqueante al ser namespace y no ClusterRole).
+2. **Activar remediation flags** — añadir `REMEDIATION_ENABLED=true`, `REMEDIATION_DRY_RUN=true` al env del `deployment-agent.yaml`.
+3. **Disparar alerta real de OOMKilled** — verificar decisión en logs (`auto_remediate` si `risk=low` + `confidence≥0.8`, `suggest_only` si no) y que Mattermost muestra el bloque de remediación dry-run.
 
 ### Corto plazo
-5. **Test end-to-end** con payload real de Alertmanager → diagnóstico → remediación → Mattermost
+4. **Webhook entrante de Mattermost interactivo** — botones Aprobar/Rechazar para remediaciones que requieran humano (Fase 3 iteración 2).
+5. **Modo proactivo** — loop periódico que consulta `prometheus-svc:9090/api/v1/query` y detecta tendencias antes de que dispare una alerta.
 
 ### Para la memoria/tesis
-6. **Métricas de evaluación**: MTTR, retrieval precision, actionability rate, safety rate
-7. **Tests end-to-end** con alertas reales provocadas en el cluster
+6. **Métricas de evaluación**: MTTR, retrieval precision, actionability rate, safety rate.
+7. **Evaluación experimental**: comparar diagnóstico zero-shot (ChromaDB vacío) vs. diagnóstico RAG con los 16 runbooks. Mostrar mejora en `confidence` y en calidad de `commands[]`.
 
 ## Decisiones de diseño importantes (para defender en la memoria)
 

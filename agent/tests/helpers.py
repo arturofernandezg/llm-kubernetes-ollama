@@ -106,16 +106,17 @@ def mock_diagnosis_result() -> dict:
 
 
 def mock_diagnosis_auto_remediate() -> dict:
-    """Diagnóstico que debe resultar en AUTO_REMEDIATE: risk=low, confidence=0.9, comandos seguros."""
+    """Diagnóstico que debe resultar en AUTO_REMEDIATE: risk=low, confidence=0.9, comandos no-restart."""
     return {
         "diagnosis": "Container exceeded memory limit",
         "commands": [
             "kubectl describe pod engine-pod -n prod",
-            "kubectl set resources deployment engine --limits=memory=512Mi -n prod",
+            "kubectl annotate deployment engine aiops-checked=true -n prod",
         ],
         "confidence": 0.9,
         "risk": "low",
-        "explanation": "Memory limit too low, safe to increase.",
+        "explanation": "Memory limit too low; annotating deployment for human review.",
+        "proposed_action": None,
         "model_used": "tinyllama",
         "duration_ms": 1200,
         "rag_sources": ["runbook-oomkilled-001"],

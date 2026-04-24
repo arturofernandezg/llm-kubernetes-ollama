@@ -28,6 +28,8 @@
 | `networkpolicy.yaml` | NetworkPolicy (2 políticas) | Segmentación de tráfico entre pods |
 | `prometheus.yaml` | ServiceAccounts, ClusterRoles, ConfigMaps, Deployments, Services para Prometheus + KSM | Monitoring stack en `arturo-monitoring` |
 | `alertmanager.yaml` | Deployment + ConfigMap + Service para Alertmanager | Routing de alertas a webhook del agente |
+| `grafana.yaml` | Deployment stateless + ConfigMaps provisioning + Service + Secret ref | Datasource Prometheus, dashboard AIOps, contact point webhook |
+| `job-ingest-runbooks.yaml` | K8s Job `runbooks-ingest` en `arturo-llm-test` | Ingesta idempotente (upsert) de 16 runbooks en ChromaDB |
 | `rbac.yaml` | Role + RoleBinding en `arturo-llm-test` | RBAC para remediación autónoma del agente |
 
 ## Prometheus standalone
@@ -129,10 +131,17 @@ Kubernetes no puede desalojar el pod voluntariamente mientras no haya un reempla
 
 ## NetworkPolicy
 
-Fichero: `k8s/networkpolicy.yaml` — dos políticas de ingress:
+Fichero: `k8s/networkpolicy.yaml` — segmentación de tráfico entre namespaces. Reglas ingress principales:
 
 1. **`ollama-allow-agent-only`**: pods de Ollama solo aceptan tráfico desde pods con `app: agent` en el port 11434.
-2. **`agent-allow-apache-only`**: pods del agent solo aceptan tráfico desde pods con `app: apache` en el port 8000.
+2. **`agent-allow-ingress`**: pods del agent (`arturo-llm-test`) aceptan tráfico en el port 8000 desde:
+   - `app: apache` (validación de red interna)
+   - `app: alertmanager` (namespace `arturo-monitoring`) — webhook de alertas
+   - `app: prometheus` (namespace `arturo-monitoring`) — scrape de `/metrics`
+   - `app: grafana` (namespace `arturo-monitoring`) — test del contact point
+
+El Job `runbooks-ingest` usa label `app: agent`, así que hereda las reglas egress del agente
+(ChromaDB port 8000, Ollama port 11434) sin cambios en la NetworkPolicy.
 
 **Requisito**: el cluster debe tener NetworkPolicy habilitado (GKE Dataplane V2 o Calico).
 Si no está habilitado, las políticas se aceptan pero no se aplican (fallan silenciosamente).
@@ -151,11 +160,17 @@ El deployment del agente aplica un security context restrictivo (commit 5ec78f5)
 ```yaml
 securityContext:
   runAsNonRoot: true        # impide ejecución como root
+  runAsUser: 1000           # OBLIGATORIO en GKE — UID numérico, no simbólico
   readOnlyRootFilesystem: true  # filesystem de solo lectura
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]             # elimina todas las capabilities Linux
 ```
+
+**Nota `runAsUser`** (2026-04-23): GKE rechaza el contenedor con `CreateContainerConfigError`
+si `runAsNonRoot: true` se usa con `USER appuser` simbólico en el Dockerfile (kubelet: "image has
+non-numeric user"). El UID numérico explícito (`runAsUser: 1000`) es obligatorio. Aplica también
+al Job `runbooks-ingest`.
 
 Se monta un volumen `emptyDir` en `/tmp` porque `readOnlyRootFilesystem: true`
 impide que uvicorn escriba ficheros temporales en el filesystem del contenedor.
@@ -297,6 +312,22 @@ Comportamiento correcto: el pod no recibió tráfico de `/extract` hasta que Oll
 ### Cloud Shell pierde autenticación de kubectl
 **Causa**: al abrir múltiples pestañas de Cloud Shell, las credenciales pueden expirar.
 **Solución**: `gcloud auth login --update-adc` y luego `gcloud container clusters get-credentials ...`
+
+### Pod `CreateContainerConfigError` con `runAsNonRoot: true`
+**Descubierto**: 2026-04-23 al aplicar `k8s/job-ingest-runbooks.yaml`.
+**Causa**: el Dockerfile define `USER appuser` (nombre simbólico). El kubelet de GKE requiere
+un UID numérico cuando `runAsNonRoot: true` — no resuelve el nombre automáticamente.
+`kubectl describe pod` muestra: `container has runAsNonRoot and image has non-numeric user (appuser)`.
+**Solución**: añadir `runAsUser: 1000` al `securityContext` del contenedor (UID que genera
+`adduser` por defecto en la imagen). Aplicado a `deployment-agent.yaml` y `job-ingest-runbooks.yaml`.
+
+### LLM timeout con prompts RAG-enriquecidos
+**Descubierto**: 2026-04-23. Tras la ingesta de runbooks, el diagnóstico empieza a fallar
+con un gap de exactamente 120s en los logs (`RAG retrieval: ...` → 120s → `Diagnosis generation failed`).
+**Causa**: el prompt enriquecido con contexto RAG (~2200 tokens input + ~300 output) excede el
+valor default de `HTTP_TIMEOUT` (120s) en `qwen2.5:1.5b` sobre CPU.
+**Solución**: añadir `HTTP_TIMEOUT: "240"` como env var en `deployment-agent.yaml`.
+pydantic-settings lo recoge sin rebuild de imagen (duración observada: ~187s).
 
 ### Port-forward: "address already in use"
 **Causa**: un port-forward anterior sigue corriendo en background.

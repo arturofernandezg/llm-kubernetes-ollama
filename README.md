@@ -53,7 +53,8 @@ llm-kubernetes-ollama/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   ├── requirements-dev.txt
-│   └── tests/                # 124 tests en 7 ficheros (no requieren K8s ni Ollama)
+│   ├── ingest_runbooks.py    # CLI ingesta runbooks → ChromaDB (async)
+│   └── tests/                # 196 tests en 8 ficheros (no requieren K8s ni Ollama)
 ├── k8s/
 │   ├── deployment-agent.yaml     # Agent: 1 réplica, probes, securityContext
 │   ├── deployment-ollama.yaml    # Ollama: 1 réplica, PVC 20Gi, PDB
@@ -69,6 +70,7 @@ llm-kubernetes-ollama/
 │   ├── chromadb.yaml             # ChromaDB StatefulSet + PVC
 │   ├── mattermost.yaml           # Mattermost + PostgreSQL StatefulSet
 │   ├── grafana.yaml              # Grafana stateless + datasource + dashboard + contact point
+│   ├── job-ingest-runbooks.yaml  # K8s Job — ingesta idempotente de runbooks en ChromaDB
 │   └── rbac.yaml                 # Role + RoleBinding para remediación (patch pods)
 ├── docs/                         # Documentación detallada por componente
 ├── docs_sesion/                  # Diarios de sesión de desarrollo
@@ -118,11 +120,15 @@ kubectl exec -it <pod-ollama> -n arturo-llm-test -- ollama pull qwen2.5:1.5b
 kubectl exec -it <pod-ollama> -n arturo-llm-test -- ollama pull nomic-embed-text
 ```
 
-### 4. ChromaDB
+### 4. ChromaDB + ingesta de runbooks
 
 ```
 kubectl apply -f k8s/chromadb.yaml
+kubectl apply -f k8s/job-ingest-runbooks.yaml
+kubectl wait --for=condition=complete job/runbooks-ingest -n arturo-llm-test --timeout=180s
 ```
+
+El Job es idempotente (`upsert`) — re-ejecutarlo es seguro. Los 16 runbooks YAML vienen dentro de la imagen (`agent/runbooks/` → `/app/runbooks`).
 
 ### 5. Observabilidad (arturo-monitoring)
 
@@ -281,7 +287,7 @@ Abrir http://localhost:8065 → canal configurado con el incoming webhook → de
 cd agent && pip install -r requirements.txt -r requirements-dev.txt && python -m pytest tests/ -v
 ```
 
-124 tests en 7 ficheros. No requieren K8s, Ollama ni ChromaDB (todo mockeado).
+196 tests en 8 ficheros. No requieren K8s, Ollama ni ChromaDB (todo mockeado).
 
 ---
 
