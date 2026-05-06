@@ -296,9 +296,6 @@ def _format_escalation_body(diagnosis: dict, remediation: dict) -> str:
         cmds_str = "\n".join(safe_cmds)
         parts.append(f"**Comandos propuestos (requieren aprobación):**\n```\n{cmds_str}\n```")
 
-    if diagnosis.get("explanation"):
-        parts.append(f"_{diagnosis['explanation']}_")
-
     return "\n".join(parts)
 
 
