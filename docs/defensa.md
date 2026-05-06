@@ -72,7 +72,36 @@ ESCALATE + safe_commands → Mattermost [✅ Aprobar] [❌ Rechazar]
 
 ## 4. Métricas y evidencias para mostrar
 
-*(Se irá completando)*
+### Traza E2E completa — Human-in-the-loop (2026-05-06)
+
+Log real del agente en cluster, alert KubePodOOMKilled procesada de punta a punta:
+
+```
+confidence=0.90  risk=high  duration=78746ms
+action=escalate  commands_total=3  blocked=0
+Persisted incident incident-KubePodOOMKilled-1778062371 (outcome=escalate)
+Stored pending escalation c907bad7-fe26-49c3-96b2-3b3badeca3a1 (3 commands)
+POST http://mattermost-svc.../hooks/...  → HTTP 200 OK
+```
+
+**Lo que demuestra cada línea:**
+
+| Línea de log | Qué demuestra |
+|---|---|
+| `confidence=0.90 risk=high duration=78746ms` | LLM real (qwen2.5:1.5b) inferencia on-cluster, 78.7s |
+| `action=escalate commands_total=3 blocked=0` | Motor de decisión aplicó regla 5 (risk=high→escalate); comandos válidos generados |
+| `Persisted incident ... (outcome=escalate)` | Feedback loop: la decisión queda en ChromaDB para RAG futuro |
+| `Stored pending escalation ... (3 commands)` | Estado en memoria con UUID único; TTL 60 min activo |
+| `POST mattermost-svc ... HTTP 200` | Mensaje con botones entregado a Mattermost via cross-namespace DNS |
+
+**Secuencia técnica visible en logs:**
+```
+Ollama /api/generate (78.7s) →
+  ChromaDB POST collections (upsert feedback) →
+  Ollama /api/embeddings (embedding del incidente) →
+  ChromaDB upsert (persistencia) →
+  Mattermost POST webhook (HTTP 200)
+```
 
 ---
 
@@ -84,8 +113,9 @@ Tu sistema no es un prototipo local — está desplegado en un cluster GKE real 
 
 - **Cluster real**: GKE europe-southwest1-a, 2 nodos spot e2-standard-2
 - **Stack completo desplegado**: Prometheus + Alertmanager + ChromaDB + Ollama + FastAPI + Grafana + Mattermost — todos corriendo en K8s, no en docker-compose local
-- **E2E verificado en cluster**: KubePodOOMKilled → RAG → LLM → Mattermost (documentado con tiempos reales: 187s, 211s)
-- **Métricas reales**: `aiops_remediation_total{action="escalate"} 2`, `aiops_feedback_total{outcome="persisted"} 2`
+- **E2E verificado en cluster**: KubePodOOMKilled → RAG → LLM → Mattermost (tiempos reales: 187s, 211s, 78s)
+- **Human-in-the-loop E2E**: escalation con botones ✅/❌ en Mattermost — mensaje actualizado in-place al aprobar/rechazar (2026-05-06)
+- **Métricas reales**: `aiops_remediation_total{action="escalate"} 3`, `aiops_feedback_total{outcome="persisted"}`, `aiops_remediation_total{action="human_approved"}` (en verificación)
 
 **Tres pilares que defender (inspirados en la presentación de referencia):**
 
@@ -117,4 +147,4 @@ Tu sistema no es un prototipo local — está desplegado en un cluster GKE real 
 
 ---
 
-*Última actualización: 2026-05-05*
+*Última actualización: 2026-05-06*
