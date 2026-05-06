@@ -297,7 +297,7 @@ def _format_escalation_body(diagnosis: dict, remediation: dict) -> str:
         parts.append(f"**Comandos propuestos (requieren aprobación):**\n```\n{cmds_str}\n```")
 
     if diagnosis.get("explanation"):
-        parts.append(f"> {diagnosis['explanation']}")
+        parts.append(f"_{diagnosis['explanation']}_")
 
     return "\n".join(parts)
 
@@ -470,11 +470,23 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
 
     if incident is None:
         logger.warning("Unknown or expired incident_id in callback: %s", payload.context.incident_id)
-        return {"ephemeral_text": "Escalación no encontrada o expirada. No se tomó ninguna acción."}
+        return {
+            "ephemeral_text": "Escalación no encontrada o expirada. No se tomó ninguna acción.",
+            "update": {
+                "message": "⏰ Escalación expirada o no encontrada — no se tomó ninguna acción.",
+                "props": {"attachments": []},
+            },
+        }
 
     if datetime.now() > incident.expires_at:
         logger.warning("Escalation %s expired (TTL %dm)", incident.incident_id, ESCALATION_TTL_MINUTES)
-        return {"ephemeral_text": "Escalación expirada. Por favor, espera una nueva alerta."}
+        return {
+            "ephemeral_text": "Escalación expirada. Por favor, espera una nueva alerta.",
+            "update": {
+                "message": "⏰ Escalación expirada (TTL superado) — no se tomó ninguna acción.",
+                "props": {"attachments": []},
+            },
+        }
 
     user = payload.user_name or "human"
     action = payload.context.action
@@ -486,7 +498,7 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             logger.error("Command execution failed for incident %s: %s", incident.incident_id, exc)
             log = f"ERROR: {exc}"
         REMEDIATION_COUNTER.labels(action="human_approved").inc()
-        update_msg = f"✅ Remediación ejecutada por @{user}\n```\n{log}\n```"
+        decision_line = f"\n---\n✅ **Remediación APROBADA** por @{user}\n```\n{log}\n```"
         remediation_for_feedback = {
             "action": RemediationAction.AUTO_REMEDIATE,
             "execution_log": log,
@@ -496,7 +508,7 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
         logger.info("Human approved remediation for incident %s", incident.incident_id)
     else:
         REMEDIATION_COUNTER.labels(action="human_rejected").inc()
-        update_msg = f"❌ Remediación rechazada por @{user}"
+        decision_line = f"\n---\n❌ **Remediación RECHAZADA** por @{user}"
         remediation_for_feedback = {
             "action": RemediationAction.ESCALATE,
             "execution_log": "",
@@ -507,6 +519,11 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             "Human rejected remediation for incident %s (action=%s)",
             incident.incident_id, action,
         )
+
+    # Rebuild full message: original alert context + decision appended at bottom
+    original_header = _format_escalation_header(incident.alert_item)
+    original_body = _format_escalation_body(incident.diagnosis, remediation_for_feedback)
+    update_msg = f"{original_header}\n\n{original_body}{decision_line}"
 
     # Persist final human decision to ChromaDB (fail-open)
     try:

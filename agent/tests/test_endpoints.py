@@ -700,20 +700,23 @@ class TestActionCallbackEndpoint:
         assert r.status_code == 200
         body = r.json()
         assert "update" in body
-        assert "rechazada" in body["update"]["message"]
+        # El mensaje ahora incluye el contexto completo + decisión en mayúsculas al final
+        assert "RECHAZADA" in body["update"]["message"]
         assert "arturo" in body["update"]["message"]
         mock_exec.assert_not_called()
         assert "abc-456" not in PENDING_ESCALATIONS
 
     def test_unknown_incident_id_returns_ephemeral_text(self, api_client):
-        """incident_id no encontrado → ephemeral_text informativo, sin error."""
+        """incident_id no encontrado → ephemeral_text + update que limpia los botones."""
         r = api_client.post("/webhook/action", json={
             "context": {"action": "approve", "incident_id": "no-existe"},
         })
         assert r.status_code == 200
         body = r.json()
         assert "ephemeral_text" in body
-        assert "update" not in body
+        # Ahora también devuelve update para limpiar los botones del mensaje original
+        assert "update" in body
+        assert body["update"]["props"]["attachments"] == []
 
     def test_expired_escalation_returns_ephemeral_text(self, api_client):
         """Escalación con TTL expirado → ephemeral_text, execute_commands no llamado."""
