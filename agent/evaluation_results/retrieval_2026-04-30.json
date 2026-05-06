@@ -1,0 +1,291 @@
+{
+  "date": "2026-04-30",
+  "total": 10,
+  "top_k": 3,
+  "precision_at_1": 0.6,
+  "precision_at_3": 0.8,
+  "hits_at_1": 6,
+  "hits_at_3": 8,
+  "details": [
+    {
+      "alert_id": "crashloop-001",
+      "expected_runbook": "crashloopbackoff",
+      "expected_error_class": "CrashLoopBackOff",
+      "query": "KubePodCrashLoopBackOff pod postgres-0 namespace production container postgres severity critical Container postgres in pod postgres-0 is in CrashLoopBackOff state. Pod has restarted 8 times in the last 10 minutes.",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-crashloopbackoff-001",
+          "error_class": "CrashLoopBackOff",
+          "distance": 0.2286
+        },
+        {
+          "rank": 2,
+          "id": "runbook-containerwaiting-001",
+          "error_class": "ContainerWaiting",
+          "distance": 0.2613
+        },
+        {
+          "rank": 3,
+          "id": "runbook-highcpu-001",
+          "error_class": "HighCPU",
+          "distance": 0.2814
+        }
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true
+    },
+    {
+      "alert_id": "crashloop-002",
+      "expected_runbook": "crashloopbackoff",
+      "expected_error_class": "CrashLoopBackOff",
+      "query": "KubePodCrashLoopBackOff pod auth-service-7c9b4f-qwp3m namespace api container auth-service severity critical Container auth-service is back-off restarting (CrashLoopBackOff). Exit code 1. Check application logs for configuration errors.",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-crashloopbackoff-001",
+          "error_class": "CrashLoopBackOff",
+          "distance": 0.2173
+        },
+        {
+          "rank": 2,
+          "id": "runbook-podnotready-001",
+          "error_class": "PodNotReady",
+          "distance": 0.2385
+        },
+        {
+          "rank": 3,
+          "id": "runbook-imagepullbackoff-001",
+          "error_class": "ImagePullBackOff",
+          "distance": 0.2552
+        }
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true
+    },
+    {
+      "alert_id": "crashloop-003",
+      "expected_runbook": "crashloopbackoff",
+      "expected_error_class": "CrashLoopBackOff",
+      "query": "KubePodCrashLoopBackOff pod monitoring-agent-ds-k8p2x namespace monitoring container monitoring-agent severity warning Container monitoring-agent in DaemonSet pod is crash-looping. Likely misconfigured ConfigMap or missing secret. Restart count: 12.",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-crashloopbackoff-001",
+          "error_class": "CrashLoopBackOff",
+          "distance": 0.2265
+        },
+        {
+          "rank": 2,
+          "id": "runbook-podnotready-001",
+          "error_class": "PodNotReady",
+          "distance": 0.2787
+        },
+        {
+          "rank": 3,
+          "id": "runbook-networkunavailable-001",
+          "error_class": "NetworkUnavailable",
+          "distance": 0.2811
+        }
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true
+    },
+    {
+      "alert_id": "imagepull-001",
+      "expected_runbook": "imagepullbackoff",
+      "expected_error_class": "ImagePullBackOff",
+      "query": "KubePodImagePullBackOff pod frontend-8d7c4b-xnq2p namespace production container frontend severity warning Container frontend in pod frontend-8d7c4b-xnq2p has ImagePullBackOff. Image myrepo/frontend:v2.5.1 not found in registry.",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-podnotready-001",
+          "error_class": "PodNotReady",
+          "distance": 0.2852
+        },
+        {
+          "rank": 2,
+          "id": "runbook-containerwaiting-001",
+          "error_class": "ContainerWaiting",
+          "distance": 0.291
+        },
+        {
+          "rank": 3,
+          "id": "runbook-crashloopbackoff-001",
+          "error_class": "CrashLoopBackOff",
+          "distance": 0.2919
+        }
+      ],
+      "hit_at_1": false,
+      "hit_at_3": false
+    },
+    {
+      "alert_id": "imagepull-002",
+      "expected_runbook": "imagepullbackoff",
+      "expected_error_class": "ImagePullBackOff",
+      "query": "KubePodImagePullBackOff pod batch-job-4f8b2d-mpl7k namespace jobs container batch-processor severity warning Container batch-processor has ImagePullBackOff. Registry authentication failed: unauthorized to read repository. Check imagePullSecret configuration.",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-jobfailed-001",
+          "error_class": "JobFailed",
+          "distance": 0.2599
+        },
+        {
+          "rank": 2,
+          "id": "runbook-crashloopbackoff-001",
+          "error_class": "CrashLoopBackOff",
+          "distance": 0.2778
+        },
+        {
+          "rank": 3,
+          "id": "runbook-imagepullbackoff-001",
+          "error_class": "ImagePullBackOff",
+          "distance": 0.2863
+        }
+      ],
+      "hit_at_1": false,
+      "hit_at_3": true
+    },
+    {
+      "alert_id": "oom-001",
+      "expected_runbook": "oomkilled",
+      "expected_error_class": "OOMKilled",
+      "query": "KubePodOOMKilled pod nginx-7d8b9f6d7-xkp2q namespace production container nginx severity critical Container nginx in pod nginx-7d8b9f6d7-xkp2q was OOMKilled in namespace production",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-containerwaiting-001",
+          "error_class": "ContainerWaiting",
+          "distance": 0.2795
+        },
+        {
+          "rank": 2,
+          "id": "runbook-crashloopbackoff-001",
+          "error_class": "CrashLoopBackOff",
+          "distance": 0.2858
+        },
+        {
+          "rank": 3,
+          "id": "runbook-highcpu-001",
+          "error_class": "HighCPU",
+          "distance": 0.2998
+        }
+      ],
+      "hit_at_1": false,
+      "hit_at_3": false
+    },
+    {
+      "alert_id": "oom-002",
+      "expected_runbook": "oomkilled",
+      "expected_error_class": "OOMKilled",
+      "query": "KubePodOOMKilled pod redis-master-0 namespace caching container redis severity critical Container redis in pod redis-master-0 was OOMKilled. Memory limit exceeded due to high traffic spike.",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-oomkilled-001",
+          "error_class": "OOMKilled",
+          "distance": 0.2318
+        },
+        {
+          "rank": 2,
+          "id": "runbook-highcpu-001",
+          "error_class": "HighCPU",
+          "distance": 0.2446
+        },
+        {
+          "rank": 3,
+          "id": "runbook-highmemory-001",
+          "error_class": "HighMemory",
+          "distance": 0.2457
+        }
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true
+    },
+    {
+      "alert_id": "oom-003",
+      "expected_runbook": "oomkilled",
+      "expected_error_class": "OOMKilled",
+      "query": "KubePodOOMKilled pod app-backend-6c7f8d9-mzr4p namespace staging container app-backend severity critical Container app-backend in pod app-backend-6c7f8d9-mzr4p terminated with OOMKilled. Memory limit 256Mi is too low for current workload.",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-oomkilled-001",
+          "error_class": "OOMKilled",
+          "distance": 0.225
+        },
+        {
+          "rank": 2,
+          "id": "runbook-crashloopbackoff-001",
+          "error_class": "CrashLoopBackOff",
+          "distance": 0.2269
+        },
+        {
+          "rank": 3,
+          "id": "runbook-highmemory-001",
+          "error_class": "HighMemory",
+          "distance": 0.2449
+        }
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true
+    },
+    {
+      "alert_id": "oom-004",
+      "expected_runbook": "oomkilled",
+      "expected_error_class": "OOMKilled",
+      "query": "KubePodOOMKilled pod data-worker-8b9f4c-lqx7n namespace batch container data-worker severity warning Container data-worker in pod data-worker-8b9f4c-lqx7n was OOMKilled. Suspected memory leak in batch processing loop.",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-highmemory-001",
+          "error_class": "HighMemory",
+          "distance": 0.2494
+        },
+        {
+          "rank": 2,
+          "id": "runbook-crashloopbackoff-001",
+          "error_class": "CrashLoopBackOff",
+          "distance": 0.2669
+        },
+        {
+          "rank": 3,
+          "id": "runbook-oomkilled-001",
+          "error_class": "OOMKilled",
+          "distance": 0.2696
+        }
+      ],
+      "hit_at_1": false,
+      "hit_at_3": true
+    },
+    {
+      "alert_id": "oom-005",
+      "expected_runbook": "oomkilled",
+      "expected_error_class": "OOMKilled",
+      "query": "KubePodOOMKilled pod api-gateway-5f4d7b-rnk9s namespace api container api-gateway severity critical Container api-gateway terminated with reason OOMKilled. Current memory limit is 512Mi. Sudden request spike caused heap exhaustion.",
+      "retrieved": [
+        {
+          "rank": 1,
+          "id": "runbook-oomkilled-001",
+          "error_class": "OOMKilled",
+          "distance": 0.2263
+        },
+        {
+          "rank": 2,
+          "id": "runbook-highcpu-001",
+          "error_class": "HighCPU",
+          "distance": 0.2456
+        },
+        {
+          "rank": 3,
+          "id": "runbook-crashloopbackoff-001",
+          "error_class": "CrashLoopBackOff",
+          "distance": 0.2503
+        }
+      ],
+      "hit_at_1": true,
+      "hit_at_3": true
+    }
+  ]
+}

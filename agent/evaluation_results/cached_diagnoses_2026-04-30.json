@@ -1,0 +1,390 @@
+{
+  "crashloop-001_rag": {
+    "alert_id": "crashloop-001",
+    "mode": "rag",
+    "error": "Server disconnected without sending a response.",
+    "commands": [],
+    "actionable_commands": [],
+    "non_actionable_commands": [],
+    "actionability_rate": 0.0,
+    "confidence": 0.0
+  },
+  "crashloop-001_zero_shot": {
+    "alert_id": "crashloop-001",
+    "expected_runbook": "crashloopbackoff",
+    "mode": "zero_shot",
+    "commands": [
+      "kubectl exec -it postgres-0 -- journal-watches | grep 'limit range'",
+      "kubectl exec -it postgres-0 -- journal-watches | grep 'memory limit'"
+    ],
+    "actionable_commands": [
+      "kubectl exec -it postgres-0 -- journal-watches | grep 'limit range'",
+      "kubectl exec -it postgres-0 -- journal-watches | grep 'memory limit'"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.8,
+    "risk": "high",
+    "rag_sources_count": 0,
+    "duration_ms": 104660,
+    "diagnosis_text": "The database pod, postgres-0, in namespace production, is experiencing high resource usage, likely due to the database workload placing unbounded memory requests for the container, leading to excessive restarts and eventual CrashLoopBackOff state."
+  },
+  "crashloop-002_rag": {
+    "alert_id": "crashloop-002",
+    "expected_runbook": "crashloopbackoff",
+    "mode": "rag",
+    "commands": [
+      "kubectl describe pod -n api auth-service-7c9b4f-qwp3m",
+      "kubectl top pod -n api",
+      "kubectl logs --previous auth-service-7c9b4f-qwp3m --previous"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod -n api auth-service-7c9b4f-qwp3m",
+      "kubectl top pod -n api",
+      "kubectl logs --previous auth-service-7c9b4f-qwp3m --previous"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.8,
+    "risk": "high",
+    "rag_sources_count": 5,
+    "duration_ms": 210121,
+    "diagnosis_text": "The repeated crashes of the Auth service in the api namespace are likely due to a memory resource limit issue that is not being respected, causing frequent OOMKilled events."
+  },
+  "crashloop-002_zero_shot": {
+    "alert_id": "crashloop-002",
+    "expected_runbook": "crashloopbackoff",
+    "mode": "zero_shot",
+    "commands": [
+      "kubectl describe pod auth-service-7c9b4f-qwp3m -n api"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod auth-service-7c9b4f-qwp3m -n api"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.8,
+    "risk": "medium",
+    "rag_sources_count": 0,
+    "duration_ms": 38377,
+    "diagnosis_text": "The auth-service pod in the api namespace is continuously crashing due to resource constraints."
+  },
+  "crashloop-003_rag": {
+    "alert_id": "crashloop-003",
+    "expected_runbook": "crashloopbackoff",
+    "mode": "rag",
+    "commands": [
+      "kubectl describe pod -n monitoring monitoring-agent-ds-k8p2x",
+      "kubectl top pod -n monitoring",
+      "kubectl logs -n monitoring monitoring-agent-ds-k8p2x --previous"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod -n monitoring monitoring-agent-ds-k8p2x",
+      "kubectl top pod -n monitoring",
+      "kubectl logs -n monitoring monitoring-agent-ds-k8p2x --previous"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.75,
+    "risk": "high",
+    "rag_sources_count": 5,
+    "duration_ms": 211691,
+    "diagnosis_text": "The pod monitoring-agent-ds-k8p2x in the namespace monitoring is experiencing high memory usage and is crashing due to a misconfigured resource limit or excessive resource consumption."
+  },
+  "crashloop-003_zero_shot": {
+    "alert_id": "crashloop-003",
+    "expected_runbook": "crashloopbackoff",
+    "mode": "zero_shot",
+    "commands": [
+      "kubectl describe pod monitoring-agent-ds-k8p2x -n monitoring"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod monitoring-agent-ds-k8p2x -n monitoring"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.8,
+    "risk": "medium",
+    "rag_sources_count": 0,
+    "duration_ms": 33352,
+    "diagnosis_text": "The monitoring agent pod is experiencing a crash loop due to a misconfiguration in the ConfigMap or missing secret."
+  },
+  "imagepull-001_rag": {
+    "alert_id": "imagepull-001",
+    "expected_runbook": "imagepullbackoff",
+    "mode": "rag",
+    "commands": [
+      "kubectl describe pod frontend-8d7c4b-xnq2p -n production",
+      "kubectl top pod frontend-8d7c4b-xnq2p -n production",
+      "kubectl logs frontend-8d7c4b-xnq2p --previous -n production"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod frontend-8d7c4b-xnq2p -n production",
+      "kubectl top pod frontend-8d7c4b-xnq2p -n production",
+      "kubectl logs frontend-8d7c4b-xnq2p --previous -n production"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.85,
+    "risk": "high",
+    "rag_sources_count": 5,
+    "duration_ms": 215924,
+    "diagnosis_text": "The frontend pod frontend-8d7c4b-xnq2p is unable to pull the image due to an image not being found in the registry, causing an ImagePullBackOff."
+  },
+  "imagepull-001_zero_shot": {
+    "alert_id": "imagepull-001",
+    "expected_runbook": "imagepullbackoff",
+    "mode": "zero_shot",
+    "commands": [
+      "kubectl delete pod frontend-8d7c4b-xnq2p",
+      "kubectl create --from-image=myrepo/frontend frontend-8d7c4b-xnq2p"
+    ],
+    "actionable_commands": [
+      "kubectl delete pod frontend-8d7c4b-xnq2p",
+      "kubectl create --from-image=myrepo/frontend frontend-8d7c4b-xnq2p"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.9,
+    "risk": "low",
+    "rag_sources_count": 0,
+    "duration_ms": 39318,
+    "diagnosis_text": "The pod frontend-8d7c4b-xnq2p is experiencing an ImagePullBackOff due to the image myrepo/frontend:v2.5.1 not being found in the registry."
+  },
+  "imagepull-002_rag": {
+    "alert_id": "imagepull-002",
+    "expected_runbook": "imagepullbackoff",
+    "mode": "rag",
+    "commands": [
+      "kubectl describe pod -n jobs batch-job-4f8b2d-mpl7k",
+      "kubectl top pod -n jobs",
+      "kubectl logs -n jobs batch-job-4f8b2d-mpl7k --previous"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod -n jobs batch-job-4f8b2d-mpl7k",
+      "kubectl top pod -n jobs",
+      "kubectl logs -n jobs batch-job-4f8b2d-mpl7k --previous"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.9,
+    "risk": "high",
+    "rag_sources_count": 5,
+    "duration_ms": 215932,
+    "diagnosis_text": "The alert mentions that the job's pod 'batch-job-4f8b2d-mpl7k' in namespace 'jobs' is experiencing an image pull authentication issue, which can lead to a 'Container image pull authentication failed' error. This is not a direct Kubernetes issue but a network or registry issue, which is common with private registries or unconfigured Docker Hub rate limiting."
+  },
+  "imagepull-002_zero_shot": {
+    "alert_id": "imagepull-002",
+    "expected_runbook": "imagepullbackoff",
+    "mode": "zero_shot",
+    "commands": [],
+    "actionable_commands": [],
+    "non_actionable_commands": [],
+    "actionability_rate": 0.0,
+    "confidence": 0.0,
+    "risk": "high",
+    "rag_sources_count": 0,
+    "duration_ms": 65904,
+    "diagnosis_text": "Unable to determine root cause"
+  },
+  "oom-001_rag": {
+    "alert_id": "oom-001",
+    "expected_runbook": "oomkilled",
+    "mode": "rag",
+    "commands": [
+      "kubectl describe pod nginx-7d8b9f6d7-xkp2q -n production",
+      "kubectl top pod -n production",
+      "kubectl logs nginx-7d8b9f6d7-xkp2q --previous"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod nginx-7d8b9f6d7-xkp2q -n production",
+      "kubectl top pod -n production",
+      "kubectl logs nginx-7d8b9f6d7-xkp2q --previous"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.85,
+    "risk": "high",
+    "rag_sources_count": 5,
+    "duration_ms": 195277,
+    "diagnosis_text": "Insufficient memory limits in the deployment's pods are causing the containers to OOMKilled."
+  },
+  "oom-001_zero_shot": {
+    "alert_id": "oom-001",
+    "expected_runbook": "oomkilled",
+    "mode": "zero_shot",
+    "commands": [
+      "kubectl describe pod nginx-7d8b9f6d7-xkp2q"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod nginx-7d8b9f6d7-xkp2q"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.9,
+    "risk": "high",
+    "rag_sources_count": 0,
+    "duration_ms": 32255,
+    "diagnosis_text": "The pod nginx-7d8b9f6d7-xkp2q in namespace production has been OOM killed because of excessive memory usage."
+  },
+  "oom-002_rag": {
+    "alert_id": "oom-002",
+    "expected_runbook": "oomkilled",
+    "mode": "rag",
+    "commands": [
+      "kubectl describe pod redis-master-0 -n caching",
+      "kubectl top pod -n caching",
+      "kubectl logs redis-master-0 --previous"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod redis-master-0 -n caching",
+      "kubectl top pod -n caching",
+      "kubectl logs redis-master-0 --previous"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.9,
+    "risk": "high",
+    "rag_sources_count": 5,
+    "duration_ms": 183526,
+    "diagnosis_text": "Insufficient memory limits on the workload are causing frequent OOMKilled events in the Redis pod."
+  },
+  "oom-002_zero_shot": {
+    "alert_id": "oom-002",
+    "expected_runbook": "oomkilled",
+    "mode": "zero_shot",
+    "commands": [],
+    "actionable_commands": [],
+    "non_actionable_commands": [],
+    "actionability_rate": 0.0,
+    "confidence": 0.0,
+    "risk": "high",
+    "rag_sources_count": 0,
+    "duration_ms": 34328,
+    "diagnosis_text": "Unable to determine root cause"
+  },
+  "oom-003_rag": {
+    "alert_id": "oom-003",
+    "expected_runbook": "oomkilled",
+    "mode": "rag",
+    "commands": [
+      "kubectl describe pod app-backend-6c7f8d9-mzr4p -n staging",
+      "kubectl top pod -n staging",
+      "kubectl logs app-backend-6c7f8d9-mzr4p --previous"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod app-backend-6c7f8d9-mzr4p -n staging",
+      "kubectl top pod -n staging",
+      "kubectl logs app-backend-6c7f8d9-mzr4p --previous"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.9,
+    "risk": "high",
+    "rag_sources_count": 5,
+    "duration_ms": 201691,
+    "diagnosis_text": "The Kubernetes pod `app-backend-6c7f8d9-mzr4p` in namespace `staging` is OOM killed due to insufficient memory limits on resources.limits.memory."
+  },
+  "oom-003_zero_shot": {
+    "alert_id": "oom-003",
+    "expected_runbook": "oomkilled",
+    "mode": "zero_shot",
+    "commands": [
+      "kubectl resize namespace staging -c app-backend -m 512Mi"
+    ],
+    "actionable_commands": [
+      "kubectl resize namespace staging -c app-backend -m 512Mi"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.8,
+    "risk": "high",
+    "rag_sources_count": 0,
+    "duration_ms": 37653,
+    "diagnosis_text": "The backend pod `app-backend-6c7f8d9-mzr4p` in namespace `staging` has run out of memory, requiring OOMKilled due to the tight resource limit of 256Mi."
+  },
+  "oom-004_rag": {
+    "alert_id": "oom-004",
+    "expected_runbook": "oomkilled",
+    "mode": "rag",
+    "commands": [
+      "kubectl describe pod -n batch",
+      "kubectl top pod -n batch",
+      "kubectl logs -n batch --previous"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod -n batch",
+      "kubectl top pod -n batch",
+      "kubectl logs -n batch --previous"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.9,
+    "risk": "high",
+    "rag_sources_count": 5,
+    "duration_ms": 186712,
+    "diagnosis_text": "The memory limit for the pods in the batch namespace is too low to accommodate the workload, leading to frequent container OOMKilled events."
+  },
+  "oom-004_zero_shot": {
+    "alert_id": "oom-004",
+    "expected_runbook": "oomkilled",
+    "mode": "zero_shot",
+    "commands": [
+      "kubectl -n batch get pod data-worker-8b9f4c-lqx7n",
+      "kubectl -n batch describe pod data-worker-8b9f4c-lqx7n"
+    ],
+    "actionable_commands": [
+      "kubectl -n batch get pod data-worker-8b9f4c-lqx7n",
+      "kubectl -n batch describe pod data-worker-8b9f4c-lqx7n"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.5,
+    "risk": "medium",
+    "rag_sources_count": 0,
+    "duration_ms": 41603,
+    "diagnosis_text": "Memory leak in the batch processing loop is suspected, leading to OOMKilled of the data-worker container."
+  },
+  "oom-005_rag": {
+    "alert_id": "oom-005",
+    "expected_runbook": "oomkilled",
+    "mode": "rag",
+    "commands": [
+      "kubectl describe pod api-gateway-5f4d7b-rnk9s -n api",
+      "kubectl top pod -n api",
+      "kubectl logs api-gateway-5f4d7b-rnk9s --previous"
+    ],
+    "actionable_commands": [
+      "kubectl describe pod api-gateway-5f4d7b-rnk9s -n api",
+      "kubectl top pod -n api",
+      "kubectl logs api-gateway-5f4d7b-rnk9s --previous"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.85,
+    "risk": "high",
+    "rag_sources_count": 5,
+    "duration_ms": 200860,
+    "diagnosis_text": "Insufficient memory limits are configured for the workload causing frequent container OOMKilled events."
+  },
+  "oom-005_zero_shot": {
+    "alert_id": "oom-005",
+    "expected_runbook": "oomkilled",
+    "mode": "zero_shot",
+    "commands": [
+      "kubectl resize deployment api",
+      "kubectl set resource deployment api --requests-memory=512Mi --liveness-pod-period=3s"
+    ],
+    "actionable_commands": [
+      "kubectl resize deployment api",
+      "kubectl set resource deployment api --requests-memory=512Mi --liveness-pod-period=3s"
+    ],
+    "non_actionable_commands": [],
+    "actionability_rate": 1.0,
+    "confidence": 0.8,
+    "risk": "medium",
+    "rag_sources_count": 0,
+    "duration_ms": 30628,
+    "diagnosis_text": "The API gateway pod terminated due to memory exhaustion after a sudden request spike."
+  }
+}

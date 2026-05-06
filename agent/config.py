@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     remediation_dry_run: bool = True          # False = ejecución real via kubectl
     remediation_command_timeout: int = 30     # segundos por comando
 
+    # Human escalation callback URL (Fase 3 — botones interactivos Mattermost)
+    # URL base del agente accesible desde Mattermost (intra-cluster FQDN)
+    agent_callback_url: str = "http://agent-svc.arturo-llm-test.svc.cluster.local:8000"
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

@@ -6,12 +6,13 @@ Todos los tests usan mocks de Ollama (no requieren cluster ni LLM).
 """
 
 import json
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx as _httpx
 import pytest
 
-from main import app, _format_diagnosis_message
+from main import app, _format_diagnosis_message, PENDING_ESCALATIONS, PendingEscalation
 from schemas import AlertItem
 from tests.helpers import (
     VALID_PARAMS, VALID_JSON_STR,
@@ -637,3 +638,108 @@ class TestMetricsEndpoint:
         r = api_client.get("/metrics")
         assert r.status_code == 200
         assert "http_request" in r.text
+
+
+# ── POST /webhook/action ──────────────────────────────────────────────────────
+
+def _make_pending_escalation(incident_id: str, ttl_minutes: int = 60) -> PendingEscalation:
+    alert = AlertItem(
+        status="firing",
+        labels={"alertname": "KubePodOOMKilled", "pod": "engine-0", "namespace": "prod", "severity": "critical"},
+        annotations={"description": "Pod OOMKilled"},
+        startsAt="2026-05-06T10:00:00Z",
+    )
+    return PendingEscalation(
+        incident_id=incident_id,
+        alert_item=alert,
+        diagnosis=mock_diagnosis_result(),
+        safe_commands=["kubectl describe pod engine-0 -n prod"],
+        expires_at=datetime.now() + timedelta(minutes=ttl_minutes),
+    )
+
+
+class TestActionCallbackEndpoint:
+    """POST /webhook/action — callbacks de botones interactivos de Mattermost."""
+
+    def setup_method(self):
+        PENDING_ESCALATIONS.clear()
+
+    def teardown_method(self):
+        PENDING_ESCALATIONS.clear()
+
+    def test_approve_executes_commands_and_returns_update(self, api_client):
+        """Approve → execute_commands llamado, respuesta con 'update' que limpia botones."""
+        PENDING_ESCALATIONS["abc-123"] = _make_pending_escalation("abc-123")
+
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value="[DRY-RUN] kubectl describe") as mock_exec, \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve", "incident_id": "abc-123"},
+            })
+
+        assert r.status_code == 200
+        body = r.json()
+        assert "update" in body
+        assert body["update"]["props"]["attachments"] == []
+        assert "arturo" in body["update"]["message"]
+        mock_exec.assert_called_once_with(["kubectl describe pod engine-0 -n prod"])
+        assert "abc-123" not in PENDING_ESCALATIONS
+
+    def test_reject_does_not_execute_commands(self, api_client):
+        """Reject → execute_commands NO llamado, mensaje de rechazo en update."""
+        PENDING_ESCALATIONS["abc-456"] = _make_pending_escalation("abc-456")
+
+        with patch("main.execute_commands", new_callable=AsyncMock) as mock_exec, \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "reject", "incident_id": "abc-456"},
+            })
+
+        assert r.status_code == 200
+        body = r.json()
+        assert "update" in body
+        assert "rechazada" in body["update"]["message"]
+        assert "arturo" in body["update"]["message"]
+        mock_exec.assert_not_called()
+        assert "abc-456" not in PENDING_ESCALATIONS
+
+    def test_unknown_incident_id_returns_ephemeral_text(self, api_client):
+        """incident_id no encontrado → ephemeral_text informativo, sin error."""
+        r = api_client.post("/webhook/action", json={
+            "context": {"action": "approve", "incident_id": "no-existe"},
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert "ephemeral_text" in body
+        assert "update" not in body
+
+    def test_expired_escalation_returns_ephemeral_text(self, api_client):
+        """Escalación con TTL expirado → ephemeral_text, execute_commands no llamado."""
+        PENDING_ESCALATIONS["old-xyz"] = _make_pending_escalation("old-xyz", ttl_minutes=-1)
+
+        with patch("main.execute_commands", new_callable=AsyncMock) as mock_exec:
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "approve", "incident_id": "old-xyz"},
+            })
+
+        assert r.status_code == 200
+        body = r.json()
+        assert "ephemeral_text" in body
+        mock_exec.assert_not_called()
+
+    def test_approve_persists_outcome_to_chromadb(self, api_client):
+        """Approve → ingest_incident llamado con outcome correspondiente."""
+        PENDING_ESCALATIONS["cb-789"] = _make_pending_escalation("cb-789")
+
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value="[DRY-RUN] done"), \
+             patch("main.ingest_incident", new_callable=AsyncMock) as mock_ingest:
+            api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve", "incident_id": "cb-789"},
+            })
+
+        mock_ingest.assert_called_once()
+        _, kwargs = mock_ingest.call_args
+        assert kwargs["metadata"]["outcome"] == "auto_remediate"

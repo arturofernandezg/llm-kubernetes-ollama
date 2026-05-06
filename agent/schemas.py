@@ -77,3 +77,21 @@ class ExtractResponse(BaseModel):
     model_used:           str
     extraction_method:    str | None
     duration_ms:          int
+
+
+# ── Human Escalation Schemas (Fase 3 — botones interactivos) ─────────────────
+
+class ActionCallbackContext(BaseModel):
+    """Contexto embebido en cada botón de acción de Mattermost."""
+    action: str       # "approve" | "reject"
+    incident_id: str  # UUID que referencia PENDING_ESCALATIONS en main.py
+
+
+class MattermostActionPayload(BaseModel):
+    """Payload que envía Mattermost cuando el usuario hace clic en un botón."""
+    user_id: str | None = None
+    user_name: str | None = None
+    channel_id: str | None = None
+    post_id: str | None = None
+    type: str | None = None
+    context: ActionCallbackContext

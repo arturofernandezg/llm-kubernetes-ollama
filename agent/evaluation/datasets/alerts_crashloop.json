@@ -1,0 +1,83 @@
+[
+  {
+    "id": "crashloop-001",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [{
+        "status": "firing",
+        "labels": {
+          "alertname": "KubePodCrashLoopBackOff",
+          "pod": "postgres-0",
+          "namespace": "production",
+          "severity": "critical",
+          "container": "postgres"
+        },
+        "annotations": {
+          "description": "Container postgres in pod postgres-0 is in CrashLoopBackOff state. Pod has restarted 8 times in the last 10 minutes.",
+          "summary": "Database pod in CrashLoopBackOff"
+        },
+        "startsAt": "2026-04-30T11:00:00Z",
+        "endsAt": "0001-01-01T00:00:00Z"
+      }],
+      "groupLabels": {"alertname": "KubePodCrashLoopBackOff"},
+      "commonLabels": {"alertname": "KubePodCrashLoopBackOff", "severity": "critical"},
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "crashloopbackoff"
+  },
+  {
+    "id": "crashloop-002",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [{
+        "status": "firing",
+        "labels": {
+          "alertname": "KubePodCrashLoopBackOff",
+          "pod": "auth-service-7c9b4f-qwp3m",
+          "namespace": "api",
+          "severity": "critical",
+          "container": "auth-service"
+        },
+        "annotations": {
+          "description": "Container auth-service is back-off restarting (CrashLoopBackOff). Exit code 1. Check application logs for configuration errors.",
+          "summary": "Auth service repeatedly crashing in api namespace"
+        },
+        "startsAt": "2026-04-30T11:05:00Z",
+        "endsAt": "0001-01-01T00:00:00Z"
+      }],
+      "groupLabels": {"alertname": "KubePodCrashLoopBackOff"},
+      "commonLabels": {"alertname": "KubePodCrashLoopBackOff", "severity": "critical"},
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "crashloopbackoff"
+  },
+  {
+    "id": "crashloop-003",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [{
+        "status": "firing",
+        "labels": {
+          "alertname": "KubePodCrashLoopBackOff",
+          "pod": "monitoring-agent-ds-k8p2x",
+          "namespace": "monitoring",
+          "severity": "warning",
+          "container": "monitoring-agent"
+        },
+        "annotations": {
+          "description": "Container monitoring-agent in DaemonSet pod is crash-looping. Likely misconfigured ConfigMap or missing secret. Restart count: 12.",
+          "summary": "Monitoring agent DaemonSet pod in CrashLoopBackOff"
+        },
+        "startsAt": "2026-04-30T11:10:00Z",
+        "endsAt": "0001-01-01T00:00:00Z"
+      }],
+      "groupLabels": {"alertname": "KubePodCrashLoopBackOff"},
+      "commonLabels": {"alertname": "KubePodCrashLoopBackOff", "severity": "warning"},
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "crashloopbackoff"
+  }
+]

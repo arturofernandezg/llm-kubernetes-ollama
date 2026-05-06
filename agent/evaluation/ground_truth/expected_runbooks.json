@@ -1,0 +1,12 @@
+{
+  "oom-001": "oomkilled",
+  "oom-002": "oomkilled",
+  "oom-003": "oomkilled",
+  "oom-004": "oomkilled",
+  "oom-005": "oomkilled",
+  "crashloop-001": "crashloopbackoff",
+  "crashloop-002": "crashloopbackoff",
+  "crashloop-003": "crashloopbackoff",
+  "imagepull-001": "imagepullbackoff",
+  "imagepull-002": "imagepullbackoff"
+}

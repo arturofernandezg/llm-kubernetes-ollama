@@ -1,0 +1,137 @@
+[
+  {
+    "id": "oom-001",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [{
+        "status": "firing",
+        "labels": {
+          "alertname": "KubePodOOMKilled",
+          "pod": "nginx-7d8b9f6d7-xkp2q",
+          "namespace": "production",
+          "severity": "critical",
+          "container": "nginx"
+        },
+        "annotations": {
+          "description": "Container nginx in pod nginx-7d8b9f6d7-xkp2q was OOMKilled in namespace production",
+          "summary": "Container OOM killed"
+        },
+        "startsAt": "2026-04-30T10:00:00Z",
+        "endsAt": "0001-01-01T00:00:00Z"
+      }],
+      "groupLabels": {"alertname": "KubePodOOMKilled"},
+      "commonLabels": {"alertname": "KubePodOOMKilled", "severity": "critical"},
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "oomkilled"
+  },
+  {
+    "id": "oom-002",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [{
+        "status": "firing",
+        "labels": {
+          "alertname": "KubePodOOMKilled",
+          "pod": "redis-master-0",
+          "namespace": "caching",
+          "severity": "critical",
+          "container": "redis"
+        },
+        "annotations": {
+          "description": "Container redis in pod redis-master-0 was OOMKilled. Memory limit exceeded due to high traffic spike.",
+          "summary": "Redis pod killed by OOM killer in caching namespace"
+        },
+        "startsAt": "2026-04-30T10:05:00Z",
+        "endsAt": "0001-01-01T00:00:00Z"
+      }],
+      "groupLabels": {"alertname": "KubePodOOMKilled"},
+      "commonLabels": {"alertname": "KubePodOOMKilled", "severity": "critical"},
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "oomkilled"
+  },
+  {
+    "id": "oom-003",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [{
+        "status": "firing",
+        "labels": {
+          "alertname": "KubePodOOMKilled",
+          "pod": "app-backend-6c7f8d9-mzr4p",
+          "namespace": "staging",
+          "severity": "critical",
+          "container": "app-backend"
+        },
+        "annotations": {
+          "description": "Container app-backend in pod app-backend-6c7f8d9-mzr4p terminated with OOMKilled. Memory limit 256Mi is too low for current workload.",
+          "summary": "Backend pod OOM killed in staging"
+        },
+        "startsAt": "2026-04-30T10:10:00Z",
+        "endsAt": "0001-01-01T00:00:00Z"
+      }],
+      "groupLabels": {"alertname": "KubePodOOMKilled"},
+      "commonLabels": {"alertname": "KubePodOOMKilled", "severity": "critical"},
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "oomkilled"
+  },
+  {
+    "id": "oom-004",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [{
+        "status": "firing",
+        "labels": {
+          "alertname": "KubePodOOMKilled",
+          "pod": "data-worker-8b9f4c-lqx7n",
+          "namespace": "batch",
+          "severity": "warning",
+          "container": "data-worker"
+        },
+        "annotations": {
+          "description": "Container data-worker in pod data-worker-8b9f4c-lqx7n was OOMKilled. Suspected memory leak in batch processing loop.",
+          "summary": "Batch worker pod killed by OOM killer"
+        },
+        "startsAt": "2026-04-30T10:15:00Z",
+        "endsAt": "0001-01-01T00:00:00Z"
+      }],
+      "groupLabels": {"alertname": "KubePodOOMKilled"},
+      "commonLabels": {"alertname": "KubePodOOMKilled", "severity": "warning"},
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "oomkilled"
+  },
+  {
+    "id": "oom-005",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [{
+        "status": "firing",
+        "labels": {
+          "alertname": "KubePodOOMKilled",
+          "pod": "api-gateway-5f4d7b-rnk9s",
+          "namespace": "api",
+          "severity": "critical",
+          "container": "api-gateway"
+        },
+        "annotations": {
+          "description": "Container api-gateway terminated with reason OOMKilled. Current memory limit is 512Mi. Sudden request spike caused heap exhaustion.",
+          "summary": "API gateway pod terminated: out of memory"
+        },
+        "startsAt": "2026-04-30T10:20:00Z",
+        "endsAt": "0001-01-01T00:00:00Z"
+      }],
+      "groupLabels": {"alertname": "KubePodOOMKilled"},
+      "commonLabels": {"alertname": "KubePodOOMKilled", "severity": "critical"},
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "oomkilled"
+  }
+]

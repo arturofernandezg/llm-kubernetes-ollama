@@ -7,6 +7,8 @@ natural, usando un LLM local (Ollama) como motor de inferencia.
 
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import RedirectResponse
@@ -21,16 +23,17 @@ from config import settings, logger
 from schemas import (
     InfraRequest, ExtractedParams, ExtractResponse,
     AlertmanagerPayload, AlertItem,
+    MattermostActionPayload, ActionCallbackContext,
 )
 from extraction import PROMPT_TEMPLATE, extract_json
 from validation import validate_params
-from mattermost import send_mattermost_alert
+from mattermost import send_mattermost_alert, send_escalation_with_buttons
 from rag import (
     build_rag_query, retrieve_context, get_chroma_client, ensure_collections,
     build_incident_document, ingest_incident,
 )
 from diagnosis import generate_diagnosis
-from remediation import process_remediation, RemediationAction
+from remediation import process_remediation, execute_commands, RemediationAction
 
 # ── Métricas Prometheus ──────────────────────────────────────────────────────
 RETRY_COUNTER = Counter(
@@ -58,6 +61,32 @@ FEEDBACK_COUNTER = Counter(
     "Incident persistence attempts",
     ["outcome"],  # "persisted" | "skipped" | "failed"
 )
+
+
+# ── Human Escalation State ────────────────────────────────────────────────────
+
+ESCALATION_TTL_MINUTES = 60
+
+
+@dataclass
+class PendingEscalation:
+    incident_id: str
+    alert_item: AlertItem
+    diagnosis: dict
+    safe_commands: list[str]
+    expires_at: datetime
+
+
+PENDING_ESCALATIONS: dict[str, PendingEscalation] = {}
+
+
+def _cleanup_expired_escalations() -> None:
+    """Elimina escalaciones expiradas del dict en memoria."""
+    now = datetime.now()
+    expired = [k for k, v in PENDING_ESCALATIONS.items() if v.expires_at < now]
+    for k in expired:
+        logger.info("Expiring pending escalation %s", k)
+        del PENDING_ESCALATIONS[k]
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -243,6 +272,36 @@ def _format_diagnosis_message(
     return "\n".join(parts)
 
 
+def _format_escalation_header(alert: AlertItem) -> str:
+    """Línea de título para el mensaje de escalación con botones."""
+    alert_name = alert.labels.get("alertname", "UnknownAlert")
+    pod = alert.labels.get("pod", "unknown-pod")
+    namespace = alert.labels.get("namespace", "unknown-ns")
+    severity = alert.labels.get("severity", "critical").upper()
+    return f"⚠️ **[{severity}] ESCALATION REQUIRED — {alert_name}** | Pod: `{pod}` | NS: `{namespace}`"
+
+
+def _format_escalation_body(diagnosis: dict, remediation: dict) -> str:
+    """Cuerpo del attachment (sin botones) para el mensaje de escalación."""
+    confidence_pct = int(diagnosis["confidence"] * 100)
+    risk = diagnosis["risk"].upper()
+
+    parts = [
+        f"**Diagnóstico:** {diagnosis['diagnosis']}",
+        f"**Risk:** {risk} | **Confidence:** {confidence_pct}%",
+    ]
+
+    safe_cmds = remediation.get("safe_commands", [])
+    if safe_cmds:
+        cmds_str = "\n".join(safe_cmds)
+        parts.append(f"**Comandos propuestos (requieren aprobación):**\n```\n{cmds_str}\n```")
+
+    if diagnosis.get("explanation"):
+        parts.append(f"> {diagnosis['explanation']}")
+
+    return "\n".join(parts)
+
+
 async def _process_alert_with_diagnosis(
     alert: AlertItem,
     http_client: httpx.AsyncClient,
@@ -302,8 +361,35 @@ async def _process_alert_with_diagnosis(
         else:
             FEEDBACK_COUNTER.labels(outcome="skipped").inc()
 
-        msg = _format_diagnosis_message(alert, diagnosis, remediation_result)
-        await send_mattermost_alert(msg)
+        # Escalations with approvable commands → send with interactive buttons
+        if (
+            remediation_result is not None
+            and remediation_result["action"] == RemediationAction.ESCALATE
+            and remediation_result.get("safe_commands")
+        ):
+            incident_id = str(uuid.uuid4())
+            _cleanup_expired_escalations()
+            PENDING_ESCALATIONS[incident_id] = PendingEscalation(
+                incident_id=incident_id,
+                alert_item=alert,
+                diagnosis=diagnosis,
+                safe_commands=remediation_result["safe_commands"],
+                expires_at=datetime.now() + timedelta(minutes=ESCALATION_TTL_MINUTES),
+            )
+            logger.info(
+                "Stored pending escalation %s for %s (%d commands)",
+                incident_id, alert_name, len(remediation_result["safe_commands"]),
+            )
+            await send_escalation_with_buttons(
+                header=_format_escalation_header(alert),
+                attachment_text=_format_escalation_body(diagnosis, remediation_result),
+                safe_commands=remediation_result["safe_commands"],
+                incident_id=incident_id,
+                callback_base_url=settings.agent_callback_url,
+            )
+        else:
+            msg = _format_diagnosis_message(alert, diagnosis, remediation_result)
+            await send_mattermost_alert(msg)
 
     except Exception as exc:
         # Last resort: send raw alert
@@ -367,6 +453,86 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
         "status": "success",
         "alerts_processed": len(payload.alerts),
         "message": "Payload ingested and queued for RAG processing"
+    }
+
+
+@app.post(
+    "/webhook/action",
+    summary="Recibe callbacks de botones interactivos de Mattermost (escalaciones)",
+)
+async def handle_action_callback(payload: MattermostActionPayload) -> dict:
+    """
+    Procesa la decisión del operador sobre una escalación pendiente.
+    Mattermost llama a este endpoint cuando el usuario hace clic en Aprobar o Rechazar.
+    La respuesta JSON actualiza el mensaje original y limpia los botones.
+    """
+    incident = PENDING_ESCALATIONS.pop(payload.context.incident_id, None)
+
+    if incident is None:
+        logger.warning("Unknown or expired incident_id in callback: %s", payload.context.incident_id)
+        return {"ephemeral_text": "Escalación no encontrada o expirada. No se tomó ninguna acción."}
+
+    if datetime.now() > incident.expires_at:
+        logger.warning("Escalation %s expired (TTL %dm)", incident.incident_id, ESCALATION_TTL_MINUTES)
+        return {"ephemeral_text": "Escalación expirada. Por favor, espera una nueva alerta."}
+
+    user = payload.user_name or "human"
+    action = payload.context.action
+
+    if action == "approve":
+        try:
+            log = await execute_commands(incident.safe_commands)
+        except Exception as exc:
+            logger.error("Command execution failed for incident %s: %s", incident.incident_id, exc)
+            log = f"ERROR: {exc}"
+        REMEDIATION_COUNTER.labels(action="human_approved").inc()
+        update_msg = f"✅ Remediación ejecutada por @{user}\n```\n{log}\n```"
+        remediation_for_feedback = {
+            "action": RemediationAction.AUTO_REMEDIATE,
+            "execution_log": log,
+            "safe_commands": incident.safe_commands,
+            "blocked_commands": [],
+        }
+        logger.info("Human approved remediation for incident %s", incident.incident_id)
+    else:
+        REMEDIATION_COUNTER.labels(action="human_rejected").inc()
+        update_msg = f"❌ Remediación rechazada por @{user}"
+        remediation_for_feedback = {
+            "action": RemediationAction.ESCALATE,
+            "execution_log": "",
+            "safe_commands": incident.safe_commands,
+            "blocked_commands": [],
+        }
+        logger.info(
+            "Human rejected remediation for incident %s (action=%s)",
+            incident.incident_id, action,
+        )
+
+    # Persist final human decision to ChromaDB (fail-open)
+    try:
+        alert_data = {
+            "labels": incident.alert_item.labels,
+            "annotations": incident.alert_item.annotations,
+        }
+        doc_id, text, metadata = build_incident_document(
+            alert_data, incident.diagnosis, remediation_for_feedback,
+        )
+        await ingest_incident(
+            doc_id=doc_id, text=text, metadata=metadata,
+            http_client=app.state.http_client,
+            chroma_client=app.state.chroma_client,
+        )
+        FEEDBACK_COUNTER.labels(outcome="persisted").inc()
+    except Exception as exc:
+        logger.warning("Failed to persist human decision for %s: %s", incident.incident_id, exc)
+        FEEDBACK_COUNTER.labels(outcome="failed").inc()
+
+    # Response updates original Mattermost message and clears action buttons
+    return {
+        "update": {
+            "message": update_msg,
+            "props": {"attachments": []},
+        }
     }
 
 

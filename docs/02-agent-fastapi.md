@@ -29,6 +29,7 @@ Versión actual: 0.5.0
 | GET | `/healthz` | Liveness probe. Siempre 200. | Ninguna | 0 |
 | GET | `/readyz` | Readiness probe. 200 si Ollama + modelo OK. | Ollama | 0 |
 | POST | `/webhook/alert` | Ingesta alertas Alertmanager → normaliza → RAG → diagnóstico → Mattermost | Ollama, ChromaDB, Mattermost | 1-3 |
+| POST | `/webhook/action` | Callback de botones interactivos Mattermost (Aprobar/Rechazar escalaciones) | ChromaDB, Mattermost | 3 |
 | POST | `/extract` | **(Legado)** Extracción de parámetros desde texto a JSON. | Ollama | 0 |
 | GET | `/metrics` | Métricas Prometheus (auto-instrumentado + contadores custom). | Ninguna | 0 |
 
@@ -46,11 +47,41 @@ Versión actual: 0.5.0
 7. LLM genera `{ diagnosis, commands[], confidence, risk, explanation }`.
 8. Envía a Mattermost: mensaje enriquecido con diagnóstico, comandos sugeridos, risk level.
 
-**Fase 3 (planificado)**:
+**Fase 3 (implementado)**:
 9. Validation layer evalúa commands contra whitelist/blacklist.
-10. Si `risk == "low"` Y `confidence >= 0.8` Y cambio `< 25%` → auto-patch via K8s API.
-11. Si no → mensaje a Mattermost con botones `[Aprobar]` / `[Rechazar]`.
-12. Resultado (success/failure/rejected) se persiste en colección `incidents` de ChromaDB.
+10. Motor de decisión (9 reglas): `AUTO_REMEDIATE` | `ESCALATE` | `SUGGEST_ONLY`.
+11. Si `ESCALATE` con `safe_commands` no vacío → mensaje Mattermost con botones `[✅ Ejecutar]` / `[❌ Rechazar]` (via `send_escalation_with_buttons`). El `incident_id` se guarda en `PENDING_ESCALATIONS` (in-memory, TTL 60 min).
+12. Si `AUTO_REMEDIATE` → ejecuta kubectl directamente (respeta `REMEDIATION_DRY_RUN`).
+13. Resultado (aprobado/rechazado/auto) se persiste en colección `incidents` de ChromaDB.
+
+### /webhook/action — Callback de botones
+
+Mattermost POST cuando el operador pulsa un botón de acción:
+
+```json
+{
+  "user_name": "arturo",
+  "context": {"action": "approve", "incident_id": "<uuid>"}
+}
+```
+
+| Campo `action` | Comportamiento | Métrica |
+|---|---|---|
+| `"approve"` | Llama `execute_commands(safe_commands)`, persiste en ChromaDB | `human_approved` |
+| `"reject"` | Persiste decisión, no ejecuta comandos | `human_rejected` |
+
+Respuesta JSON que Mattermost usa para actualizar el mensaje original y eliminar los botones:
+
+```json
+{
+  "update": {
+    "message": "✅ Remediación ejecutada por @arturo\n```\n[DRY-RUN]...\n```",
+    "props": {"attachments": []}
+  }
+}
+```
+
+Si el `incident_id` no existe (desconocido o expirado tras 60 min) → responde con `ephemeral_text` visible solo al operador, sin ejecutar nada.
 
 ## Flujo de /extract
 

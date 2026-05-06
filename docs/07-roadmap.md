@@ -178,6 +178,12 @@ en Mattermost.
   - `REMEDIATION_DRY_RUN=true` sigue activo — paso a real requiere acuerdo con tutor.
   - Pendiente confirmar con tutor: ¿excepciones a regla 4.5? (in-place resize k8s 1.27+, rolling update en HA...).
 - [x] **E2E cluster verificado (2026-04-24, imagen c3b0975)**: regla 4.5 (`set_resources_triggers_rollout`) y regla 4.6 (`memory_exceeds_2x`, `auto_remediate` en límite 2×, `unparseable_memory`) confirmados via `kubectl exec` sobre binario desplegado. Webhook E2E: escalate → Mattermost → ChromaDB persistence.
+- ✅ **Evaluación inicial (2026-04-30)** — COMPLETA:
+  - ✅ Módulo `agent/evaluation/` + dataset 10 alertas + 3 scripts offline. 15 tests pasando.
+  - ✅ `eval_retrieval`: **precision@1=60% (6/10), precision@3=80% (8/10)**. `evaluation_results/retrieval_2026-04-30.json`.
+  - ✅ `eval_actionability`: **RAG 100% (27/27 cmds), avg_confidence=0.86**; zero_shot 100% (12/12 cmds), avg_confidence=0.63. `evaluation_results/actionability_2026-04-30.json`.
+  - ✅ `eval_safety`: **RAG 100% SAFE (27/27)**; zero_shot 25% SAFE + 67% UNKNOWN (alucinaciones) + 8.3% BLOCKED (true positive: `kubectl delete`). `evaluation_results/safety_2026-04-30.json`.
+  - ✅ `docs/10-evaluation.md` — tabla completa + análisis de casos límite. Listo para memoria TFM.
 
 ### Feedback Loop (Memoria Semántica)
 - [x] Tras cada remediación (aprobada o rechazada), persistir el incidente completo
@@ -188,8 +194,13 @@ en Mattermost.
   aplicar el fix. Si cesa → `outcome: resolved`. Si persiste → `outcome: failed`, escalar.
 
 ### Botones interactivos (Mattermost)
-- [ ] Mensajes con acciones: `[Aprobar Remediación]` / `[Rechazar]` / `[Escalar]`.
-- [ ] Endpoint callback para recibir la decisión del humano y ejecutar/abortar.
+- [x] Mensajes con acciones: `[✅ Ejecutar remediación]` / `[❌ Rechazar]` (2026-05-06).
+- [x] Endpoint `POST /webhook/action` — callback que recibe decisión del humano, ejecuta/aborta, persiste outcome en ChromaDB y actualiza el mensaje original limpiando los botones.
+  - Estado en memoria `PENDING_ESCALATIONS` (dict con TTL 60 min, sin deps nuevas).
+  - Solo `safe_commands` (no blacklist) son aprobables por el humano.
+  - Contadores Prometheus: `human_approved` + `human_rejected`.
+  - NetworkPolicy: Mattermost → agent puerto 8000 añadida.
+  - Env var `AGENT_CALLBACK_URL` en deployment para configurar URL de callback.
 
 ### Entregable Fase 3
 Sistema autónomo: el agente auto-parchea OOMs simples, escala a humano los casos complejos,

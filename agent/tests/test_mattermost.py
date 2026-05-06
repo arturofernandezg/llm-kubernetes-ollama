@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import httpx
 
-from mattermost import send_mattermost_alert, MATTERMOST_MAX_RETRIES
+from mattermost import send_mattermost_alert, send_escalation_with_buttons, MATTERMOST_MAX_RETRIES
 from config import settings
 
 FAKE_URL = "http://mattermost/hooks/fake-url"
@@ -152,3 +152,70 @@ class TestMattermostClient:
 
         _, kwargs = mock_client.post.call_args
         assert "channel" not in kwargs["json"]
+
+
+class TestSendEscalationWithButtons:
+
+    @pytest.mark.asyncio
+    @patch("mattermost.MATTERMOST_BASE_DELAY", 0.0)
+    async def test_sends_attachments_with_two_actions(self):
+        """Payload tiene attachments[0].actions con Aprobar y Rechazar, URLs correctas."""
+        settings.mattermost_webhook_url = FAKE_URL
+        mock_client = make_mock_client([make_ok_response()])
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await send_escalation_with_buttons(
+                header="escalation header",
+                attachment_text="Diagnosis text",
+                safe_commands=["kubectl describe pod nginx -n prod"],
+                incident_id="test-uuid-123",
+                callback_base_url="http://agent-svc:8000",
+            )
+
+        assert result is True
+        _, kwargs = mock_client.post.call_args
+        payload = kwargs["json"]
+        assert payload["text"] == "escalation header"
+        attachments = payload["attachments"]
+        assert len(attachments) == 1
+        actions = attachments[0]["actions"]
+        assert len(actions) == 2
+        assert actions[0]["id"] == "approve"
+        assert actions[1]["id"] == "reject"
+        assert actions[0]["integration"]["url"] == "http://agent-svc:8000/webhook/action"
+        assert actions[0]["integration"]["context"]["incident_id"] == "test-uuid-123"
+        assert actions[0]["integration"]["context"]["action"] == "approve"
+
+    @pytest.mark.asyncio
+    async def test_fails_silently_if_missing_webhook_url(self):
+        """Sin URL configurada → False sin lanzar excepción (fail-open)."""
+        settings.mattermost_webhook_url = None
+        result = await send_escalation_with_buttons(
+            header="header",
+            attachment_text="body",
+            safe_commands=["kubectl get pods"],
+            incident_id="uuid",
+            callback_base_url="http://agent:8000",
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    @patch("mattermost.MATTERMOST_BASE_DELAY", 0.0)
+    async def test_retry_on_5xx(self):
+        """5xx en todos los intentos → False tras MAX_RETRIES intentos."""
+        settings.mattermost_webhook_url = FAKE_URL
+        mock_client = make_mock_client(
+            [make_error_response(503)] * MATTERMOST_MAX_RETRIES
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await send_escalation_with_buttons(
+                header="header",
+                attachment_text="body",
+                safe_commands=["kubectl get pods"],
+                incident_id="uuid",
+                callback_base_url="http://agent:8000",
+            )
+
+        assert result is False
+        assert mock_client.post.call_count == MATTERMOST_MAX_RETRIES

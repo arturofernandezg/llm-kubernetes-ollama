@@ -77,6 +77,8 @@ spec:
             secretKeyRef:
               name: mattermost-webhook
               key: url
+        - name: AGENT_CALLBACK_URL
+          value: "http://agent-svc.arturo-llm-test.svc.cluster.local:8000"
       volumes:
       - name: tmp
         emptyDir: {}
