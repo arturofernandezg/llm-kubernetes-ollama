@@ -113,11 +113,12 @@ Formato: tabla markdown. Total bajo 500 palabras. Sin generalidades — solo fin
 |---|---|---|---|
 | #1 | Fixes high (cross-module) | remediation.py + main.py | DONE (2026-05-11) |
 | #2 | remediation.py medium/low | agent/remediation.py | DONE (2026-05-11) |
-| #3 | main.py medium/low | agent/main.py | TODO |
-| #4 | mattermost.py | agent/mattermost.py | TODO |
-| #5 | Cross-cutting (helpers, retry, logger) | varios | TODO |
-| #6 | k8s/ (nodeSelector guaranteed, tolerations) | k8s/*.yaml | TODO |
-| #7 | Docs sync (roadmap + CLAUDE.md, cierre Fase 3) | docs/07-roadmap.md | TODO |
+| #3 | main.py medium/low | agent/main.py | DONE (2026-05-11) — M1-M9 |
+| #4 | mattermost.py | agent/mattermost.py | DONE (2026-05-11) — MM1-MM9 |
+| #5 | Cross-cutting (helpers, retry, logger) | varios | DONE (2026-05-11) — R7, R8, X1, X3 |
+| #6 | Security (HMAC callback auth) | main.py, mattermost.py, schemas.py, config.py | DONE (2026-05-11) — X5 |
+| #7 | k8s/ (nodeSelector guaranteed, tolerations) | k8s/*.yaml | TODO |
+| #8 | Docs sync (roadmap + CLAUDE.md, cierre Fase 3) | docs/07-roadmap.md | TODO |
 
 ---
 

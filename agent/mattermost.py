@@ -4,6 +4,8 @@ Envía notificaciones no bloqueantes usando httpx y reintentos (Exponential Back
 Diseñado para ser invocado como FastAPI BackgroundTask.
 """
 
+import hashlib
+import hmac as _hmac
 import httpx
 import asyncio
 from typing import Any
@@ -17,6 +19,13 @@ _MAX_TEXT_LENGTH = 14_000
 _ATTACHMENT_COLOUR = "#FF6600"
 _BTN_APPROVE_LABEL = "✅ Ejecutar remediación"
 _BTN_REJECT_LABEL = "❌ Rechazar"
+
+
+def make_hmac_token(incident_id: str, action: str, secret: str) -> str:
+    """Returns HMAC-SHA256 hex digest of '{incident_id}:{action}' signed with secret."""
+    return _hmac.new(
+        secret.encode(), f"{incident_id}:{action}".encode(), hashlib.sha256
+    ).hexdigest()
 
 
 async def _post_with_retry(payload: dict[str, Any]) -> bool:
@@ -92,6 +101,7 @@ async def send_escalation_with_buttons(
     incident_id: str,
     callback_base_url: str,
     channel: str | None = None,
+    webhook_secret: str = "",
 ) -> bool:
     """
     Envía mensaje Mattermost con botones interactivos Aprobar/Rechazar.
@@ -113,7 +123,11 @@ async def send_escalation_with_buttons(
                         "name": _BTN_APPROVE_LABEL,
                         "integration": {
                             "url": action_url,
-                            "context": {"action": "approve", "incident_id": incident_id},
+                            "context": {
+                                "action": "approve",
+                                "incident_id": incident_id,
+                                "hmac_token": make_hmac_token(incident_id, "approve", webhook_secret) if webhook_secret else None,
+                            },
                         },
                     },
                     {
@@ -121,7 +135,11 @@ async def send_escalation_with_buttons(
                         "name": _BTN_REJECT_LABEL,
                         "integration": {
                             "url": action_url,
-                            "context": {"action": "reject", "incident_id": incident_id},
+                            "context": {
+                                "action": "reject",
+                                "incident_id": incident_id,
+                                "hmac_token": make_hmac_token(incident_id, "reject", webhook_secret) if webhook_secret else None,
+                            },
                         },
                     },
                 ],

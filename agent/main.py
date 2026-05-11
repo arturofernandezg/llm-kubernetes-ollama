@@ -9,6 +9,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import hmac
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import RedirectResponse
@@ -27,7 +28,7 @@ from schemas import (
 )
 from extraction import PROMPT_TEMPLATE, extract_json
 from validation import validate_params
-from mattermost import send_mattermost_alert, send_escalation_with_buttons
+from mattermost import send_mattermost_alert, send_escalation_with_buttons, make_hmac_token
 from rag import (
     build_rag_query, retrieve_context, get_chroma_client, ensure_collections,
     build_incident_document, ingest_incident,
@@ -79,6 +80,16 @@ class PendingEscalation:
 
 PENDING_ESCALATIONS: dict[str, PendingEscalation] = {}
 _PENDING_LOCK = asyncio.Lock()
+
+
+def _verify_hmac_token(incident_id: str, action: str, token: str | None) -> bool:
+    """Returns True if HMAC is valid or HMAC is disabled (webhook_secret empty)."""
+    if not settings.webhook_secret:
+        return True
+    if not token:
+        return False
+    expected = make_hmac_token(incident_id, action, settings.webhook_secret)
+    return hmac.compare_digest(token, expected)
 
 
 async def _cleanup_expired_escalations() -> None:
@@ -401,6 +412,7 @@ async def _process_alert_with_diagnosis(
                 attachment_text=_format_escalation_body(diagnosis, remediation_result),
                 incident_id=incident_id,
                 callback_base_url=settings.agent_callback_url,
+                webhook_secret=settings.webhook_secret,
             )
         else:
             msg = _format_diagnosis_message(alert, diagnosis, remediation_result)
@@ -477,6 +489,11 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
     Mattermost llama a este endpoint cuando el usuario hace clic en Aprobar o Rechazar.
     La respuesta JSON actualiza el mensaje original y limpia los botones.
     """
+    if not _verify_hmac_token(
+        payload.context.incident_id, payload.context.action, payload.context.hmac_token
+    ):
+        raise HTTPException(status_code=401, detail="Invalid callback token")
+
     async with _PENDING_LOCK:
         incident = PENDING_ESCALATIONS.get(payload.context.incident_id)
         if incident is None:

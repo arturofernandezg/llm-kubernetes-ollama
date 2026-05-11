@@ -48,6 +48,39 @@ ESCALATE + safe_commands → Mattermost [✅ Aprobar] [❌ Rechazar]
 
 ---
 
+### Seguridad del callback human-in-the-loop: HMAC-SHA256 (2026-05-11)
+
+**Por qué es destacable:** El endpoint `/webhook/action` es el gate final de la remediación autónoma — donde el humano aprueba o rechaza. Sin autenticación, cualquier cliente que conociera la URL podría forjar una aprobación.
+
+**Decisión técnica:**
+
+| Capa | Mecanismo | Detalle |
+|---|---|---|
+| Firma | HMAC-SHA256 por botón | `sign(incident_id:action, WEBHOOK_SECRET)` — la firma cubre **tanto** el incident_id **como** la acción (approve/reject), impidiendo replay cross-action |
+| Transporte | Embebido en `context` del botón | Mattermost devuelve el contexto sin modificarlo — no viaja como query param (no aparece en logs de red) |
+| Verificación | `hmac.compare_digest` (tiempo constante) | Evita timing attacks en la comparación de strings |
+| Backward compat | `WEBHOOK_SECRET` vacío → HMAC desactivado | El pod no falla si el K8s Secret no existe aún (`optional: true`) |
+| Configuración | K8s Secret `agent-secrets.webhook-secret` | Nunca en código ni en environment literal |
+
+**Flujo de seguridad actualizado:**
+```
+send_escalation_with_buttons()
+  → sign(incident_id:"approve", secret) → embed en button context
+  → sign(incident_id:"reject",  secret) → embed en button context
+
+/webhook/action (callback)
+  → _verify_hmac_token(incident_id, action, hmac_token)
+     └── si secret vacío → pass-through (dev/test)
+     └── si token ausente o erróneo → HTTP 401
+  → valida TTL
+  → ejecuta / rechaza
+```
+
+**Argumento para la defensa:**
+> "El endpoint de aprobación humana valida una firma HMAC-SHA256 por botón, binding tanto el UUID del incidente como la acción. Un atacante no puede fabricar un callback válido sin conocer el secreto, y no puede reutilizar la firma de 'rechazar' para aprobar ni viceversa."
+
+---
+
 ### Vendor Lock-in cero en la capa de IA
 
 **Ángulo:** El sistema es agnóstico de proveedor en todos sus niveles.
@@ -121,7 +154,7 @@ Tu sistema no es un prototipo local — está desplegado en un cluster GKE real 
 
 | Pilar | Lo que tienen ellos | Lo que tienes tú |
 |---|---|---|
-| Seguridad | Whitelisting, OAuth, propagación de roles | NetworkPolicy K8s, RBAC con mínimo privilegio, SecurityContext, reglas de bloqueo en remediation.py |
+| Seguridad | Whitelisting, OAuth, propagación de roles | NetworkPolicy K8s, RBAC con mínimo privilegio, SecurityContext, reglas de bloqueo en remediation.py, **HMAC-SHA256 en callbacks de botones** |
 | Escalado | Pods escalan por volumen de peticiones | Spot instances GKE, retry/backoff en mattermost.py, HTTP_TIMEOUT=240 para LLM lento |
 | Observabilidad | Logs + métricas + agent tracing | JSON logging estructurado, 6 counters aiops_* en Prometheus, Grafana dashboard 9 paneles, feedback persistido en ChromaDB |
 
@@ -147,4 +180,4 @@ Tu sistema no es un prototipo local — está desplegado en un cluster GKE real 
 
 ---
 
-*Última actualización: 2026-05-06*
+*Última actualización: 2026-05-11*

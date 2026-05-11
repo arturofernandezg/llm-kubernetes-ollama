@@ -61,9 +61,15 @@ Mattermost POST cuando el operador pulsa un botón de acción:
 ```json
 {
   "user_name": "arturo",
-  "context": {"action": "approve", "incident_id": "<uuid>"}
+  "context": {
+    "action": "approve",
+    "incident_id": "<uuid>",
+    "hmac_token": "<sha256-hex>"
+  }
 }
 ```
+
+`hmac_token` = `HMAC-SHA256(incident_id:action, WEBHOOK_SECRET)`. Si `WEBHOOK_SECRET` está vacío (dev/test), el campo es `null` y la verificación se omite.
 
 | Campo `action` | Comportamiento | Métrica |
 |---|---|---|
@@ -136,6 +142,15 @@ DiagnosisResponse:
   duration_ms:  int
 ```
 
+### Human Escalation Callback (Fase 3)
+
+```
+ActionCallbackContext:
+  action:      str          — "approve" | "reject"
+  incident_id: str          — UUID que referencia PENDING_ESCALATIONS
+  hmac_token:  str | None   — HMAC-SHA256(incident_id:action, WEBHOOK_SECRET); None cuando secret vacío
+```
+
 ### Extracción Legacy (Fase 0)
 
 ```
@@ -177,6 +192,7 @@ ExtractResponse:
 | `CHROMADB_HOST` | `chromadb-svc` | Host de ChromaDB | 2 |
 | `CHROMADB_PORT` | `8000` | Puerto de ChromaDB | 2 |
 | `MATTERMOST_WEBHOOK_URL` | `None` | URL del webhook entrante de Mattermost | 1 |
+| `WEBHOOK_SECRET` | `""` | Secreto HMAC-SHA256 para verificar callbacks de botones Mattermost. Vacío = sin verificación (dev/test). En K8s via Secret `agent-secrets.webhook-secret` (`optional: true`) | 3 |
 | `HTTP_TIMEOUT` | `120.0` | Timeout general del cliente HTTP (segundos) | 0+ |
 | `HEALTH_TIMEOUT` | `5.0` | Timeout para health checks (segundos) | 0+ |
 | `RETRY_MAX_ATTEMPTS` | `3` | Intentos máximos de retry hacia Ollama | 0+ |

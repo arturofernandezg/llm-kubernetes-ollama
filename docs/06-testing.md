@@ -13,16 +13,16 @@ python -m pytest tests/ -v
 
 | Archivo | Tests | Tipo | Qué verifica |
 |---|---|---|---|
-| `test_endpoints.py` | 33 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics, formatter con remediation, feedback loop (persist + fail-open) |
+| `test_endpoints.py` | 72 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics, formatter, feedback loop, `/webhook/action` (approve/reject/TTL/idempotency/HMAC) |
 | `test_extraction.py` | 11 | Unitario | extract_json: direct, markdown_block, regex con bracket counting, nested JSON, edge cases |
 | `test_tf_generator.py` | 16 | Unitario | safe_name, generate_terraform (template, defaults, labels) |
-| `test_validation.py` | 11 | Unitario | validate_params: regiones, instance types, campos null |
-| `test_mattermost.py` | 8 | Unitario | send_mattermost_alert: envío, retry 5xx, no-retry 4xx, ConnectError, excepción inesperada, fail-open |
-| `test_rag.py` | 31 | Unitario | build_rag_query, generate_embedding, retrieve_context, ingest_runbook, load_runbooks_from_dir, ingest_all_runbooks, build_incident_document, ingest_incident (ChromaDB + Ollama mockeados) |
-| `test_diagnosis.py` | 14 | Unitario | build_alert_text, format_context_docs, generate_diagnosis, _clamp (LLM mockeado) |
-| `test_remediation.py` | 54 | Unitario | classify_command (SAFE/MUTATING/BLOCKED/UNKNOWN), validate_commands, decide_action (7 reglas), execute_commands (dry-run + real mode mock), process_remediation |
+| `test_validation.py` | 6 | Unitario | validate_params: regiones, instance types, campos null |
+| `test_mattermost.py` | 13 | Unitario | send_mattermost_alert: envío, retry 5xx, no-retry 4xx, ConnectError, excepción inesperada, fail-open; make_hmac_token |
+| `test_rag.py` | 30 | Unitario | build_rag_query, generate_embedding, retrieve_context, ingest_runbook, load_runbooks_from_dir, ingest_all_runbooks, build_incident_document, ingest_incident (ChromaDB + Ollama mockeados) |
+| `test_diagnosis.py` | 16 | Unitario | build_alert_text, format_context_docs, generate_diagnosis, _clamp (LLM mockeado) |
+| `test_remediation.py` | 96 | Unitario | classify_command (SAFE/MUTATING/BLOCKED/UNKNOWN), validate_commands, decide_action (9 reglas incl. 4.5/4.6), execute_commands (dry-run + real mode mock), process_remediation, _get_safe_commands, zero_current_memory |
 | `test_ingest_runbooks.py` | 3 | Unitario | CLI `ingest_runbooks.run()`: exit 0 sin errores, exit 1 con errores, runbooks_dir correcto (mocks `ingest_all_runbooks`) |
-| **Total** | **196** | | Verificado Cloud Build 2026-04-23 (<0.5s) |
+| **Total** | **263** | | Actualizado 2026-05-11 (calidad sesiones #1-#6) |
 
 **Nota**: los tests estaban originalmente en un único `test_main.py` (40 tests).
 Se refactorizaron y ampliaron progresivamente al añadir módulos:
@@ -33,6 +33,10 @@ Se refactorizaron y ampliaron progresivamente al añadir módulos:
 - Fase 3 S5 (2026-04-06): +5 tests en `test_endpoints.py` (formatter + pipeline integration), +7 tests en `test_remediation.py` (real execution mode con subprocess mock).
 - Fase 3 S6 (2026-04-07): +8 tests en `test_rag.py` (build_incident_document + ingest_incident), +2 tests en `test_endpoints.py` (feedback loop: persist + fail-open).
 - Fase 2 cierre (2026-04-23): +3 tests en `test_ingest_runbooks.py` para el nuevo CLI de ingesta idempotente usado por el Job `k8s/job-ingest-runbooks.yaml`.
+- Calidad sesión #1 (2026-05-11): +tests para locks PENDING_ESCALATIONS, proc guard, TTL reorder, periodic cleanup. Fixes H1-H5.
+- Calidad sesiones #2-#3 (2026-05-11): +42 tests en `test_remediation.py` (classify non-string input, validate_commands coerce, zero_current_memory, _get_safe_commands, R1-R8). Fixes M1-M9 no añaden tests nuevos (comportamiento existente).
+- Calidad sesión #4 (2026-05-11): +5 tests en `test_mattermost.py` (truncation guard, structured logging, 4xx no-retry). Fixes MM1-MM9.
+- Calidad sesión #6 (2026-05-11): +3 tests en `test_endpoints.py::TestActionCallbackEndpoint` (HMAC missing/invalid/valid). Fix X5.
 
 ### Ficheros de soporte
 

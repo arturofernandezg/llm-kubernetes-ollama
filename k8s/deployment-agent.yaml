@@ -79,6 +79,12 @@ spec:
               key: url
         - name: AGENT_CALLBACK_URL
           value: "http://agent-svc.arturo-llm-test.svc.cluster.local:8000"
+        - name: WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: agent-secrets
+              key: webhook-secret
+              optional: true
       volumes:
       - name: tmp
         emptyDir: {}

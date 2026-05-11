@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # URL base del agente accesible desde Mattermost (intra-cluster FQDN)
     agent_callback_url: str = "http://agent-svc.arturo-llm-test.svc.cluster.local:8000"
 
+    # HMAC signing secret for Mattermost button callbacks (Fase 3 — X5)
+    # Empty = HMAC disabled (dev/test). Set via K8s Secret in production.
+    webhook_secret: str = ""
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

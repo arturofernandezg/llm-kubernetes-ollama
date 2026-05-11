@@ -67,7 +67,8 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
     - Schema LLM extendido: campo opcional `proposed_action` con `current_value/new_value/field`.
     - `parse_memory_to_bytes()` + `implies_pod_restart()` como helpers reutilizables.
   - ✅ E2E cluster verificado (2026-04-24, imagen c3b0975): regla 4.5 → `reason_code: set_resources_triggers_rollout`. Regla 4.6 → `memory_exceeds_2x` / `auto_remediate` / `unparseable_memory`. Webhook E2E: `action=escalate` por regla 5, `outcome=escalate` persistido en ChromaDB + Mattermost.
-  - ✅ Botones interactivos Mattermost (2026-05-06): `send_escalation_with_buttons()` + POST `/webhook/action` + `PENDING_ESCALATIONS` dict (TTL 60 min). 252 tests. Imagen `aiops-agent:1033c9f`.
+  - ✅ Botones interactivos Mattermost (2026-05-06): `send_escalation_with_buttons()` + POST `/webhook/action` + `PENDING_ESCALATIONS` dict (TTL 60 min). Imagen `aiops-agent:1033c9f`.
+  - ✅ HMAC-SHA256 en callbacks de botones (2026-05-11): `make_hmac_token(incident_id, action, secret)` + `_verify_hmac_token()` + `WEBHOOK_SECRET` en config + K8s Secret injection (`optional: true`). 263 tests.
   - ✅ E2E botones verificado (2026-05-06): KubePodOOMKilled → escalate (78s, confidence=0.90) → botones ✅/❌ en Mattermost → callback → mensaje actualizado in-place.
   - ✅ Config Mattermost requerida: `MM_PLUGINSETTINGS_ENABLE=true` + `MM_SERVICEALLOWEDUNTRUSTEDINTERNALCONNECTIONS=agent-svc.arturo-llm-test.svc.cluster.local` en `k8s/mattermost.yaml`.
   - ⏳ Pendiente: screenshot Grafana dashboard.
@@ -90,7 +91,7 @@ agent/tf_generator.py   → Generación de template Terraform (Fase 0 legacy)
 agent/mattermost.py     → Cliente HTTP async Mattermost con retry/backoff
 agent/rag.py            → Cliente ChromaDB, ingesta, query, embeddings via Ollama
 agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON estructurado
-agent/tests/            → 252 tests en 7 ficheros
+agent/tests/            → 263 tests en 9 ficheros
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
 k8s/                    → Manifiestos K8s (agent, ollama, chromadb, networkpolicy)
 k8s/prometheus.yaml     → Prometheus + kube-state-metrics + ClusterRoles + 5 reglas

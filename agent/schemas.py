@@ -83,8 +83,9 @@ class ExtractResponse(BaseModel):
 
 class ActionCallbackContext(BaseModel):
     """Contexto embebido en cada botón de acción de Mattermost."""
-    action: str       # "approve" | "reject"
-    incident_id: str  # UUID que referencia PENDING_ESCALATIONS en main.py
+    action: str                # "approve" | "reject"
+    incident_id: str           # UUID que referencia PENDING_ESCALATIONS en main.py
+    hmac_token: str | None = None  # HMAC-SHA256(incident_id:action, webhook_secret)
 
 
 class MattermostActionPayload(BaseModel):

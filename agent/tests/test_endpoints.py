@@ -12,10 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx as _httpx
 import pytest
 
+import main
 from main import (
     app, _format_diagnosis_message, _format_escalation_body, _extract_alert_meta,
     PENDING_ESCALATIONS, PendingEscalation, _cleanup_expired_escalations,
 )
+from mattermost import make_hmac_token
 from schemas import AlertItem
 from tests.helpers import (
     VALID_PARAMS, VALID_JSON_STR,
@@ -780,6 +782,35 @@ class TestActionCallbackEndpoint:
         assert "update" in r1.json()
         assert r2.status_code == 200
         assert "ephemeral_text" in r2.json()
+
+    def test_missing_hmac_returns_401_when_secret_set(self, api_client):
+        """When webhook_secret is set, missing hmac_token → 401."""
+        PENDING_ESCALATIONS["hmac-001"] = _make_pending_escalation("hmac-001")
+        with patch.object(main.settings, "webhook_secret", "test-secret"):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "approve", "incident_id": "hmac-001"},
+            })
+        assert r.status_code == 401
+
+    def test_invalid_hmac_returns_401_when_secret_set(self, api_client):
+        """When webhook_secret is set, wrong hmac_token → 401."""
+        PENDING_ESCALATIONS["hmac-002"] = _make_pending_escalation("hmac-002")
+        with patch.object(main.settings, "webhook_secret", "test-secret"):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "approve", "incident_id": "hmac-002", "hmac_token": "bad-token"},
+            })
+        assert r.status_code == 401
+
+    def test_valid_hmac_passes_when_secret_set(self, api_client):
+        """When webhook_secret is set, correct hmac_token → request processed normally."""
+        PENDING_ESCALATIONS["hmac-003"] = _make_pending_escalation("hmac-003")
+        token = make_hmac_token("hmac-003", "reject", "test-secret")
+        with patch.object(main.settings, "webhook_secret", "test-secret"), \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "reject", "incident_id": "hmac-003", "hmac_token": token},
+            })
+        assert r.status_code == 200
 
 
 class TestCleanupExpiredEscalations:
