@@ -53,7 +53,7 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ Pipeline RAG integrado en `main.py` (`_process_alert_with_diagnosis`) — triple fail-open.
   - ✅ CLI `agent/ingest_runbooks.py` + K8s Job `k8s/job-ingest-runbooks.yaml` — 16 runbooks ingestados en ChromaDB (2026-04-23). `runAsUser: 1000` requerido en GKE.
   - ✅ E2E verificado (2026-04-23): KubePodOOMKilled → RAG (3 runbooks + 2 incidents) → LLM (187s, confidence=0.85, risk=high) → suggest_only → Mattermost. `HTTP_TIMEOUT=240` en deployment-agent.yaml.
-- **Fase 3 (Remediación Autónoma)**: En curso (dry-run activo, 2026-04-25).
+- **Fase 3 (Remediación Autónoma)**: Completa (2026-05-06).
   - ✅ `remediation.py` — validation layer + motor de decisión (9 reglas) + executor dual-mode. ~70 tests.
   - ✅ `process_remediation()` integrado en pipeline `main.py`. Counter `aiops_remediation_total`.
   - ✅ RBAC aplicado (`k8s/rbac.yaml`): Role `patch deployments/get pods/limitranges` en `arturo-llm-test`.
@@ -64,10 +64,13 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
     - Regla 4.6: si `proposed_action.field == resources.limits.memory`, bloquea si `new > 2 × current` → `reason_code: memory_exceeds_2x`.
     - Schema LLM extendido: campo opcional `proposed_action` con `current_value/new_value/field`.
     - `parse_memory_to_bytes()` + `implies_pod_restart()` como helpers reutilizables.
-  - ✅ E2E cluster verificado (2026-04-24, imagen c3b0975): regla 4.5 → `reason_code: set_resources_triggers_rollout` (kubectl exec sobre binario desplegado). Regla 4.6 → `memory_exceeds_2x` (256Mi→1Gi), `auto_remediate` (256Mi→512Mi, 2× exacto), `unparseable_memory` (fail-safe). Webhook E2E: `action=escalate` por regla 5 (risk=high), `outcome=escalate` persistido en ChromaDB + Mattermost.
-  - ✅ Métricas verificadas: `aiops_remediation_total{action="escalate"} 2`, `aiops_feedback_total{outcome="persisted"} 2`.
+  - ✅ E2E cluster verificado (2026-04-24, imagen c3b0975): regla 4.5 → `reason_code: set_resources_triggers_rollout`. Regla 4.6 → `memory_exceeds_2x` / `auto_remediate` / `unparseable_memory`. Webhook E2E: `action=escalate` por regla 5, `outcome=escalate` persistido en ChromaDB + Mattermost.
+  - ✅ Botones interactivos Mattermost (2026-05-06): `send_escalation_with_buttons()` + POST `/webhook/action` + `PENDING_ESCALATIONS` dict (TTL 60 min). 252 tests. Imagen `aiops-agent:1033c9f`.
+  - ✅ E2E botones verificado (2026-05-06): KubePodOOMKilled → escalate (78s, confidence=0.90) → botones ✅/❌ en Mattermost → callback → mensaje actualizado in-place.
+  - ✅ Config Mattermost requerida: `MM_PLUGINSETTINGS_ENABLE=true` + `MM_SERVICEALLOWEDUNTRUSTEDINTERNALCONNECTIONS=agent-svc.arturo-llm-test.svc.cluster.local` en `k8s/mattermost.yaml`.
   - ⏳ Pendiente: screenshot Grafana dashboard.
-  - ⏳ Pendiente: confirmar con tutor excepción a regla 4.5 (in-place resize k8s 1.27+, rolling HA...). Pasar a `DRY_RUN=false` requiere acuerdo con tutor.
+  - ⏳ Pendiente: confirmar con tutor excepción a regla 4.5. Pasar a `DRY_RUN=false` requiere acuerdo con tutor.
+  - ⏳ Pendiente: migrar workloads críticos a nodos guaranteed (label `guaranteed=true`, asignados por tutor 2026-05-06).
 
 ## Stack
 
@@ -85,7 +88,7 @@ agent/tf_generator.py   → Generación de template Terraform (Fase 0 legacy)
 agent/mattermost.py     → Cliente HTTP async Mattermost con retry/backoff
 agent/rag.py            → Cliente ChromaDB, ingesta, query, embeddings via Ollama
 agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON estructurado
-agent/tests/            → 124 tests en 7 ficheros
+agent/tests/            → 252 tests en 7 ficheros
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
 k8s/                    → Manifiestos K8s (agent, ollama, chromadb, networkpolicy)
 k8s/prometheus.yaml     → Prometheus + kube-state-metrics + ClusterRoles + 5 reglas
@@ -97,10 +100,10 @@ cloudbuild.yaml         → Pipeline: tests (gate) + build + push
 
 ## Entorno
 
-- **Cluster**: ai-infra-agent (europe-southwest1-a, e2-standard-2 spot, 2 nodos)
+- **Cluster**: ai-infra-agent (europe-southwest1-a, e2-standard-2 spot + 2 nodos guaranteed con label `guaranteed=true` desde 2026-05-06)
 - **Namespaces**: `arturo-llm-test` (core), `arturo-monitoring` (alertmanager), `arturo-mattermost` (chatops)
 - **Registry**: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent
-- **Imagen actual**: `aiops-agent:5f64b61` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
+- **Imagen actual**: `aiops-agent:1033c9f` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
 - **Ollama models**: qwen2.5:1.5b (generación), nomic-embed-text:latest (embeddings)
 - **NO hay Python local en Windows** — tests se ejecutan en GCloud Shell
 - **Sin Cloud NAT** — pods no tienen internet, modelos se cargan manualmente
