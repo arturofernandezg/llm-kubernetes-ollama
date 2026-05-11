@@ -6,13 +6,16 @@ Todos los tests usan mocks de Ollama (no requieren cluster ni LLM).
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx as _httpx
 import pytest
 
-from main import app, _format_diagnosis_message, PENDING_ESCALATIONS, PendingEscalation, _cleanup_expired_escalations
+from main import (
+    app, _format_diagnosis_message, _format_escalation_body, _extract_alert_meta,
+    PENDING_ESCALATIONS, PendingEscalation, _cleanup_expired_escalations,
+)
 from schemas import AlertItem
 from tests.helpers import (
     VALID_PARAMS, VALID_JSON_STR,
@@ -654,7 +657,7 @@ def _make_pending_escalation(incident_id: str, ttl_minutes: int = 60) -> Pending
         alert_item=alert,
         diagnosis=mock_diagnosis_result(),
         safe_commands=["kubectl describe pod engine-0 -n prod"],
-        expires_at=datetime.now() + timedelta(minutes=ttl_minutes),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes),
     )
 
 
@@ -814,3 +817,147 @@ class TestCleanupExpiredEscalations:
         await _cleanup_expired_escalations()
 
         assert len(PENDING_ESCALATIONS) == 0
+
+
+# ── _extract_alert_meta ───────────────────────────────────────────────────────
+
+class TestExtractAlertMeta:
+    """Unit tests for _extract_alert_meta helper (M5)."""
+
+    def _make_alert(self, labels: dict | None = None) -> AlertItem:
+        return AlertItem(
+            status="firing",
+            labels=labels or {},
+            annotations={},
+            startsAt="2026-05-11T10:00:00Z",
+        )
+
+    def test_defaults_when_labels_missing(self):
+        alert = self._make_alert()
+        severity, alert_name, pod, namespace = _extract_alert_meta(alert)
+        assert severity == "CRITICAL"
+        assert alert_name == "UnknownAlert"
+        assert pod == "unknown-pod"
+        assert namespace == "unknown-ns"
+
+    def test_returns_uppercased_severity(self):
+        alert = self._make_alert({"severity": "warning", "alertname": "HighCPU", "pod": "my-pod", "namespace": "prod"})
+        severity, alert_name, pod, namespace = _extract_alert_meta(alert)
+        assert severity == "WARNING"
+        assert alert_name == "HighCPU"
+        assert pod == "my-pod"
+        assert namespace == "prod"
+
+    def test_severity_already_upper_stays_upper(self):
+        alert = self._make_alert({"severity": "CRITICAL"})
+        severity, *_ = _extract_alert_meta(alert)
+        assert severity == "CRITICAL"
+
+
+# ── Defensive .get() in formatters ───────────────────────────────────────────
+
+class TestFormatDiagnosisMessageDefensiveGet:
+    """_format_diagnosis_message does not KeyError on incomplete diagnosis (M3)."""
+
+    def _make_alert(self) -> AlertItem:
+        return AlertItem(
+            status="firing",
+            labels={"alertname": "OOMKilled", "pod": "p", "namespace": "ns", "severity": "critical"},
+            annotations={},
+            startsAt="2026-05-11T10:00:00Z",
+        )
+
+    def test_missing_confidence_uses_default(self):
+        diag = {"risk": "high", "diagnosis": "Memory pressure detected"}
+        msg = _format_diagnosis_message(self._make_alert(), diag)
+        assert "0%" in msg
+        assert "HIGH" in msg
+
+    def test_missing_risk_uses_default(self):
+        diag = {"confidence": 0.85, "diagnosis": "Memory pressure detected"}
+        msg = _format_diagnosis_message(self._make_alert(), diag)
+        assert "85%" in msg
+        assert "HIGH" in msg
+
+    def test_missing_diagnosis_key_uses_default(self):
+        diag = {"confidence": 0.7, "risk": "medium"}
+        msg = _format_diagnosis_message(self._make_alert(), diag)
+        assert "Sin diagnóstico" in msg
+
+
+class TestFormatEscalationBodyDefensiveGet:
+    """_format_escalation_body does not KeyError on incomplete diagnosis (M4)."""
+
+    def _make_remediation(self) -> dict:
+        return {"safe_commands": ["kubectl get pods"]}
+
+    def test_missing_confidence_uses_default(self):
+        diag = {"risk": "high", "diagnosis": "OOM"}
+        body = _format_escalation_body(diag, self._make_remediation())
+        assert "0%" in body
+
+    def test_missing_risk_uses_default(self):
+        diag = {"confidence": 0.9, "diagnosis": "OOM"}
+        body = _format_escalation_body(diag, self._make_remediation())
+        assert "HIGH" in body
+
+    def test_missing_diagnosis_key_uses_default(self):
+        diag = {"confidence": 0.5, "risk": "low"}
+        body = _format_escalation_body(diag, self._make_remediation())
+        assert "Sin diagnóstico" in body
+
+
+# ── M6: unknown action → 400 ──────────────────────────────────────────────────
+
+class TestActionCallbackUnknownAction:
+    """Unknown action in callback returns 400 (M6)."""
+
+    def setup_method(self):
+        PENDING_ESCALATIONS.clear()
+
+    def teardown_method(self):
+        PENDING_ESCALATIONS.clear()
+
+    def test_unknown_action_returns_400(self, api_client):
+        PENDING_ESCALATIONS["m6-test"] = _make_pending_escalation("m6-test")
+        r = api_client.post("/webhook/action", json={
+            "user_name": "arturo",
+            "context": {"action": "unknown_typo", "incident_id": "m6-test"},
+        })
+        assert r.status_code == 400
+        assert "unknown_typo" in r.json()["detail"]
+
+    def test_empty_action_returns_400(self, api_client):
+        PENDING_ESCALATIONS["m6-empty"] = _make_pending_escalation("m6-empty")
+        r = api_client.post("/webhook/action", json={
+            "context": {"action": "", "incident_id": "m6-empty"},
+        })
+        assert r.status_code == 400
+
+
+# ── M7: execute_commands failure counter ─────────────────────────────────────
+
+class TestActionCallbackApproveFailure:
+    """execute_commands failure: endpoint returns 200 and logs ERROR in message (M7)."""
+
+    def setup_method(self):
+        PENDING_ESCALATIONS.clear()
+
+    def teardown_method(self):
+        PENDING_ESCALATIONS.clear()
+
+    def test_execute_failure_returns_200_with_error_in_log(self, api_client):
+        PENDING_ESCALATIONS["m7-test"] = _make_pending_escalation("m7-test")
+
+        with patch("main.execute_commands", new_callable=AsyncMock, side_effect=RuntimeError("cmd failed")), \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve", "incident_id": "m7-test"},
+            })
+
+        assert r.status_code == 200
+        body = r.json()
+        assert "update" in body
+        assert "ERROR" in body["update"]["message"]
+        assert "cmd failed" in body["update"]["message"]

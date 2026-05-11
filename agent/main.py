@@ -8,7 +8,7 @@ natural, usando un LLM local (Ollama) como motor de inferencia.
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import RedirectResponse
@@ -23,7 +23,7 @@ from config import settings, logger
 from schemas import (
     InfraRequest, ExtractedParams, ExtractResponse,
     AlertmanagerPayload, AlertItem,
-    MattermostActionPayload, ActionCallbackContext,
+    MattermostActionPayload,
 )
 from extraction import PROMPT_TEMPLATE, extract_json
 from validation import validate_params
@@ -49,12 +49,12 @@ EXTRACTION_COUNTER = Counter(
 DIAGNOSIS_COUNTER = Counter(
     "aiops_diagnosis_total",
     "Diagnosis attempts by outcome",
-    ["outcome"],  # "success" | "rag_failed" | "llm_failed" | "pipeline_failed"
+    ["outcome"],  # "success" | "rag_ok" | "rag_failed" | "llm_failed" | "pipeline_failed"
 )
 REMEDIATION_COUNTER = Counter(
     "aiops_remediation_total",
     "Remediation decisions by action",
-    ["action"],  # "auto_remediate" | "escalate" | "suggest_only" | "skipped"
+    ["action"],  # "auto_remediate" | "escalate" | "suggest_only" | "skipped" | "human_approved" | "human_rejected" | "human_approve_failed"
 )
 FEEDBACK_COUNTER = Counter(
     "aiops_feedback_total",
@@ -83,7 +83,7 @@ _PENDING_LOCK = asyncio.Lock()
 
 async def _cleanup_expired_escalations() -> None:
     """Elimina escalaciones expiradas del dict en memoria."""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     async with _PENDING_LOCK:
         expired = [k for k, v in PENDING_ESCALATIONS.items() if v.expires_at < now]
         for k in expired:
@@ -232,6 +232,16 @@ async def health():
 
 # ── Diagnosis helpers ─────────────────────────────────────────────────────────
 
+def _extract_alert_meta(alert: AlertItem) -> tuple[str, str, str, str]:
+    """Returns (severity_upper, alert_name, pod, namespace) from alert labels."""
+    return (
+        alert.labels.get("severity", "critical").upper(),
+        alert.labels.get("alertname", "UnknownAlert"),
+        alert.labels.get("pod", "unknown-pod"),
+        alert.labels.get("namespace", "unknown-ns"),
+    )
+
+
 def _format_diagnosis_message(
     alert: AlertItem,
     diagnosis: dict | None,
@@ -239,10 +249,7 @@ def _format_diagnosis_message(
 ) -> str:
     """Format alert + diagnosis + remediation into a Mattermost-ready Markdown message."""
     icon = "🔴" if alert.status == "firing" else "🟢"
-    severity = alert.labels.get("severity", "critical").upper()
-    alert_name = alert.labels.get("alertname", "UnknownAlert")
-    pod = alert.labels.get("pod", "unknown-pod")
-    namespace = alert.labels.get("namespace", "unknown-ns")
+    severity, alert_name, pod, namespace = _extract_alert_meta(alert)
 
     header = f"{icon} **[{severity}] {alert_name}** | Pod: `{pod}` | NS: `{namespace}`"
 
@@ -250,12 +257,12 @@ def _format_diagnosis_message(
         desc = alert.annotations.get("description", "Sin descripcion")
         return f"{header}\n> {desc}\n\n_⚠️ Diagnosis unavailable_"
 
-    confidence_pct = int(diagnosis["confidence"] * 100)
-    risk = diagnosis["risk"].upper()
+    confidence_pct = int(diagnosis.get("confidence", 0.0) * 100)
+    risk = diagnosis.get("risk", "high").upper()
 
     parts = [
         header,
-        f"\n**Diagnosis:** {diagnosis['diagnosis']}",
+        f"\n**Diagnosis:** {diagnosis.get('diagnosis', 'Sin diagnóstico')}",
         f"**Risk:** {risk} | **Confidence:** {confidence_pct}%",
     ]
 
@@ -289,20 +296,17 @@ def _format_diagnosis_message(
 
 def _format_escalation_header(alert: AlertItem) -> str:
     """Línea de título para el mensaje de escalación con botones."""
-    alert_name = alert.labels.get("alertname", "UnknownAlert")
-    pod = alert.labels.get("pod", "unknown-pod")
-    namespace = alert.labels.get("namespace", "unknown-ns")
-    severity = alert.labels.get("severity", "critical").upper()
+    severity, alert_name, pod, namespace = _extract_alert_meta(alert)
     return f"⚠️ **[{severity}] ESCALATION REQUIRED — {alert_name}** | Pod: `{pod}` | NS: `{namespace}`"
 
 
 def _format_escalation_body(diagnosis: dict, remediation: dict) -> str:
     """Cuerpo del attachment (sin botones) para el mensaje de escalación."""
-    confidence_pct = int(diagnosis["confidence"] * 100)
-    risk = diagnosis["risk"].upper()
+    confidence_pct = int(diagnosis.get("confidence", 0.0) * 100)
+    risk = diagnosis.get("risk", "high").upper()
 
     parts = [
-        f"**Diagnóstico:** {diagnosis['diagnosis']}",
+        f"**Diagnóstico:** {diagnosis.get('diagnosis', 'Sin diagnóstico')}",
         f"**Risk:** {risk} | **Confidence:** {confidence_pct}%",
     ]
 
@@ -386,7 +390,7 @@ async def _process_alert_with_diagnosis(
                     alert_item=alert,
                     diagnosis=diagnosis,
                     safe_commands=remediation_result["safe_commands"],
-                    expires_at=datetime.now() + timedelta(minutes=ESCALATION_TTL_MINUTES),
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=ESCALATION_TTL_MINUTES),
                 )
             logger.info(
                 "Stored pending escalation %s for %s (%d commands)",
@@ -408,9 +412,7 @@ async def _process_alert_with_diagnosis(
         logger.error("Full diagnosis pipeline failed for %s: %s", alert_name, exc)
         DIAGNOSIS_COUNTER.labels(outcome="pipeline_failed").inc()
         icon = "🔴" if alert.status == "firing" else "🟢"
-        severity = alert.labels.get("severity", "critical").upper()
-        pod = alert.labels.get("pod", "unknown-pod")
-        namespace = alert.labels.get("namespace", "unknown-ns")
+        severity, alert_name, pod, namespace = _extract_alert_meta(alert)
         desc = alert.annotations.get("description", "Sin descripcion")
         fallback = f"{icon} **[{severity}] {alert_name}** en Pod `{pod}` (NS: `{namespace}`)\n> {desc}"
         await send_mattermost_alert(fallback)
@@ -455,9 +457,7 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
             )
         else:
             # Resolved alerts: simple notification, no diagnosis needed
-            severity = alert.labels.get("severity", "critical").upper()
-            pod = alert.labels.get("pod", "unknown-pod")
-            namespace = alert.labels.get("namespace", "unknown-ns")
+            severity, _, pod, namespace = _extract_alert_meta(alert)
             msg = f"🟢 **[RESOLVED] [{severity}] {alert_name}** | Pod: `{pod}` | NS: `{namespace}`"
             background_tasks.add_task(send_mattermost_alert, msg)
         
@@ -492,7 +492,7 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
                     "props": {"attachments": []},
                 },
             }
-        if datetime.now() > incident.expires_at:
+        if datetime.now(timezone.utc) > incident.expires_at:
             del PENDING_ESCALATIONS[payload.context.incident_id]
             logger.warning(
                 "Escalation expired (TTL %dm)",
@@ -514,10 +514,11 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
     if action == "approve":
         try:
             log = await execute_commands(incident.safe_commands)
+            REMEDIATION_COUNTER.labels(action="human_approved").inc()
         except Exception as exc:
             logger.error("Command execution failed for incident %s: %s", incident.incident_id, exc)
             log = f"ERROR: {exc}"
-        REMEDIATION_COUNTER.labels(action="human_approved").inc()
+            REMEDIATION_COUNTER.labels(action="human_approve_failed").inc()
         decision_line = f"\n---\n✅ **Remediación APROBADA** por @{user}\n```\n{log}\n```"
         remediation_for_feedback = {
             "action": RemediationAction.AUTO_REMEDIATE,
@@ -526,7 +527,7 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             "blocked_commands": [],
         }
         logger.info("Human approved remediation for incident %s", incident.incident_id)
-    else:
+    elif action == "reject":
         REMEDIATION_COUNTER.labels(action="human_rejected").inc()
         decision_line = f"\n---\n❌ **Remediación RECHAZADA** por @{user}"
         remediation_for_feedback = {
@@ -539,6 +540,12 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             "Human rejected remediation for incident %s (action=%s)",
             incident.incident_id, action,
         )
+    else:
+        logger.warning(
+            "Unknown action in callback",
+            extra={"action": action, "incident_id": incident.incident_id},
+        )
+        raise HTTPException(status_code=400, detail=f"Unknown action: {action!r}")
 
     # Rebuild full message: original alert context + decision appended at bottom
     original_header = _format_escalation_header(incident.alert_item)
