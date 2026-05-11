@@ -399,7 +399,6 @@ async def _process_alert_with_diagnosis(
             await send_escalation_with_buttons(
                 header=_format_escalation_header(alert),
                 attachment_text=_format_escalation_body(diagnosis, remediation_result),
-                safe_commands=remediation_result["safe_commands"],
                 incident_id=incident_id,
                 callback_base_url=settings.agent_callback_url,
             )

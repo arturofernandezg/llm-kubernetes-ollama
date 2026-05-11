@@ -6,7 +6,12 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import httpx
 
-from mattermost import send_mattermost_alert, send_escalation_with_buttons, MATTERMOST_MAX_RETRIES
+from mattermost import (
+    send_mattermost_alert,
+    send_escalation_with_buttons,
+    MATTERMOST_MAX_RETRIES,
+    _MAX_TEXT_LENGTH,
+)
 from config import settings
 
 FAKE_URL = "http://mattermost/hooks/fake-url"
@@ -153,6 +158,23 @@ class TestMattermostClient:
         _, kwargs = mock_client.post.call_args
         assert "channel" not in kwargs["json"]
 
+    @pytest.mark.asyncio
+    @patch("mattermost.MATTERMOST_BASE_DELAY", 0.0)
+    async def test_long_message_is_truncated(self):
+        """Mensaje mayor a _MAX_TEXT_LENGTH → truncado con ellipsis antes del envío."""
+        settings.mattermost_webhook_url = FAKE_URL
+        mock_client = make_mock_client([make_ok_response()])
+        long_message = "x" * (_MAX_TEXT_LENGTH + 500)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await send_mattermost_alert(long_message)
+
+        assert result is True
+        _, kwargs = mock_client.post.call_args
+        sent_text = kwargs["json"]["text"]
+        assert len(sent_text) == _MAX_TEXT_LENGTH + 1  # +1 for the ellipsis char
+        assert sent_text.endswith("…")
+
 
 class TestSendEscalationWithButtons:
 
@@ -167,7 +189,6 @@ class TestSendEscalationWithButtons:
             result = await send_escalation_with_buttons(
                 header="escalation header",
                 attachment_text="Diagnosis text",
-                safe_commands=["kubectl describe pod nginx -n prod"],
                 incident_id="test-uuid-123",
                 callback_base_url="http://agent-svc:8000",
             )
@@ -193,7 +214,6 @@ class TestSendEscalationWithButtons:
         result = await send_escalation_with_buttons(
             header="header",
             attachment_text="body",
-            safe_commands=["kubectl get pods"],
             incident_id="uuid",
             callback_base_url="http://agent:8000",
         )
@@ -212,10 +232,31 @@ class TestSendEscalationWithButtons:
             result = await send_escalation_with_buttons(
                 header="header",
                 attachment_text="body",
-                safe_commands=["kubectl get pods"],
                 incident_id="uuid",
                 callback_base_url="http://agent:8000",
             )
 
         assert result is False
         assert mock_client.post.call_count == MATTERMOST_MAX_RETRIES
+
+    @pytest.mark.asyncio
+    @patch("mattermost.MATTERMOST_BASE_DELAY", 0.0)
+    async def test_long_attachment_text_is_truncated(self):
+        """attachment_text mayor a _MAX_TEXT_LENGTH → truncado con ellipsis antes del envío."""
+        settings.mattermost_webhook_url = FAKE_URL
+        mock_client = make_mock_client([make_ok_response()])
+        long_text = "y" * (_MAX_TEXT_LENGTH + 1000)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await send_escalation_with_buttons(
+                header="header",
+                attachment_text=long_text,
+                incident_id="uuid",
+                callback_base_url="http://agent:8000",
+            )
+
+        assert result is True
+        _, kwargs = mock_client.post.call_args
+        sent_text = kwargs["json"]["attachments"][0]["text"]
+        assert len(sent_text) == _MAX_TEXT_LENGTH + 1  # +1 for the ellipsis char
+        assert sent_text.endswith("…")
