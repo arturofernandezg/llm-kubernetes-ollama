@@ -21,6 +21,8 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 | `docs/05-terraform-generator.md` | CLI generate_tf.py, módulo tf_generator.py, template, uso |
 | `docs/06-testing.md` | 103 tests en 7 ficheros, mocking, errores comunes y soluciones |
 | `docs/07-roadmap.md` | Fases del proyecto, TODOs por fase, mejoras completadas |
+| `docs/08-code-quality-playbook.md` | Workflow de sesiones de calidad, 8 dimensiones de scan, prompt prehecho, sesiones tentativas |
+| `docs/11-quality-backlog.md` | Backlog vivo de findings de calidad agrupados por módulo (43 findings, sesiones 1-7) |
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 

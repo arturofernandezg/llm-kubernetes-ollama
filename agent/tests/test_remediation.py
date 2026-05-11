@@ -317,6 +317,38 @@ class TestExecuteCommandsRealMode:
         assert result == ""
 
     @pytest.mark.asyncio
+    async def test_create_subprocess_raises_timeout_no_unbound_error(self, monkeypatch):
+        """create_subprocess_exec raises TimeoutError before proc is assigned.
+        Guard proc=None prevents UnboundLocalError; result contains [TIMEOUT].
+        """
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(side_effect=asyncio.TimeoutError)):
+            result = await execute_commands(["kubectl get pods -n prod"])
+        assert "[TIMEOUT]" in result
+
+    @pytest.mark.asyncio
+    async def test_create_subprocess_raises_oserror_returns_error_entry(self, monkeypatch):
+        """create_subprocess_exec raises OSError; result contains [ERROR], no crash."""
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(side_effect=OSError("no such binary"))):
+            result = await execute_commands(["kubectl get pods -n prod"])
+        assert "[ERROR]" in result
+        assert "no such binary" in result
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_propagates(self, monkeypatch):
+        """CancelledError (BaseException) is re-raised explicitly, not swallowed."""
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc()
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)), \
+             patch("remediation.asyncio.wait_for", new=AsyncMock(side_effect=asyncio.CancelledError)):
+            with pytest.raises(asyncio.CancelledError):
+                await execute_commands(["kubectl get pods -n prod"])
+
+    @pytest.mark.asyncio
     async def test_real_execution_multiple_commands(self, monkeypatch):
         """Múltiples comandos: el primero OK, el segundo falla."""
         monkeypatch.setattr("remediation.settings.remediation_dry_run", False)

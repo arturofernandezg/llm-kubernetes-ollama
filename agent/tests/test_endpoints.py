@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx as _httpx
 import pytest
 
-from main import app, _format_diagnosis_message, PENDING_ESCALATIONS, PendingEscalation
+from main import app, _format_diagnosis_message, PENDING_ESCALATIONS, PendingEscalation, _cleanup_expired_escalations
 from schemas import AlertItem
 from tests.helpers import (
     VALID_PARAMS, VALID_JSON_STR,
@@ -746,3 +746,71 @@ class TestActionCallbackEndpoint:
         mock_ingest.assert_called_once()
         _, kwargs = mock_ingest.call_args
         assert kwargs["metadata"]["outcome"] == "auto_remediate"
+
+    def test_expired_escalation_is_removed_from_pending(self, api_client):
+        """Expired TTL callback removes entry from PENDING_ESCALATIONS (no zombie entries)."""
+        PENDING_ESCALATIONS["expired-abc"] = _make_pending_escalation("expired-abc", ttl_minutes=-1)
+
+        with patch("main.execute_commands", new_callable=AsyncMock):
+            api_client.post("/webhook/action", json={
+                "context": {"action": "approve", "incident_id": "expired-abc"},
+            })
+
+        assert "expired-abc" not in PENDING_ESCALATIONS
+
+    def test_duplicate_callback_same_incident_is_idempotent(self, api_client):
+        """Second callback for same incident_id → not-found response (entry already popped)."""
+        PENDING_ESCALATIONS["dup-123"] = _make_pending_escalation("dup-123")
+
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value="[DRY-RUN] done"), \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r1 = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve", "incident_id": "dup-123"},
+            })
+            r2 = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve", "incident_id": "dup-123"},
+            })
+
+        assert r1.status_code == 200
+        assert "update" in r1.json()
+        assert r2.status_code == 200
+        assert "ephemeral_text" in r2.json()
+
+
+class TestCleanupExpiredEscalations:
+    """Tests directos de _cleanup_expired_escalations() (ahora async)."""
+
+    def setup_method(self):
+        PENDING_ESCALATIONS.clear()
+
+    def teardown_method(self):
+        PENDING_ESCALATIONS.clear()
+
+    @pytest.mark.asyncio
+    async def test_removes_expired_keeps_valid(self):
+        """Cleanup elimina expiradas y deja válidas intactas."""
+        PENDING_ESCALATIONS["expired"] = _make_pending_escalation("expired", ttl_minutes=-1)
+        PENDING_ESCALATIONS["valid"] = _make_pending_escalation("valid", ttl_minutes=60)
+
+        await _cleanup_expired_escalations()
+
+        assert "expired" not in PENDING_ESCALATIONS
+        assert "valid" in PENDING_ESCALATIONS
+
+    @pytest.mark.asyncio
+    async def test_empty_dict_is_noop(self):
+        """Cleanup sobre dict vacío no lanza excepciones."""
+        await _cleanup_expired_escalations()
+        assert len(PENDING_ESCALATIONS) == 0
+
+    @pytest.mark.asyncio
+    async def test_all_expired_clears_dict(self):
+        """Todos expirados → dict vacío tras cleanup."""
+        PENDING_ESCALATIONS["e1"] = _make_pending_escalation("e1", ttl_minutes=-5)
+        PENDING_ESCALATIONS["e2"] = _make_pending_escalation("e2", ttl_minutes=-1)
+
+        await _cleanup_expired_escalations()
+
+        assert len(PENDING_ESCALATIONS) == 0

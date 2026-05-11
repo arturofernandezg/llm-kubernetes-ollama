@@ -78,15 +78,23 @@ class PendingEscalation:
 
 
 PENDING_ESCALATIONS: dict[str, PendingEscalation] = {}
+_PENDING_LOCK = asyncio.Lock()
 
 
-def _cleanup_expired_escalations() -> None:
+async def _cleanup_expired_escalations() -> None:
     """Elimina escalaciones expiradas del dict en memoria."""
     now = datetime.now()
-    expired = [k for k, v in PENDING_ESCALATIONS.items() if v.expires_at < now]
-    for k in expired:
-        logger.info("Expiring pending escalation %s", k)
-        del PENDING_ESCALATIONS[k]
+    async with _PENDING_LOCK:
+        expired = [k for k, v in PENDING_ESCALATIONS.items() if v.expires_at < now]
+        for k in expired:
+            logger.info("Expiring pending escalation", extra={"incident_id": k})
+            del PENDING_ESCALATIONS[k]
+
+
+async def _periodic_cleanup() -> None:
+    while True:
+        await asyncio.sleep(300)
+        await _cleanup_expired_escalations()
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -131,8 +139,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Could not reach Ollama at startup: %s", exc)
 
+    cleanup_task = asyncio.create_task(_periodic_cleanup())
+
     yield
 
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     await app.state.http_client.aclose()
     logger.info("Agent shutting down — HTTP client closed")
 
@@ -365,14 +380,14 @@ async def _process_alert_with_diagnosis(
             and remediation_result.get("safe_commands")
         ):
             incident_id = str(uuid.uuid4())
-            _cleanup_expired_escalations()
-            PENDING_ESCALATIONS[incident_id] = PendingEscalation(
-                incident_id=incident_id,
-                alert_item=alert,
-                diagnosis=diagnosis,
-                safe_commands=remediation_result["safe_commands"],
-                expires_at=datetime.now() + timedelta(minutes=ESCALATION_TTL_MINUTES),
-            )
+            async with _PENDING_LOCK:
+                PENDING_ESCALATIONS[incident_id] = PendingEscalation(
+                    incident_id=incident_id,
+                    alert_item=alert,
+                    diagnosis=diagnosis,
+                    safe_commands=remediation_result["safe_commands"],
+                    expires_at=datetime.now() + timedelta(minutes=ESCALATION_TTL_MINUTES),
+                )
             logger.info(
                 "Stored pending escalation %s for %s (%d commands)",
                 incident_id, alert_name, len(remediation_result["safe_commands"]),
@@ -463,27 +478,35 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
     Mattermost llama a este endpoint cuando el usuario hace clic en Aprobar o Rechazar.
     La respuesta JSON actualiza el mensaje original y limpia los botones.
     """
-    incident = PENDING_ESCALATIONS.pop(payload.context.incident_id, None)
-
-    if incident is None:
-        logger.warning("Unknown or expired incident_id in callback: %s", payload.context.incident_id)
-        return {
-            "ephemeral_text": "Escalación no encontrada o expirada. No se tomó ninguna acción.",
-            "update": {
-                "message": "⏰ Escalación expirada o no encontrada — no se tomó ninguna acción.",
-                "props": {"attachments": []},
-            },
-        }
-
-    if datetime.now() > incident.expires_at:
-        logger.warning("Escalation %s expired (TTL %dm)", incident.incident_id, ESCALATION_TTL_MINUTES)
-        return {
-            "ephemeral_text": "Escalación expirada. Por favor, espera una nueva alerta.",
-            "update": {
-                "message": "⏰ Escalación expirada (TTL superado) — no se tomó ninguna acción.",
-                "props": {"attachments": []},
-            },
-        }
+    async with _PENDING_LOCK:
+        incident = PENDING_ESCALATIONS.get(payload.context.incident_id)
+        if incident is None:
+            logger.warning(
+                "Unknown or expired incident_id in callback",
+                extra={"incident_id": payload.context.incident_id},
+            )
+            return {
+                "ephemeral_text": "Escalación no encontrada o expirada. No se tomó ninguna acción.",
+                "update": {
+                    "message": "⏰ Escalación expirada o no encontrada — no se tomó ninguna acción.",
+                    "props": {"attachments": []},
+                },
+            }
+        if datetime.now() > incident.expires_at:
+            del PENDING_ESCALATIONS[payload.context.incident_id]
+            logger.warning(
+                "Escalation expired (TTL %dm)",
+                ESCALATION_TTL_MINUTES,
+                extra={"incident_id": incident.incident_id},
+            )
+            return {
+                "ephemeral_text": "Escalación expirada. Por favor, espera una nueva alerta.",
+                "update": {
+                    "message": "⏰ Escalación expirada (TTL superado) — no se tomó ninguna acción.",
+                    "props": {"attachments": []},
+                },
+            }
+        PENDING_ESCALATIONS.pop(payload.context.incident_id)
 
     user = payload.user_name or "human"
     action = payload.context.action

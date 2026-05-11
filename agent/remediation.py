@@ -315,6 +315,7 @@ async def execute_commands(commands: list[str]) -> str:
             lines.append(f"[SKIP] {cmd} — only kubectl commands allowed")
             continue
 
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,
@@ -342,16 +343,25 @@ async def execute_commands(commands: list[str]) -> str:
                 )
                 lines.append(f"[FAILED exit={exit_code}] {cmd}\n{err}")
 
+        except asyncio.CancelledError:
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            raise
+
         except asyncio.TimeoutError:
             logger.warning(
                 "Remediation command timed out after %ds: %s",
                 settings.remediation_command_timeout, cmd,
             )
-            try:
-                proc.kill()
-                await proc.communicate()
-            except Exception:
-                pass
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.communicate()
+                except Exception as kill_exc:
+                    logger.debug("Failed to kill timed-out process", extra={"err": str(kill_exc)})
             lines.append(f"[TIMEOUT] {cmd}")
 
         except Exception as exc:
