@@ -160,6 +160,8 @@ def classify_command(cmd: str) -> CommandSafety:
     3. MUTATING (permitidos pero con efecto)
     4. UNKNOWN (fallback)
     """
+    if not isinstance(cmd, str):
+        return CommandSafety.UNKNOWN
     cmd = cmd.strip()
     if not cmd:
         return CommandSafety.UNKNOWN
@@ -187,6 +189,9 @@ def validate_commands(commands: list[str]) -> list[dict]:
     """
     results = []
     for cmd in commands:
+        if not isinstance(cmd, str):
+            logger.warning("Non-string command skipped", extra={"cmd": repr(cmd)})
+            continue
         safety = classify_command(cmd)
         results.append({
             "command": cmd,
@@ -234,7 +239,7 @@ def decide_action(
         if v["safety"] == CommandSafety.MUTATING:
             restarts, reason_code = implies_pod_restart(v["command"])
             if restarts:
-                logger.info(
+                logger.warning(
                     "Remediation blocked: command implies pod restart",
                     extra={"reason_code": reason_code, "command": v["command"]},
                 )
@@ -246,21 +251,33 @@ def decide_action(
         isinstance(proposed_action, dict)
         and proposed_action.get("field") == "resources.limits.memory"
     ):
+        current_val = proposed_action.get("current_value")
+        new_val = proposed_action.get("new_value")
+        if not current_val or not new_val:
+            logger.warning(
+                "Remediation blocked: proposed_action missing memory fields",
+                extra={
+                    "reason_code": "missing_memory_value",
+                    "current_value": current_val,
+                    "new_value": new_val,
+                },
+            )
+            return RemediationAction.ESCALATE
         try:
-            current_bytes = parse_memory_to_bytes(proposed_action.get("current_value", ""))
-            new_bytes = parse_memory_to_bytes(proposed_action.get("new_value", ""))
+            current_bytes = parse_memory_to_bytes(current_val)
+            new_bytes = parse_memory_to_bytes(new_val)
             if new_bytes > 2 * current_bytes:
-                logger.info(
+                logger.warning(
                     "Remediation blocked: proposed memory exceeds 2x current",
                     extra={
                         "reason_code": "memory_exceeds_2x",
-                        "current_value": proposed_action.get("current_value"),
-                        "new_value": proposed_action.get("new_value"),
+                        "current_value": current_val,
+                        "new_value": new_val,
                     },
                 )
                 return RemediationAction.ESCALATE
         except ValueError as exc:
-            logger.info(
+            logger.warning(
                 "Remediation blocked: cannot parse memory values",
                 extra={"reason_code": "unparseable_memory", "error": str(exc)},
             )
@@ -306,12 +323,12 @@ async def execute_commands(commands: list[str]) -> str:
         try:
             args = shlex.split(cmd)
         except ValueError as exc:
-            logger.warning("Cannot parse command: %s — %s", cmd, exc)
+            logger.warning("Cannot parse command", extra={"cmd": cmd, "error": str(exc)})
             lines.append(f"[SKIP] {cmd} — parse error: {exc}")
             continue
 
         if not args or args[0] != "kubectl":
-            logger.warning("Non-kubectl command skipped in real mode: %s", cmd)
+            logger.warning("Non-kubectl command skipped in real mode", extra={"cmd": cmd})
             lines.append(f"[SKIP] {cmd} — only kubectl commands allowed")
             continue
 
@@ -347,14 +364,14 @@ async def execute_commands(commands: list[str]) -> str:
             if proc is not None:
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as kill_exc:
+                    logger.debug("Failed to kill process on cancel", extra={"err": str(kill_exc)})
             raise
 
         except asyncio.TimeoutError:
             logger.warning(
-                "Remediation command timed out after %ds: %s",
-                settings.remediation_command_timeout, cmd,
+                "Remediation command timed out",
+                extra={"cmd": cmd, "timeout": settings.remediation_command_timeout},
             )
             if proc is not None:
                 try:
@@ -365,7 +382,7 @@ async def execute_commands(commands: list[str]) -> str:
             lines.append(f"[TIMEOUT] {cmd}")
 
         except Exception as exc:
-            logger.warning("Remediation command error: %s — %s", cmd, exc)
+            logger.warning("Remediation command error", extra={"cmd": cmd, "error": str(exc)})
             lines.append(f"[ERROR] {cmd} — {exc}")
 
     return "\n".join(lines)
@@ -386,7 +403,7 @@ def build_remediation_result(
         command_validations: list[dict]  — clasificación de cada comando
         safe_commands: list[str]         — comandos SAFE o MUTATING
         blocked_commands: list[str]      — comandos BLOCKED
-        executed: bool                   — si se ejecutó algo (dry-run)
+        execution_attempted: bool        — True si el executor fue invocado (incluso en dry-run)
         execution_log: str               — salida del executor stub
     """
     safe_commands = [
@@ -402,7 +419,7 @@ def build_remediation_result(
         "command_validations": command_validations,
         "safe_commands": safe_commands,
         "blocked_commands": blocked_commands,
-        "executed": action == RemediationAction.AUTO_REMEDIATE,
+        "execution_attempted": action == RemediationAction.AUTO_REMEDIATE,
         "execution_log": execution_log,
     }
 
@@ -419,7 +436,13 @@ async def process_remediation(diagnosis: dict) -> dict:
     Returns:
         build_remediation_result() dict
     """
-    commands: list[str] = diagnosis.get("commands") or []
+    raw_commands = diagnosis.get("commands") or []
+    commands: list[str] = [c for c in raw_commands if isinstance(c, str)]
+    if len(commands) != len(raw_commands):
+        logger.warning(
+            "Non-string commands filtered from diagnosis",
+            extra={"total": len(raw_commands), "valid": len(commands)},
+        )
     validations = validate_commands(commands)
     action = decide_action(diagnosis, validations)
 

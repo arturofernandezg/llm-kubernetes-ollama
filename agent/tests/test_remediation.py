@@ -376,14 +376,14 @@ class TestProcessRemediation:
         monkeypatch.setattr("remediation.settings.remediation_enabled", False)
         result = await process_remediation(mock_diagnosis_auto_remediate())
         assert result["action"] == RemediationAction.SUGGEST_ONLY
-        assert result["executed"] is False
+        assert result["execution_attempted"] is False
 
     @pytest.mark.asyncio
     async def test_escalate_with_blocked_command(self, monkeypatch):
         monkeypatch.setattr("remediation.settings.remediation_enabled", True)
         result = await process_remediation(mock_diagnosis_escalate())
         assert result["action"] == RemediationAction.ESCALATE
-        assert result["executed"] is False
+        assert result["execution_attempted"] is False
         assert len(result["blocked_commands"]) > 0
 
     @pytest.mark.asyncio
@@ -393,7 +393,7 @@ class TestProcessRemediation:
         monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
         result = await process_remediation(mock_diagnosis_auto_remediate())
         assert result["action"] == RemediationAction.AUTO_REMEDIATE
-        assert result["executed"] is True
+        assert result["execution_attempted"] is True
         assert "[DRY-RUN]" in result["execution_log"]
         assert "command_validations" in result
         assert "safe_commands" in result
@@ -405,7 +405,7 @@ class TestProcessRemediation:
         diagnosis = {**mock_diagnosis_result(), "commands": []}
         result = await process_remediation(diagnosis)
         assert result["action"] == RemediationAction.SUGGEST_ONLY
-        assert result["executed"] is False
+        assert result["execution_attempted"] is False
 
 
 # ── TestParseMemoryToBytes ────────────────────────────────────────────────────
@@ -610,3 +610,96 @@ class TestDecideActionTutorRule:
         }
         validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
         assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+    def test_memory_missing_current_value_escalates(self, monkeypatch):
+        """Missing current_value in proposed_action → reason_code missing_memory_value → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "prod",
+                "container": "engine", "field": "resources.limits.memory",
+                "new_value": "512Mi",
+            },
+        }
+        validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_memory_missing_new_value_escalates(self, monkeypatch):
+        """Missing new_value in proposed_action → reason_code missing_memory_value → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "prod",
+                "container": "engine", "field": "resources.limits.memory",
+                "current_value": "256Mi",
+            },
+        }
+        validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+
+# ── TestClassifyCommandTypeGuard ──────────────────────────────────────────────
+
+class TestClassifyCommandTypeGuard:
+    """R1 — classify_command rechaza inputs no-string sin lanzar AttributeError."""
+
+    def test_none_returns_unknown(self):
+        assert classify_command(None) == CommandSafety.UNKNOWN
+
+    def test_integer_returns_unknown(self):
+        assert classify_command(123) == CommandSafety.UNKNOWN
+
+    def test_list_returns_unknown(self):
+        assert classify_command(["kubectl", "get", "pods"]) == CommandSafety.UNKNOWN
+
+
+# ── TestValidateCommandsNonString ─────────────────────────────────────────────
+
+class TestValidateCommandsNonString:
+    """R2 — validate_commands filtra items no-string con warning."""
+
+    def test_none_in_list_is_skipped(self):
+        result = validate_commands([None, "kubectl get pods"])
+        assert len(result) == 1
+        assert result[0]["safety"] == CommandSafety.SAFE
+
+    def test_integer_in_list_is_skipped(self):
+        result = validate_commands([42, "kubectl get pods"])
+        assert len(result) == 1
+        assert result[0]["command"] == "kubectl get pods"
+
+    def test_all_non_strings_returns_empty(self):
+        result = validate_commands([None, 42, True])
+        assert result == []
+
+    def test_mixed_valid_strings_preserved(self):
+        result = validate_commands(["kubectl get pods", None, "kubectl drain node-1"])
+        assert len(result) == 2
+        assert result[0]["safety"] == CommandSafety.SAFE
+        assert result[1]["safety"] == CommandSafety.BLOCKED
+
+
+# ── TestProcessRemediationNonStringFilter ─────────────────────────────────────
+
+class TestProcessRemediationNonStringFilter:
+    """R6 — process_remediation filtra comandos no-string del diagnóstico."""
+
+    @pytest.mark.asyncio
+    async def test_non_string_commands_filtered(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        diagnosis = {**mock_diagnosis_result(), "commands": [None, 42, "kubectl get pods -n prod"]}
+        result = await process_remediation(diagnosis)
+        assert len(result["command_validations"]) == 1
+        assert result["command_validations"][0]["command"] == "kubectl get pods -n prod"
+
+    @pytest.mark.asyncio
+    async def test_all_non_string_commands_give_suggest_only(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        diagnosis = {**mock_diagnosis_result(), "commands": [None, 42]}
+        result = await process_remediation(diagnosis)
+        assert result["action"] == RemediationAction.SUGGEST_ONLY
+        assert result["execution_attempted"] is False

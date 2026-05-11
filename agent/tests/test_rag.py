@@ -408,7 +408,7 @@ SAMPLE_REMEDIATION = {
         "kubectl patch deployment nginx -n arturo-llm-test --type=json -p='[...]'",
     ],
     "blocked_commands": [],
-    "executed": True,
+    "execution_attempted": True,
     "execution_log": "[DRY-RUN] kubectl patch deployment nginx ...",
 }
 

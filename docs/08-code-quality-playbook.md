@@ -112,7 +112,7 @@ Formato: tabla markdown. Total bajo 500 palabras. Sin generalidades — solo fin
 | Sesión | Módulo / Área | Archivo principal | Estado |
 |---|---|---|---|
 | #1 | Fixes high (cross-module) | remediation.py + main.py | DONE (2026-05-11) |
-| #2 | remediation.py medium/low | agent/remediation.py | TODO |
+| #2 | remediation.py medium/low | agent/remediation.py | DONE (2026-05-11) |
 | #3 | main.py medium/low | agent/main.py | TODO |
 | #4 | mattermost.py | agent/mattermost.py | TODO |
 | #5 | Cross-cutting (helpers, retry, logger) | varios | TODO |
