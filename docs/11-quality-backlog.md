@@ -30,8 +30,8 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 | R4 | medium | remediation.py:309,314,354,368 + CancelledError handler | Logger usa `%-formatting` en 4 puntos; `except Exception: pass` en kill de CancelledError sin log | Convertir a `extra={}` estructurado; `except Exception as kill_exc: logger.debug(...)` | DONE |
 | R5 | low | remediation.py:405 | `executed: action == AUTO_REMEDIATE` es `True` en dry-run aunque no hubo ejecución real | Renombrado a `execution_attempted` (también actualizado en test_remediation.py y test_rag.py) | DONE |
 | R6 | low | remediation.py:422 | `commands: list[str] = diagnosis.get("commands") or []` — type hint dice `list[str]` pero no valida el contenido | Filtrar no-strings en `process_remediation` con `logger.warning` | DONE |
-| R7 | medium | remediation.py:392-395 + 428-431 | `safe_commands` list comprehension duplicada 2× (idéntica en `build_remediation_result` y `process_remediation`) | Extraer helper `_get_safe_commands(validations)` | TODO |
-| R8 | medium | remediation.py:252 | Regla 4.6: si `current_value` parsea a `0` bytes, `new_bytes > 2 * 0` es siempre True → cualquier cambio bloquea | Guard: si `current_bytes == 0`, devolver ESCALATE con `reason_code: zero_current_memory` | TODO |
+| R7 | medium | remediation.py:392-395 + 428-431 | `safe_commands` list comprehension duplicada 2× (idéntica en `build_remediation_result` y `process_remediation`) | Extraer helper `_get_safe_commands(validations)` | DONE |
+| R8 | medium | remediation.py:252 | Regla 4.6: si `current_value` parsea a `0` bytes, `new_bytes > 2 * 0` es siempre True → cualquier cambio bloquea | Guard: si `current_bytes == 0`, devolver ESCALATE con `reason_code: zero_current_memory` | DONE |
 
 ---
 
@@ -68,13 +68,13 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 
 ---
 
-## Cross-cutting (pendiente sesión #5)
+## Cross-cutting (sesión #5, 2026-05-11)
 
 | ID | Severidad | Localización | Descripción | Fix propuesto | Estado |
 |---|---|---|---|---|---|
-| X1 | medium | main.py:228-230,277-280,395-399 | Extracción `severity/pod/namespace/alert_name` de `AlertItem.labels` duplicada 3× | Helper `_extract_alert_meta(alert)` o método `AlertItem.meta()` en schemas.py | TODO |
+| X1 | medium | main.py:327, 440 | Consolidación de extracción `alert_name`: 2 inline `alert.labels.get("alertname")` reemplazadas con llamadas a helper `_extract_alert_meta(alert)` existente | Usar `_extract_alert_meta` consistentemente en ambas call sites | DONE |
 | X2 | medium | mattermost.py:_post_with_retry / main.py:574-613 | Retry con exponential backoff implementado 2× con detalles divergentes | Helper `retry_with_backoff(coro, max_attempts, base, max_delay)` compartido | TODO |
-| X3 | low | main.py + remediation.py vs mattermost.py | Logger style inconsistente: primeros usan `extra={...}`, mattermost.py usa f-strings | Estandarizar a `extra={...}` en todo el proyecto | TODO |
+| X3 | low | main.py:/extract endpoint — líneas 594–665 | 7 logger calls embebían `request_id` como `[%s]` en message strings; inconsistente con `extra={}` estructurado | Estandarizar a `extra={"request_id": request_id, ...}` en 7 calls | DONE |
 | X4 | high | main.py:80 | `PENDING_ESCALATIONS` perdido en restart de pod — decisiones humanas pendientes desaparecen silenciosamente | Documentar limitación explícitamente; futura mejora: persistir en ChromaDB o Redis | WONTFIX (MVP) |
 | X5 | medium | main.py:488 | Callback de Mattermost no verifica HMAC/shared secret — cualquiera que conozca el endpoint puede aprobar remediaciones | Añadir verificación de token en callback URL | TODO |
 

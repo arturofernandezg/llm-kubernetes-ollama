@@ -324,7 +324,7 @@ async def _process_alert_with_diagnosis(
     chroma_client,
 ) -> None:
     """Background task: RAG query → retrieve context → LLM diagnosis → Mattermost."""
-    alert_name = alert.labels.get("alertname", "UnknownAlert")
+    severity, alert_name, pod, namespace = _extract_alert_meta(alert)
     try:
         description = alert.annotations.get("description", "")
         query = build_rag_query(alert.labels, description)
@@ -437,7 +437,7 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
     )
     
     for idx, alert in enumerate(payload.alerts):
-        alert_name = alert.labels.get("alertname", "UnknownAlert")
+        _, alert_name, _, _ = _extract_alert_meta(alert)
 
         logger.info(
             "Processing alert %d/%d",
@@ -591,7 +591,7 @@ async def extract_parameters(request: InfraRequest):
     """
     request_id = str(uuid.uuid4())[:8]
     start = time.time()
-    logger.info("[%s] Processing: %s", request_id, request.message[:100])
+    logger.info("Processing request", extra={"request_id": request_id, "message_preview": request.message[:100]})
 
     prompt = PROMPT_TEMPLATE.format(user_request=request.message)
     client: httpx.AsyncClient = app.state.http_client
@@ -614,7 +614,7 @@ async def extract_parameters(request: InfraRequest):
             break  # éxito, salir del loop
         except httpx.HTTPStatusError as exc:
             # Error del modelo (4xx/5xx) — no reintentar
-            logger.error("[%s] Ollama HTTP error: %s", request_id, exc.response.status_code)
+            logger.error("Ollama HTTP error", extra={"request_id": request_id, "status_code": exc.response.status_code})
             raise HTTPException(
                 status_code=502, detail=f"LLM returned error: {exc.response.status_code}"
             )
@@ -626,18 +626,27 @@ async def extract_parameters(request: InfraRequest):
                     settings.retry_max_delay,
                 )
                 logger.warning(
-                    "[%s] Ollama attempt %d/%d failed (%s), retrying in %.1fs",
-                    request_id, attempt + 1, settings.retry_max_attempts,
-                    type(exc).__name__, delay,
+                    "Ollama attempt failed, retrying",
+                    extra={
+                        "request_id": request_id,
+                        "attempt": attempt + 1,
+                        "max_attempts": settings.retry_max_attempts,
+                        "exception_type": type(exc).__name__,
+                        "retry_delay_seconds": delay,
+                    },
                 )
                 await asyncio.sleep(delay)
             else:
                 logger.error(
-                    "[%s] Ollama failed after %d attempts: %s",
-                    request_id, settings.retry_max_attempts, exc,
+                    "Ollama failed after max attempts",
+                    extra={
+                        "request_id": request_id,
+                        "max_attempts": settings.retry_max_attempts,
+                        "error": str(exc),
+                    },
                 )
         except httpx.HTTPError as exc:
-            logger.error("[%s] Ollama connection error: %s", request_id, exc)
+            logger.error("Ollama connection error", extra={"request_id": request_id, "error": str(exc)})
             raise HTTPException(status_code=502, detail=f"LLM unavailable: {exc}")
 
     if response is None:
@@ -660,9 +669,9 @@ async def extract_parameters(request: InfraRequest):
     duration_ms = int((time.time() - start) * 1000)
 
     if parsed_dict:
-        logger.info("[%s] OK via '%s' in %dms — %s", request_id, method, duration_ms, parsed_dict)
+        logger.info("Extraction succeeded", extra={"request_id": request_id, "method": method, "duration_ms": duration_ms})
     else:
-        logger.warning("[%s] Failed in %dms. Raw: %s", request_id, duration_ms, raw[:150])
+        logger.warning("Extraction failed", extra={"request_id": request_id, "duration_ms": duration_ms, "raw_preview": raw[:150]})
 
     return ExtractResponse(
         request_id=request_id,

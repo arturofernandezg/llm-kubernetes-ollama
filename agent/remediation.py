@@ -266,6 +266,12 @@ def decide_action(
         try:
             current_bytes = parse_memory_to_bytes(current_val)
             new_bytes = parse_memory_to_bytes(new_val)
+            if current_bytes == 0:
+                logger.warning(
+                    "Remediation blocked: cannot evaluate 2x rule with zero current memory",
+                    extra={"reason_code": "zero_current_memory", "current_value": current_val},
+                )
+                return RemediationAction.ESCALATE
             if new_bytes > 2 * current_bytes:
                 logger.warning(
                     "Remediation blocked: proposed memory exceeds 2x current",
@@ -388,6 +394,14 @@ async def execute_commands(commands: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _get_safe_commands(validations: list[dict]) -> list[str]:
+    """Extract safe/mutating commands from validation results."""
+    return [
+        v["command"] for v in validations
+        if v["safety"] in (CommandSafety.SAFE, CommandSafety.MUTATING)
+    ]
+
+
 # ── Builder de resultado ──────────────────────────────────────────────────────
 
 def build_remediation_result(
@@ -406,10 +420,7 @@ def build_remediation_result(
         execution_attempted: bool        — True si el executor fue invocado (incluso en dry-run)
         execution_log: str               — salida del executor stub
     """
-    safe_commands = [
-        v["command"] for v in command_validations
-        if v["safety"] in (CommandSafety.SAFE, CommandSafety.MUTATING)
-    ]
+    safe_commands = _get_safe_commands(command_validations)
     blocked_commands = [
         v["command"] for v in command_validations
         if v["safety"] == CommandSafety.BLOCKED
@@ -448,10 +459,7 @@ async def process_remediation(diagnosis: dict) -> dict:
 
     execution_log = ""
     if action == RemediationAction.AUTO_REMEDIATE:
-        safe_cmds = [
-            v["command"] for v in validations
-            if v["safety"] in (CommandSafety.SAFE, CommandSafety.MUTATING)
-        ]
+        safe_cmds = _get_safe_commands(validations)
         execution_log = await execute_commands(safe_cmds)
 
     result = build_remediation_result(diagnosis, action, validations, execution_log)

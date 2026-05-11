@@ -586,6 +586,21 @@ class TestDecideActionTutorRule:
         validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
         assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
 
+    def test_memory_zero_current_escalates(self, monkeypatch):
+        """Zero current memory → cannot evaluate 2x rule → reason_code zero_current_memory → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "prod",
+                "container": "engine", "field": "resources.limits.memory",
+                "current_value": "0Mi", "new_value": "256Mi",
+            },
+        }
+        validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
     def test_no_proposed_action_falls_back_to_legacy(self, monkeypatch):
         """Sin proposed_action, regla 4.6 se salta; decision la toman risk/confidence."""
         self._base_monkeypatch(monkeypatch)

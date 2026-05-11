@@ -203,6 +203,7 @@
   "tests/test_remediation.py::TestDecideActionTutorRule::test_memory_missing_current_value_escalates",
   "tests/test_remediation.py::TestDecideActionTutorRule::test_memory_missing_new_value_escalates",
   "tests/test_remediation.py::TestDecideActionTutorRule::test_memory_unparseable_escalates",
+  "tests/test_remediation.py::TestDecideActionTutorRule::test_memory_zero_current_escalates",
   "tests/test_remediation.py::TestDecideActionTutorRule::test_no_proposed_action_falls_back_to_legacy",
   "tests/test_remediation.py::TestDecideActionTutorRule::test_patch_deployment_spec_template_escalates",
   "tests/test_remediation.py::TestDecideActionTutorRule::test_proposed_action_non_memory_field_skipped",
