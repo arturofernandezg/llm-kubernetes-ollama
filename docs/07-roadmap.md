@@ -153,7 +153,7 @@ en Mattermost.
 
 ---
 
-## Fase 3 — Remediación Autónoma y Feedback Loop
+## Fase 3 — Remediación Autónoma y Feedback Loop ✅ COMPLETA (2026-05-12)
 
 ### Auto-remediación
 - [x] **`remediation.py`**: validation layer (whitelist/blacklist de comandos via regex),
@@ -190,8 +190,9 @@ en Mattermost.
   en la colección `incidents` de ChromaDB. Implementado en `main.py` con `FEEDBACK_COUNTER` Prometheus.
 - [x] Estructura: alerta original + diagnóstico + fix propuesto + outcome (auto_remediate/escalate/suggest_only/no_remediation).
   Builder en `rag.py`: `build_incident_document()`. Fail-open: si ChromaDB falla, el pipeline continúa.
-- [ ] Monitorización de bucle cerrado: verificar en Prometheus que la alerta cesa tras
-  aplicar el fix. Si cesa → `outcome: resolved`. Si persiste → `outcome: failed`, escalar.
+- ⏳ Monitorización de bucle cerrado — **post-MVP**: verificar en Prometheus que la alerta cesa
+  tras aplicar el fix. Si cesa → `outcome: resolved`. Si persiste → `outcome: failed`, escalar.
+  (Requiere `REMEDIATION_DRY_RUN=false` — bloqueado hasta acuerdo con tutor sobre regla 4.5.)
 
 ### Botones interactivos (Mattermost)
 - [x] Mensajes con acciones: `[✅ Ejecutar remediación]` / `[❌ Rechazar]` (2026-05-06).
@@ -201,6 +202,10 @@ en Mattermost.
   - Contadores Prometheus: `human_approved` + `human_rejected`.
   - NetworkPolicy: Mattermost → agent puerto 8000 añadida.
   - Env var `AGENT_CALLBACK_URL` en deployment para configurar URL de callback.
+
+### Sesiones de calidad #1-#8 (2026-05-11 → 2026-05-12)
+- [x] **Sesiones #1-#7** (2026-05-11 → 2026-05-12): 43 findings corregidos en remediation.py, main.py, mattermost.py, rag.py. Nuevos módulos: `utils.py` (backoff_delay). 272 tests totales. Ver `docs/11-quality-backlog.md`.
+- [x] **Sesión #8** (2026-05-12): `nodeSelector: guaranteed="true"` + tolerations en los 3 workloads críticos (`agent`, `ollama`, `chromadb`) para forzar scheduling en nodos guaranteed. Docs sync cierre Fase 3.
 
 ### Entregable Fase 3
 Sistema autónomo: el agente auto-parchea OOMs simples, escala a humano los casos complejos,

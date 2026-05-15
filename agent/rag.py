@@ -44,7 +44,14 @@ async def generate_embedding(
         timeout=30.0,
     )
     response.raise_for_status()
-    return response.json()["embedding"]
+    data = response.json()
+    embedding = data.get("embedding")
+    if not embedding:
+        raise ValueError(
+            f"Ollama embedding response missing 'embedding' key "
+            f"(model={settings.ollama_embed_model!r}, keys={list(data.keys())})"
+        )
+    return embedding
 
 
 # ── ChromaDB client ───────────────────────────────────────────────────────────

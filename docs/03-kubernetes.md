@@ -7,8 +7,8 @@
 | Nombre | ai-infra-agent |
 | Proyecto GCP | uniovi-ai-infra-agent |
 | Zona | europe-southwest1-a |
-| Tipo de nodo | e2-standard-2 (Spot en Fase 1, se migrará a **Standard** en Fase 2 para albergar ChromaDB) |
-| Nodos | 2 (Frecuentemente 1 por preemption spot en Fase 1) |
+| Tipo de nodo | e2-standard-2 Spot (pool principal) + 2 nodos guaranteed (`guaranteed=true`) asignados por tutor 2026-05-06 |
+| Nodos | 2 Spot + 2 guaranteed |
 | Namespace | arturo-llm-test |
 | K8s version | 1.35.1-gke.1396001 |
 
@@ -177,6 +177,27 @@ impide que uvicorn escriba ficheros temporales en el filesystem del contenedor.
 
 **Nota sobre Ollama**: la imagen oficial de Ollama requiere root (escribe en `/root/.ollama`).
 Se aplica `allowPrivilegeEscalation: false` y `capabilities.drop: [ALL]` como mitigación.
+
+## Node Scheduling — Nodos Guaranteed (Sesión #8, 2026-05-12)
+
+Los workloads críticos (`agent`, `ollama`, `chromadb`) están anclados a los 2 nodos con label `guaranteed=true` asignados por el tutor (2026-05-06). Esto evita que sean interrumpidos por preemption de nodos Spot.
+
+**Configuración aplicada** en `deployment-agent.yaml`, `deployment-ollama.yaml` y `chromadb.yaml` (bajo `spec.template.spec`):
+
+```yaml
+nodeSelector:
+  guaranteed: "true"
+tolerations:
+- key: "guaranteed"
+  operator: "Equal"
+  value: "true"
+  effect: "NoSchedule"
+```
+
+**Notas:**
+- Si los nodos guaranteed no tienen taint `guaranteed:NoSchedule`, las tolerations son inocuas (no afectan al scheduling).
+- `chromadb.yaml` mantiene también la toleration GCP Spot existente como safety net por si se elimina el nodeSelector accidentalmente.
+- Verificación post-apply: `kubectl get pods -n arturo-llm-test -o wide` → columna NODE debe mostrar nodos guaranteed.
 
 ## Carga de modelos (sin Cloud NAT)
 

@@ -13,6 +13,13 @@ spec:
       labels:
         app: agent
     spec:
+      nodeSelector:
+        guaranteed: "true"
+      tolerations:
+      - key: "guaranteed"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
       containers:
       - name: agent
         # En producción, sustituir :latest por el SHA del commit:

@@ -138,6 +138,28 @@ class TestGenerateEmbedding:
         with pytest.raises(Exception, match="Ollama down"):
             await generate_embedding("test", client)
 
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_embedding_key_missing(self):
+        """S2: Ollama response without 'embedding' key raises ValueError with context."""
+        client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"error": "model not found"}
+        client.post = AsyncMock(return_value=mock_resp)
+        with pytest.raises(ValueError, match="missing 'embedding' key"):
+            await generate_embedding("test", client)
+
+    @pytest.mark.asyncio
+    async def test_raises_value_error_when_embedding_is_empty_list(self):
+        """S2: Ollama response with empty embedding list raises ValueError."""
+        client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"embedding": []}
+        client.post = AsyncMock(return_value=mock_resp)
+        with pytest.raises(ValueError, match="missing 'embedding' key"):
+            await generate_embedding("test", client)
+
 
 # ── retrieve_context tests ────────────────────────────────────────────────────
 

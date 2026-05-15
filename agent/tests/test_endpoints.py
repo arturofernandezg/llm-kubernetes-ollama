@@ -16,6 +16,7 @@ import main
 from main import (
     app, _format_diagnosis_message, _format_escalation_body, _extract_alert_meta,
     PENDING_ESCALATIONS, PendingEscalation, _cleanup_expired_escalations,
+    _process_alert_with_diagnosis,
 )
 from mattermost import make_hmac_token
 from schemas import AlertItem
@@ -992,3 +993,47 @@ class TestActionCallbackApproveFailure:
         assert "update" in body
         assert "ERROR" in body["update"]["message"]
         assert "cmd failed" in body["update"]["message"]
+
+
+# ── M10: fallback send_mattermost_alert exception does not propagate ──────────
+
+class TestProcessAlertFallbackException:
+    """M10: if the fallback Mattermost send in the except block also fails,
+    the exception is logged, not propagated — background task completes cleanly."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_failure_does_not_raise(self):
+        alert = AlertItem(
+            status="firing",
+            labels={"alertname": "TestAlert", "severity": "critical",
+                    "pod": "test-pod", "namespace": "test-ns"},
+            annotations={"description": "test"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+        http_client = AsyncMock()
+        chroma_client = None
+
+        with patch("main.build_rag_query", side_effect=RuntimeError("pipeline boom")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock,
+                   side_effect=RuntimeError("mattermost also down")):
+            # Should complete without raising — M10 guard logs the fallback failure
+            await _process_alert_with_diagnosis(alert, http_client, chroma_client)
+
+    @pytest.mark.asyncio
+    async def test_fallback_called_when_pipeline_fails(self):
+        alert = AlertItem(
+            status="firing",
+            labels={"alertname": "TestAlert", "severity": "warning",
+                    "pod": "test-pod", "namespace": "test-ns"},
+            annotations={"description": "test"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+        http_client = AsyncMock()
+
+        with patch("main.build_rag_query", side_effect=RuntimeError("pipeline boom")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock, return_value=True) as mock_send:
+            await _process_alert_with_diagnosis(alert, http_client, None)
+
+        mock_send.assert_called_once()
+        fallback_msg = mock_send.call_args[0][0]
+        assert "TestAlert" in fallback_msg

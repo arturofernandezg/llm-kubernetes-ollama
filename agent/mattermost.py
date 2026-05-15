@@ -11,6 +11,7 @@ import asyncio
 from typing import Any
 
 from config import settings, logger
+from utils import backoff_delay
 
 MATTERMOST_MAX_RETRIES = 3
 MATTERMOST_BASE_DELAY = 1.0
@@ -62,7 +63,7 @@ async def _post_with_retry(payload: dict[str, Any]) -> bool:
                 return False
 
             if attempt < MATTERMOST_MAX_RETRIES - 1:
-                delay = MATTERMOST_BASE_DELAY * (2 ** attempt)
+                delay = backoff_delay(attempt, MATTERMOST_BASE_DELAY, 30.0)
                 logger.warning(
                     "Mattermost retry",
                     extra={

@@ -144,7 +144,7 @@ Ollama /api/generate (78.7s) →
 
 Tu sistema no es un prototipo local — está desplegado en un cluster GKE real con alertas reales fluyendo. Úsalo como argumento de peso:
 
-- **Cluster real**: GKE europe-southwest1-a, 2 nodos spot e2-standard-2
+- **Cluster real**: GKE europe-southwest1-a, 2 nodos spot e2-standard-2 + 2 nodos guaranteed (label `guaranteed=true`)
 - **Stack completo desplegado**: Prometheus + Alertmanager + ChromaDB + Ollama + FastAPI + Grafana + Mattermost — todos corriendo en K8s, no en docker-compose local
 - **E2E verificado en cluster**: KubePodOOMKilled → RAG → LLM → Mattermost (tiempos reales: 187s, 211s, 78s)
 - **Human-in-the-loop E2E**: escalation con botones ✅/❌ en Mattermost — mensaje actualizado in-place al aprobar/rechazar (2026-05-06)
@@ -180,4 +180,4 @@ Tu sistema no es un prototipo local — está desplegado en un cluster GKE real 
 
 ---
 
-*Última actualización: 2026-05-11*
+*Última actualización: 2026-05-12*

@@ -22,11 +22,11 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 | `docs/06-testing.md` | 103 tests en 7 ficheros, mocking, errores comunes y soluciones |
 | `docs/07-roadmap.md` | Fases del proyecto, TODOs por fase, mejoras completadas |
 | `docs/08-code-quality-playbook.md` | Workflow de sesiones de calidad, 8 dimensiones de scan, prompt prehecho, sesiones tentativas |
-| `docs/11-quality-backlog.md` | Backlog vivo de findings de calidad agrupados por módulo (43 findings, sesiones 1-7) |
+| `docs/11-quality-backlog.md` | Backlog vivo de findings de calidad agrupados por módulo (43 findings, sesiones #1-#8 completadas) |
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 
-## Estado actual (2026-04-23)
+## Estado actual (2026-05-12)
 
 - **Fase 0 (Legado)**: Completa (agente modular + Ollama local + Terraform endpoints + K8s base). Se mantienen los archivos sin borrar.
 - **Fase 1 (Observabilidad)**: En curso (~98%).
@@ -71,9 +71,10 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ HMAC-SHA256 en callbacks de botones (2026-05-11): `make_hmac_token(incident_id, action, secret)` + `_verify_hmac_token()` + `WEBHOOK_SECRET` en config + K8s Secret injection (`optional: true`). 263 tests.
   - ✅ E2E botones verificado (2026-05-06): KubePodOOMKilled → escalate (78s, confidence=0.90) → botones ✅/❌ en Mattermost → callback → mensaje actualizado in-place.
   - ✅ Config Mattermost requerida: `MM_PLUGINSETTINGS_ENABLE=true` + `MM_SERVICEALLOWEDUNTRUSTEDINTERNALCONNECTIONS=agent-svc.arturo-llm-test.svc.cluster.local` en `k8s/mattermost.yaml`.
+  - ✅ Calidad código sesión #7 (2026-05-12): S2 guard ValueError en `generate_embedding()`, S3 `m.get()` seguro en list comprehensions Ollama, S4 warning startup `WEBHOOK_SECRET`, M10 try/except fallback Mattermost, X2 `backoff_delay()` extraído a `utils.py`. 272 tests.
+  - ✅ Calidad código sesión #8 (2026-05-12): `nodeSelector: guaranteed="true"` + tolerations en `deployment-agent`, `deployment-ollama`, `chromadb`. Workloads críticos fijados a nodos guaranteed. Docs sync cierre Fase 3. Sesiones #1-#8 completadas.
   - ⏳ Pendiente: screenshot Grafana dashboard.
   - ⏳ Pendiente: confirmar con tutor excepción a regla 4.5. Pasar a `DRY_RUN=false` requiere acuerdo con tutor.
-  - ⏳ Pendiente: migrar workloads críticos a nodos guaranteed (label `guaranteed=true`, asignados por tutor 2026-05-06).
 
 ## Stack
 
@@ -91,7 +92,8 @@ agent/tf_generator.py   → Generación de template Terraform (Fase 0 legacy)
 agent/mattermost.py     → Cliente HTTP async Mattermost con retry/backoff
 agent/rag.py            → Cliente ChromaDB, ingesta, query, embeddings via Ollama
 agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON estructurado
-agent/tests/            → 263 tests en 9 ficheros
+agent/utils.py          → backoff_delay() helper (exponential backoff compartido)
+agent/tests/            → 272 tests en 10 ficheros
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
 k8s/                    → Manifiestos K8s (agent, ollama, chromadb, networkpolicy)
 k8s/prometheus.yaml     → Prometheus + kube-state-metrics + ClusterRoles + 5 reglas

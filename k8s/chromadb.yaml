@@ -69,14 +69,20 @@ spec:
       labels:
         app: chromadb
     spec:
+      nodeSelector:
+        guaranteed: "true"
       # Las bases de datos no recomiendan ejecutarse como ROOT
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
       tolerations:
-        # GCP Spot Toleration para que K8s permita programarlo en el node pool e2-standard-2 actual
+        # GCP Spot Toleration — dead code con nodeSelector guaranteed, se mantiene como safety net
         - key: "cloud.google.com/gke-spot"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+        - key: "guaranteed"
           operator: "Equal"
           value: "true"
           effect: "NoSchedule"

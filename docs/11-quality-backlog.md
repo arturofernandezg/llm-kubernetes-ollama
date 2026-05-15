@@ -48,7 +48,7 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 | M7 | medium | main.py:494 | Excepción en `execute_commands` loguea el error pero no incrementa counter de fallo | `REMEDIATION_COUNTER.labels(action="human_approve_failed").inc()` | DONE |
 | M8 | low | main.py:316 | `DIAGNOSIS_COUNTER.labels(outcome="rag_ok")` no está en la docstring de labels del counter (L52) | Añadir `rag_ok` a docstring o renombrar | DONE |
 | M9 | low | main.py:497,507 | Labels `human_approved`/`human_rejected` en `REMEDIATION_COUNTER` no declarados en docstring (L57) | Actualizar docstring | DONE |
-| M10 | medium | main.py:309 | Outer `try/except Exception` en `_process_alert_with_diagnosis` demasiado amplio; puede enmascarar bugs en el fallback mismo | Narrow scope al bloque de pipeline, no al fallback send | TODO |
+| M10 | medium | main.py:309 | Outer `try/except Exception` en `_process_alert_with_diagnosis` demasiado amplio; puede enmascarar bugs en el fallback mismo | Fallback `send_mattermost_alert` envuelto en su propio try/except con log estructurado | DONE |
 
 ---
 
@@ -73,10 +73,20 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 | ID | Severidad | Localización | Descripción | Fix propuesto | Estado |
 |---|---|---|---|---|---|
 | X1 | medium | main.py:327, 440 | Consolidación de extracción `alert_name`: 2 inline `alert.labels.get("alertname")` reemplazadas con llamadas a helper `_extract_alert_meta(alert)` existente | Usar `_extract_alert_meta` consistentemente en ambas call sites | DONE |
-| X2 | medium | mattermost.py:_post_with_retry / main.py:574-613 | Retry con exponential backoff implementado 2× con detalles divergentes | Helper `retry_with_backoff(coro, max_attempts, base, max_delay)` compartido | TODO |
+| X2 | medium | mattermost.py:_post_with_retry / main.py:574-613 | Retry con exponential backoff implementado 2× con detalles divergentes | `backoff_delay(attempt, base, max_delay)` helper en `utils.py`; usado en ambos módulos (full shared wrapper no viable: semántica divergente — bool vs HTTPException) | DONE |
 | X3 | low | main.py:/extract endpoint — líneas 594–665 | 7 logger calls embebían `request_id` como `[%s]` en message strings; inconsistente con `extra={}` estructurado | Estandarizar a `extra={"request_id": request_id, ...}` en 7 calls | DONE |
 | X4 | high | main.py:80 | `PENDING_ESCALATIONS` perdido en restart de pod — decisiones humanas pendientes desaparecen silenciosamente | Documentar limitación explícitamente; futura mejora: persistir en ChromaDB o Redis | WONTFIX (MVP) |
 | X5 | medium | main.py:488 | Callback de Mattermost no verifica HMAC/shared secret — cualquiera que conozca el endpoint puede aprobar remediaciones | HMAC-SHA256 por botón (incident_id:action firmado con webhook_secret); `_verify_hmac_token()` en `/webhook/action`; `optional: true` en K8s Secret para backward compat | DONE |
+
+---
+
+## Seguridad — sesión #7 (2026-05-12)
+
+| ID | Severidad | Localización | Descripción | Fix propuesto | Estado |
+|---|---|---|---|---|---|
+| S2 | high | rag.py:47 | `response.json()["embedding"]` sin guard — si Ollama devuelve error/formato inesperado, `KeyError` directo | `data.get("embedding")` + `ValueError` con contexto si ausente o vacío | DONE |
+| S3 | medium | main.py:142, 221 | `m["name"]` en list comprehension sobre respuesta Ollama `/api/tags` — `KeyError` si alguna entrada no tiene `"name"` | `m.get("name", "")` con filtrado de entradas sin nombre | DONE |
+| S4 | medium | main.py:87-88 | `_verify_hmac_token` devuelve `True` si `webhook_secret=""` — bypass total sin warning | Warning explícito en lifespan startup; bypass mantenido para backward compat (K8s Secret `optional: true`) | DONE |
 
 ---
 
@@ -84,4 +94,5 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 
 - Los `WONTFIX` reflejan decisiones conscientemente aceptadas para el MVP del TFG.
 - Los findings de sesión #1 tienen tests añadidos que documentan el comportamiento correcto.
-- La sesión #6 (k8s nodeSelector guaranteed) no sale de este backlog — es una tarea de infraestructura, no de calidad de código.
+- La sesión #8 (k8s nodeSelector guaranteed + docs sync) no tiene findings en este backlog — es una tarea de infraestructura/docs, no de calidad de código. Sesiones #1-#8 completadas.
+- X2: `backoff_delay` helper en `utils.py` consolida el cálculo de delay; wrapper completo no extraído porque las semánticas son incompatibles (mattermost retorna bool, /extract lanza HTTPException).

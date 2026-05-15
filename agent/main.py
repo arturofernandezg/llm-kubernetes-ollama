@@ -35,6 +35,7 @@ from rag import (
 )
 from diagnosis import generate_diagnosis
 from remediation import process_remediation, execute_commands, RemediationAction
+from utils import backoff_delay
 
 # ── Métricas Prometheus ──────────────────────────────────────────────────────
 RETRY_COUNTER = Counter(
@@ -139,7 +140,7 @@ async def lifespan(app: FastAPI):
     try:
         r = await app.state.http_client.get(settings.ollama_tags, timeout=10.0)
         r.raise_for_status()
-        available = [m["name"] for m in r.json().get("models", [])]
+        available = [m.get("name", "") for m in r.json().get("models", []) if m.get("name")]
         if any(settings.ollama_model in m for m in available):
             logger.info("Model '%s' confirmed available", settings.ollama_model)
         else:
@@ -149,6 +150,11 @@ async def lifespan(app: FastAPI):
             )
     except Exception as exc:
         logger.warning("Could not reach Ollama at startup: %s", exc)
+
+    if not settings.webhook_secret:
+        logger.warning(
+            "WEBHOOK_SECRET not configured — Mattermost button callbacks accept any token"
+        )
 
     cleanup_task = asyncio.create_task(_periodic_cleanup())
 
@@ -217,7 +223,7 @@ async def readyz():
         client: httpx.AsyncClient = app.state.http_client
         r = await client.get(settings.ollama_tags, timeout=settings.health_timeout)
         r.raise_for_status()
-        available = [m["name"] for m in r.json().get("models", [])]
+        available = [m.get("name", "") for m in r.json().get("models", []) if m.get("name")]
         model_loaded = any(settings.ollama_model in m for m in available)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Ollama unreachable: {exc}")
@@ -426,7 +432,10 @@ async def _process_alert_with_diagnosis(
         severity, alert_name, pod, namespace = _extract_alert_meta(alert)
         desc = alert.annotations.get("description", "Sin descripcion")
         fallback = f"{icon} **[{severity}] {alert_name}** en Pod `{pod}` (NS: `{namespace}`)\n> {desc}"
-        await send_mattermost_alert(fallback)
+        try:
+            await send_mattermost_alert(fallback)
+        except Exception as fallback_exc:
+            logger.error("Fallback Mattermost send also failed for %s: %s", alert_name, fallback_exc)
 
 
 @app.post(
@@ -638,10 +647,7 @@ async def extract_parameters(request: InfraRequest):
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
             last_exc = exc
             if attempt < settings.retry_max_attempts - 1:
-                delay = min(
-                    settings.retry_base_delay * (2 ** attempt),
-                    settings.retry_max_delay,
-                )
+                delay = backoff_delay(attempt, settings.retry_base_delay, settings.retry_max_delay)
                 logger.warning(
                     "Ollama attempt failed, retrying",
                     extra={

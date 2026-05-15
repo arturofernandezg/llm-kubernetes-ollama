@@ -117,8 +117,8 @@ Formato: tabla markdown. Total bajo 500 palabras. Sin generalidades — solo fin
 | #4 | mattermost.py | agent/mattermost.py | DONE (2026-05-11) — MM1-MM9 |
 | #5 | Cross-cutting (helpers, retry, logger) | varios | DONE (2026-05-11) — R7, R8, X1, X3 |
 | #6 | Security (HMAC callback auth) | main.py, mattermost.py, schemas.py, config.py | DONE (2026-05-11) — X5 |
-| #7 | k8s/ (nodeSelector guaranteed, tolerations) | k8s/*.yaml | TODO |
-| #8 | Docs sync (roadmap + CLAUDE.md, cierre Fase 3) | docs/07-roadmap.md | TODO |
+| #7 | Security hardening + M10 + X2 | rag.py, main.py, mattermost.py, utils.py | DONE (2026-05-12) — S2-S4, M10, X2 |
+| #8 | k8s guaranteed nodes + Docs sync (roadmap + CLAUDE.md, cierre Fase 3) | k8s/*.yaml, docs/07-roadmap.md | DONE (2026-05-12) |
 
 ---
 
