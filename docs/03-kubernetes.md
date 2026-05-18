@@ -199,6 +199,19 @@ tolerations:
 - `chromadb.yaml` mantiene también la toleration GCP Spot existente como safety net por si se elimina el nodeSelector accidentalmente.
 - Verificación post-apply: `kubectl get pods -n arturo-llm-test -o wide` → columna NODE debe mostrar nodos guaranteed.
 
+## Grafana — Acceso y dashboard
+
+Dashboard "AIOps Agent — Overview" desplegado en `arturo-monitoring` vía `k8s/grafana.yaml` (stateless, emptyDir).
+
+```bash
+kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring
+kubectl -n arturo-monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+Abrir `http://localhost:3000`, login `admin` + contraseña del secret. Dashboard en Dashboards → "AIOps Agent — Overview".
+
+**9 paneles**: aiops_* counters (webhook, diagnosis, remediation, feedback), latencia p95 webhook, targets UP, pod phases, retries/extraction.
+
 ## Carga de modelos (sin Cloud NAT)
 
 Los pods NO tienen internet. Para cargar un modelo nuevo:

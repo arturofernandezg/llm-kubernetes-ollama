@@ -34,3 +34,8 @@ venv/
 
 # Personal Engineering Profile (Do not upload to GitHub)
 arturo_engineering_profile.md
+
+# Defense materials (do not upload to repo)
+docs/defensa.md
+docs/img/
+slides/

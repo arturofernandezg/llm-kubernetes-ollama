@@ -26,7 +26,7 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 
-## Estado actual (2026-05-12)
+## Estado actual (2026-05-15)
 
 - **Fase 0 (Legado)**: Completa (agente modular + Ollama local + Terraform endpoints + K8s base). Se mantienen los archivos sin borrar.
 - **Fase 1 (Observabilidad)**: En curso (~98%).
@@ -73,8 +73,9 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ Config Mattermost requerida: `MM_PLUGINSETTINGS_ENABLE=true` + `MM_SERVICEALLOWEDUNTRUSTEDINTERNALCONNECTIONS=agent-svc.arturo-llm-test.svc.cluster.local` en `k8s/mattermost.yaml`.
   - ✅ Calidad código sesión #7 (2026-05-12): S2 guard ValueError en `generate_embedding()`, S3 `m.get()` seguro en list comprehensions Ollama, S4 warning startup `WEBHOOK_SECRET`, M10 try/except fallback Mattermost, X2 `backoff_delay()` extraído a `utils.py`. 272 tests.
   - ✅ Calidad código sesión #8 (2026-05-12): `nodeSelector: guaranteed="true"` + tolerations en `deployment-agent`, `deployment-ollama`, `chromadb`. Workloads críticos fijados a nodos guaranteed. Docs sync cierre Fase 3. Sesiones #1-#8 completadas.
-  - ⏳ Pendiente: screenshot Grafana dashboard.
+  - ⏳ Pendiente: screenshot Grafana dashboard (port-forward + instrucciones en `docs/defensa.md §4` y `docs/03-kubernetes.md`).
   - ⏳ Pendiente: confirmar con tutor excepción a regla 4.5. Pasar a `DRY_RUN=false` requiere acuerdo con tutor.
+  - ✅ Defensa prep (2026-05-15): `defensa.md §3` completada (12 preguntas difíciles + respuestas). Presentación: **Reveal.js** (decisión bloqueada en `defensa.md §6`).
 
 ## Stack
 
