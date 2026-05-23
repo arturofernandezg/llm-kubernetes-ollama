@@ -23,10 +23,11 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 | `docs/07-roadmap.md` | Fases del proyecto, TODOs por fase, mejoras completadas |
 | `docs/08-code-quality-playbook.md` | Workflow de sesiones de calidad, 8 dimensiones de scan, prompt prehecho, sesiones tentativas |
 | `docs/11-quality-backlog.md` | Backlog vivo de findings de calidad agrupados por módulo (43 findings, sesiones #1-#8 completadas) |
+| `docs/13-pitch-chapter.md` | Pitch one-pager (audiencia: chapter principal — no defensa TFG) |
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 
-## Estado actual (2026-05-19)
+## Estado actual (2026-05-23)
 
 - **Fase 0 (Legado)**: Completa (agente modular + Ollama local + Terraform endpoints + K8s base). Se mantienen los archivos sin borrar.
 - **Fase 1 (Observabilidad)**: En curso (~98%).
@@ -73,9 +74,9 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ Config Mattermost requerida: `MM_PLUGINSETTINGS_ENABLE=true` + `MM_SERVICEALLOWEDUNTRUSTEDINTERNALCONNECTIONS=agent-svc.arturo-llm-test.svc.cluster.local` en `k8s/mattermost.yaml`.
   - ✅ Calidad código sesión #7 (2026-05-12): S2 guard ValueError en `generate_embedding()`, S3 `m.get()` seguro en list comprehensions Ollama, S4 warning startup `WEBHOOK_SECRET`, M10 try/except fallback Mattermost, X2 `backoff_delay()` extraído a `utils.py`. 272 tests.
   - ✅ Calidad código sesión #8 (2026-05-12): `nodeSelector: guaranteed="true"` + tolerations en `deployment-agent`, `deployment-ollama`, `chromadb`. Workloads críticos fijados a nodos guaranteed. Docs sync cierre Fase 3. Sesiones #1-#8 completadas.
-  - ⏳ [tutor-gate] Pendiente: confirmar excepción a regla 4.5 + flip `DRY_RUN=false`. Ver `docs/07-roadmap.md § Gates pendientes`.
+  - ✅ [tutor-gate] Green light (2026-05-23): excepción regla 4.5 + flip `DRY_RUN=false` aprobados. Pendiente implementar — ver `docs/07-roadmap.md § TODO Consolidado #2`.
   - ✅ Defensa prep (2026-05-15): `defensa.md §3` completada (12 preguntas difíciles + respuestas). Presentación: **Reveal.js** (decisión bloqueada en `defensa.md §6`).
-- **Mini-Fase 4 (Production Readiness)**: En curso — 6/6 sesiones en progreso (2026-05-19).
+- **Mini-Fase 4 (Production Readiness)**: En curso — código S1-S6 listo (2026-05-19), sesión de pruebas E2E pendiente.
   - ✅ Sesión #1 — Chaos Engineering #1: manifests `k8s/chaos/`, script `scripts/chaos.sh`, métricas `aiops_chaos_*` en agente (Counter + Histogram), doc `docs/12-chaos-engineering.md`.
   - ✅ Sesión #2 — Chaos Engineering #2: `k8s/chaos/chaos-bad-image.yaml` + `chaos-cpu-stress.yaml`, regla Prometheus `KubePodImagePullBackOff` (6ª regla en `k8s/prometheus.yaml`), 2 casos nuevos en `scripts/chaos.sh` (`bad-image`, `cpu`), 279 tests.
   - ✅ Sesión #3 — Dashboard Grafana "AIOps — Chaos": key `chaos.json` añadida al ConfigMap `grafana-dashboard-aiops` en `k8s/grafana.yaml`. 7 paneles: MTTD/MTTR p95 por experimento, MTTD p50/p95 global, pie outcome, stat total, ALERTS correlation, tabla histórico.

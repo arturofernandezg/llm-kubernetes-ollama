@@ -1,5 +1,7 @@
 # Roadmap — Fases del proyecto (Evolución AIOps)
 
+> Última actualización: 2026-05-23 (consolidación pre-reunión chapter)
+
 ## Estado de las fases
 
 | Fase | Descripción | Estado |
@@ -8,7 +10,7 @@
 | Fase 1 (Observabilidad) | Prometheus standalone + Alertmanager, webhook, Mattermost ChatOps | En curso (~95%) |
 | Fase 2 (RAG) | ChromaDB dual-collection, embeddings in-cluster, diagnóstico contextual | **Completa** (2026-04-23) |
 | Fase 3 (Remediación) | Auto-patch K8s API, validation layer, feedback loop cerrado | **Completa** (2026-05-12) |
-| Mini-Fase 4 (Production Readiness) | Chaos engineering, métricas reales, slash command MM, rollback, hardening | En curso (sesión #6/6) |
+| Mini-Fase 4 (Production Readiness) | Chaos engineering, métricas reales, slash command MM, rollback, hardening | En curso (código S1-S6 listo, E2E pendiente) |
 
 ---
 
@@ -105,8 +107,8 @@ formateada en Mattermost con datos de la alerta. Sin LLM/RAG aún — solo routi
 - ✅ **Grafana** (2026-04-22) — datasource Prometheus + dashboard "AIOps Agent — Overview" (9 paneles, 4 filas) + contact point `aiops-agent-webhook` provisionados vía ConfigMap. Stateless (`emptyDir`). Secret `grafana-admin` externo (patrón `secrets-setup.sh`). Acceso vía `kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring`. NetworkPolicy actualizada: Grafana (`arturo-monitoring`) → agent webhook port 8000. Manifiesto: `k8s/grafana.yaml`.
 
 ### Próximas sesiones
-1. ~~**`remediation.py` umbrales**~~ — implementado (2026-04-25): condición del tutor aplicada, ver Fase 3.
-2. **Modo proactivo** — loop periódico que consulta `prometheus-svc:9090/api/v1/query`, detecta tendencias y actúa antes de la alerta. Presentar al tutor antes de implementar.
+
+→ Ver [§ TODO Consolidado](#todo-consolidado--siguientes-pasos) para la lista unificada de pendientes.
 
 ---
 
@@ -274,7 +276,7 @@ medidas en el pipeline real.
 
 ---
 
-## Mini-Fase 4 — Production Readiness (En curso, sesión #6/6, 2026-05-19)
+## Mini-Fase 4 — Production Readiness (código S1-S6 listo, E2E pendiente)
 
 Objetivo: pasar de "capacidad demostrada" a "evidencia medida" para defensa de TFG.
 
@@ -296,10 +298,51 @@ Objetivo: pasar de "capacidad demostrada" a "evidencia medida" para defensa de T
 
 ---
 
-## Gates pendientes (bloqueados por tutor — pre-producción real)
+## TODO Consolidado — Siguientes pasos
 
-- [ ] **[tutor-gate] Flip `REMEDIATION_DRY_RUN=false`** en `deployment-agent.yaml` — cambiar `value: "true"` a `value: "false"` + apply + verificar con `bash scripts/smoke.sh` que alerta real genera PATCH (no dry-run). Procedimiento de rollback: `kubectl set env deployment/agent REMEDIATION_DRY_RUN=true -n arturo-llm-test`.
-- [ ] **[tutor-gate] Excepción a regla 4.5** en `agent/remediation.py` — autorizar `kubectl set resources` sobre deployments del namespace `arturo-llm-test` si `confidence ≥ 0.9` AND `risk ≤ medium`. Scope mínimo: solo memory limit, nunca scale/rollout restart sin criterio adicional. Requiere acuerdo explícito del tutor antes de modificar código.
+*Fuente única de verdad. Todas las tareas pendientes por orden de prioridad.*
+
+### 1. Sesión de pruebas E2E Mini-Fase 4 (bloqueante)
+
+Ejecutar en secuencia en el cluster. Contexto completo: `docs_sesion/2026-05-19-hardening-06.md`.
+
+- [ ] **Gate 0 — pytest** (bloqueante): `pytest agent/tests/ -v --tb=short` — ~310 tests esperados en verde.
+- [ ] **Gate 1 — Cloud Build**: `gcloud builds submit --config cloudbuild.yaml --substitutions=COMMIT_SHA=$(git rev-parse --short HEAD)`
+- [ ] **Gate 2 — Deploy + rollout**: `kubectl apply -f k8s/deployment-agent.yaml -n arturo-llm-test && kubectl rollout status deployment/agent -n arturo-llm-test --timeout=180s` — imagen `:3fde9f8` desplegada.
+- [ ] **Gate 3 — Logs limpios**: `kubectl logs -n arturo-llm-test deploy/agent --tail=30` — startup OK, `REMEDIATION_ROLLBACK_ENABLED=true` visible.
+- [ ] **Gate 4 — Smoke test**: `bash scripts/smoke.sh` — debe terminar `=== SMOKE TEST PASSED ===` con exit 0.
+- [ ] **Gate 5 — Métricas rollback**: `kubectl exec -n arturo-llm-test deploy/agent -- curl -s localhost:8000/metrics | grep aiops_remediation_rollback_total`
+- [ ] **Gate 6 — Chaos experiments** (uno a uno, NO en paralelo): `bash scripts/chaos.sh oom`, `bash scripts/chaos.sh crashloop`, `bash scripts/chaos.sh bad-image`, `bash scripts/chaos.sh cpu`, `bash scripts/chaos.sh cleanup`. Anotar `T_pod_fail` y MTTD/MTTR por experimento.
+- [ ] **Gate 7 — Rellenar tabla MTTD/MTTR** en `docs/12-chaos-engineering.md` líneas 103-106 con valores reales.
+- [ ] **Gate 8 — Screenshots Grafana**: `kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring` → capturar `docs/img/grafana-chaos.png` y `docs/img/grafana-overview.png`.
+- [ ] **Gate 9 — Backup ChromaDB**: `kubectl exec -n arturo-llm-test chromadb-0 -- tar czf /tmp/chromadb-backup.tar.gz -C /chroma chroma && kubectl cp -n arturo-llm-test chromadb-0:/tmp/chromadb-backup.tar.gz ./chromadb-backup-$(date +%Y%m%d).tar.gz`
+
+**Cierre tras pasar todos los gates**: actualizar S6 → ✅ en roadmap, `09-estado-actual-tutor.md`, `CLAUDE.md`, `12-chaos-engineering.md`.
+
+### 2. Tutor-gates (aprobados ✅ 2026-05-23 — implementar en próximo deploy)
+
+- [ ] **Flip `REMEDIATION_DRY_RUN=false`** — en `k8s/deployment-agent.yaml` línea 81: cambiar `value: "true"` → `value: "false"`. Ejecutar junto al Gate 2. Rollback: `kubectl set env deployment/agent REMEDIATION_DRY_RUN=true -n arturo-llm-test`.
+- [ ] **Excepción regla 4.5** — en `agent/remediation.py`: autorizar `kubectl set resources` sobre deployments de `arturo-llm-test` si `confidence ≥ 0.9` AND `risk ≤ medium` AND `field == resources.limits.memory`. NUNCA: scale, rollout restart, patch deployment sin criterio adicional.
+
+### 3. Cierre Fase 1 — Webhook entrante Mattermost
+
+Pendiente desde 2026-04-22. No bloquea defensa pero cierra la fase formalmente.
+
+- [ ] Obtener URL del incoming webhook de Mattermost (UI: Settings → Integrations → Incoming Webhooks).
+- [ ] Setear env `MATTERMOST_WEBHOOK_URL` en `k8s/deployment-agent.yaml`.
+
+### 4. Screenshots Grafana (para docs y defensa)
+
+El directorio `docs/img/` existe pero está vacío. Capturar post Gate 8.
+
+- [ ] `docs/img/grafana-overview.png` — dashboard "AIOps Agent — Overview".
+- [ ] `docs/img/grafana-chaos.png` — dashboard "AIOps — Chaos".
+
+---
+
+## Gates pendientes — historial (referencia)
+
+> Los dos gates del tutor ya tienen green light (2026-05-23). Ver § TODO Consolidado #2 para la implementación.
 
 ---
 
@@ -313,3 +356,32 @@ Objetivo: pasar de "capacidad demostrada" a "evidencia medida" para defensa de T
 - [ ] Re-ranking con cross-encoder si la colección `incidents` supera ~500 documentos.
 - [ ] Clasificador supervisado (multi-label) si se acumulan >5k incidentes etiquetados.
 - [ ] Migración de nodos Spot a Standard para ChromaDB (evaluación coste vs estabilidad).
+
+---
+
+## Fase 5 — Predicción proactiva (post Mini-Fase 4)
+
+> **[scope abierto — definir tras cierre Mini-Fase 4]**
+
+Objetivo: pasar de *reactivo* (responde a alertas) a *proactivo* (detecta tendencias antes de la alerta).
+
+### Concepto
+
+- Loop periódico que consulta `prometheus-svc:9090/api/v1/query` cada N minutos.
+- Detecta tendencias preocupantes: memoria subiendo, CPU sostenida, error rate creciente.
+- Si detecta riesgo inminente → notifica en Mattermost antes de que Prometheus dispare la alerta.
+- Integra con el pipeline existente (`diagnosis.py` + `mattermost.py`) sin duplicar código.
+
+### Alcance tentativo
+
+- [ ] Módulo `prediction.py` — consulta métricas Prometheus, evalúa umbrales de tendencia.
+- [ ] Endpoint `GET /prediction/status` — expone estado del loop periódico.
+- [ ] Prometheus counter `aiops_prediction_total{outcome}` — accuracy de predicciones emitidas.
+- [ ] Tests con mock de Prometheus HTTP API.
+
+### Decisiones pendientes antes de implementar
+
+- ¿Con qué frecuencia scrapeamos? (1m, 5m, 15m — trade-off detección vs carga CPU)
+- ¿Umbral de confianza para notificar? (falsos positivos costosos en ChatOps)
+- ¿Modelo de tendencia? (media móvil simple vs regresión lineal)
+- Presentar al tutor antes de implementar (scope nuevo, afecta TFG).

@@ -1,8 +1,8 @@
 # Estado Actual del Proyecto — Briefing para Reuniones
 
 > Documento pensado para repasar antes de cada reunión con el tutor.
-> Última actualización: 2026-05-19 (Mini-Fase 4 · Sesión #6 en ejecución)
-> **ACTUALIZAR al cerrar S6**: rellenar MTTD/MTTR reales, confirmar imagen deployada, estado DRY_RUN.
+> Última actualización: 2026-05-23 (consolidación pre-reunión chapter)
+> **Pendientes**: ver [docs/07-roadmap.md § TODO Consolidado](07-roadmap.md#todo-consolidado--siguientes-pasos) — fuente única de verdad.
 
 ---
 
@@ -56,16 +56,15 @@ Cada alerta pasa por las 9 reglas en este orden:
 | 2 | No hay diagnosis | suggest_only |
 | 3 | Comando BLOCKED detectado | escalate |
 | 4 | No hay comandos ejecutables | suggest_only |
-| 4.5 | Comando implica reinicio de pod (set resources, scale, rollout) | **escalate** (bloqueado hasta tutor) |
+| 4.5 | Comando implica reinicio de pod (set resources, scale, rollout) | **escalate** (excepción aprobada por tutor ✅ 2026-05-23 — pendiente implementar) |
 | 4.6 | new_memory > 2 × current_memory | **escalate** |
 | 5 | risk=high o confidence<0.7 | escalate |
 | 6 | risk=medium y confidence≥0.8 | escalate |
 | 7 | risk=low y confidence≥0.8 | **auto_remediate** |
 | 8 | Sin clasificar | suggest_only |
 
-- `REMEDIATION_ENABLED=true`, `REMEDIATION_DRY_RUN=true` activos en cluster
-- **Regla 4.5 bloquea TODO**: OOMKilled + auto-patch de memoria implica reinicio del pod → siempre escalate hasta acuerdo con tutor
-- Flip a `DRY_RUN=false` queda para Mini-Fase 4 sesión #6 (acuerdo tutor)
+- `REMEDIATION_ENABLED=true`, `REMEDIATION_DRY_RUN=true` activos en cluster (flip aprobado ✅ 2026-05-23 — pendiente ejecutar en próximo deploy)
+- **Regla 4.5**: actualmente bloquea TODO. Excepción aprobada por tutor (2026-05-23): autorizar memory-limit-only con confidence ≥ 0.9 AND risk ≤ medium — pendiente implementar en `remediation.py`.
 
 ### 4. ChatOps (Mattermost) con botones interactivos
 - Mattermost en cluster con PostgreSQL propio
@@ -110,37 +109,26 @@ Cada alerta pasa por las 9 reglas en este orden:
 Namespace arturo-llm-test:     agent ✅, ollama ✅, chromadb ✅ (16 runbooks ingestados)
 Namespace arturo-monitoring:   prometheus ✅, kube-state-metrics ✅, alertmanager ✅, grafana ✅
 Namespace arturo-mattermost:   mattermost ✅, postgres ✅
-Namespace arturo-chaos:        manifests listos — 4 experimentos chaos ejecutados (S6)
+Namespace arturo-chaos:        manifests listos — experimentos chaos pendientes de ejecutar (requiere sesión E2E)
 ```
 
 ---
 
 ## Fases del proyecto
 
-| Fase | Qué hace | Estado |
-|---|---|---|
-| **Fase 0** (Legado) | Extracción de params + generación Terraform | Completa (en desuso) |
-| **Fase 1** (Observabilidad) | Prometheus + Alertmanager + Grafana + webhook + Mattermost | **Completa** (2026-04-22). E2E verificado |
-| **Fase 2** (RAG) | ChromaDB + runbooks + diagnóstico contextual con LLM | **Completa** (2026-04-23). E2E: OOMKilled → RAG → LLM (187s, confidence=0.85) → Mattermost |
-| **Fase 3** (Remediación) | Motor 9 reglas + auto-patch + feedback loop + botones MM + HMAC | **Completa** (2026-05-12). E2E: OOMKilled → escalate → botones MM → callback HMAC |
-| **Mini-Fase 4** (Production Readiness) | Chaos engineering + métricas reales + slash command + rollback + hardening | **En curso** — sesión #6 en ejecución (gates: pytest + Cloud Build + chaos experiments) |
+Ver tabla completa en [docs/07-roadmap.md § Estado de las fases](07-roadmap.md#estado-de-las-fases).
+
+**Resumen:** Fases 0-3 completas. Mini-Fase 4 (Production Readiness) en ejecución — código S1-S6 listo (2026-05-19), sesión de pruebas E2E pendiente.
 
 ---
 
-## Mini-Fase 4 — Production Readiness (**Completa**, 2026-05-19)
+## Mini-Fase 4 — Production Readiness (código S1-S6 listo, E2E pendiente)
 
 Objetivo: pasar de "capacidad demostrada" a **evidencia medida** para defensa.
 
-| # | Sesión | Estado | Output |
-|---|---|---|---|
-| 1 | Chaos Engineering #1 — OOM + CrashLoop | ✅ Completada (2026-05-18) | Manifests, script chaos.sh, métricas aiops_chaos_* |
-| 2 | Chaos Engineering #2 — BadImage + CPU stress | ✅ Completada (2026-05-19) | manifests bad-image+cpu, regla KubePodImagePullBackOff, 279 tests |
-| 3 | Dashboard Grafana "AIOps — Chaos" | ✅ Completada (2026-05-18) | Dashboard provisionado en `k8s/grafana.yaml` — 7 paneles MTTD/MTTR/outcomes/ALERTS |
-| 4 | Slash command `/aiops` en Mattermost | ✅ Completada (2026-05-19) | `POST /webhook/command`, schema `MattermostCommandPayload`, auth `MM_COMMAND_TOKEN`, ~15 tests |
-| 5 | Rollback automático | ✅ Completada (2026-05-19) | `ExecuteResult` dataclass, `IN_FLIGHT_ROLLBACKS` registry, `capture_pre_patch_value` + `check_pod_health` + `revert_patch`, counter `aiops_remediation_rollback_total{outcome}`, ~310 tests |
-| 6 | Hardening pre-prod + smoke.sh | ⏳ En ejecución | Artefactos listos: `scripts/smoke.sh`, pin imagen `:3fde9f8`, procedimiento backup ChromaDB. Pendiente: pytest + Cloud Build + deploy + chaos experiments + screenshot |
+**Estado:** 6/6 sesiones con código y artefactos entregados (2026-05-19). La sesión de pruebas E2E (pytest → Cloud Build → deploy → smoke → chaos → MTTD/MTTR → Grafana → backup) está pendiente de ejecutar en cluster.
 
-**Métricas que se obtendrán:** MTTD (detección), MTTR (notificación), confidence media, accuracy de runbook.
+Ver tabla de sesiones y secuencia completa de gates en [docs/07-roadmap.md § TODO Consolidado](07-roadmap.md#todo-consolidado--siguientes-pasos).
 
 ---
 
@@ -164,4 +152,4 @@ Objetivo: pasar de "capacidad demostrada" a **evidencia medida** para defensa.
 
 ---
 
-*Actualizar al cerrar S6 con: SHA imagen deployada, MTTD/MTTR reales, estado DRY_RUN. Nota: sesión de pruebas E2E completa de las 6 sesiones pendiente de planificar (próxima sesión).*
+*Pendientes: ver [docs/07-roadmap.md § TODO Consolidado](07-roadmap.md#todo-consolidado--siguientes-pasos). Actualizar este doc tras ejecutar la sesión de pruebas E2E (imagen deployada, MTTD/MTTR reales, DRY_RUN flip confirmado).*
