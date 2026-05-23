@@ -30,6 +30,7 @@ Versión actual: 0.5.0
 | GET | `/readyz` | Readiness probe. 200 si Ollama + modelo OK. | Ollama | 0 |
 | POST | `/webhook/alert` | Ingesta alertas Alertmanager → normaliza → RAG → diagnóstico → Mattermost | Ollama, ChromaDB, Mattermost | 1-3 |
 | POST | `/webhook/action` | Callback de botones interactivos Mattermost (Aprobar/Rechazar escalaciones) | ChromaDB, Mattermost | 3 |
+| POST | `/webhook/command` | Slash command `/aiops` (status / incidents / help). Auth: `MM_COMMAND_TOKEN` static token. Responde ephemeral. | Ollama, ChromaDB | Mini-Fase 4 |
 | POST | `/extract` | **(Legado)** Extracción de parámetros desde texto a JSON. | Ollama | 0 |
 | GET | `/metrics` | Métricas Prometheus (auto-instrumentado + contadores custom). | Ninguna | 0 |
 
@@ -53,6 +54,32 @@ Versión actual: 0.5.0
 11. Si `ESCALATE` con `safe_commands` no vacío → mensaje Mattermost con botones `[✅ Ejecutar]` / `[❌ Rechazar]` (via `send_escalation_with_buttons`). El `incident_id` se guarda en `PENDING_ESCALATIONS` (in-memory, TTL 60 min).
 12. Si `AUTO_REMEDIATE` → ejecuta kubectl directamente (respeta `REMEDIATION_DRY_RUN`).
 13. Resultado (aprobado/rechazado/auto) se persiste en colección `incidents` de ChromaDB.
+
+**Mini-Fase 4 Sesión #5 (rollback automático)**:
+14. Si `AUTO_REMEDIATE` ejecuta al menos un comando exitoso y hay `pre_patch_snapshot` capturado, se registra un `RollbackContext` en `IN_FLIGHT_ROLLBACKS` (in-memory, `asyncio.Lock`) y se lanza `asyncio.create_task(_evaluate_rollback(incident_id))`.
+15. Tras `REMEDIATION_ROLLBACK_TIMEOUT` segundos (default 300), `_evaluate_rollback` consulta el estado de los pods con `kubectl get pods -n <ns> -l <selector>`.
+16. Si **todos** los pods están `Running` con `restartCount==0` → counter `aiops_remediation_rollback_total{outcome=healthy}`, mensaje Mattermost "Remediation healthy".
+17. Si algún pod está en estado fallido o ha reiniciado → ejecuta `kubectl set resources deployment <name> -n <ns> --containers=<container> --limits=memory=<pre_patch_value>` (respeta `DRY_RUN`). Counter `outcome=reverted` o `outcome=revert_failed`. Mensaje Mattermost con resultado.
+
+**Diagrama de flujo de rollback**:
+```
+AUTO_REMEDIATE + snapshot capturado
+    → IN_FLIGHT_ROLLBACKS[incident_id] = RollbackContext
+    → asyncio.create_task(_evaluate_rollback)
+    → sleep(300s)
+    → check_pod_health(selector) — kubectl get pods
+        ├── healthy=True  → counter=healthy, MM "Remediation healthy"
+        └── healthy=False → revert_patch(pre_patch_value)
+                               ├── success → counter=reverted, MM "Rollback executed"
+                               └── failure → counter=revert_failed, MM "Rollback FAILED"
+```
+
+**Rollback no se ejecuta si**:
+- `REMEDIATION_ROLLBACK_ENABLED=false`
+- Acción no es `AUTO_REMEDIATE`
+- Ningún comando del patch fue exitoso (`execute_results` vacío o todos fallidos)
+- `proposed_action` ausente en diagnosis → snapshot no capturado (`counter=skipped_no_snapshot`)
+- `DRY_RUN=true` → `check_pod_health` devuelve `healthy=True` siempre (no hay patch real que revertir)
 
 ### /webhook/action — Callback de botones
 
@@ -193,6 +220,9 @@ ExtractResponse:
 | `CHROMADB_PORT` | `8000` | Puerto de ChromaDB | 2 |
 | `MATTERMOST_WEBHOOK_URL` | `None` | URL del webhook entrante de Mattermost | 1 |
 | `WEBHOOK_SECRET` | `""` | Secreto HMAC-SHA256 para verificar callbacks de botones Mattermost. Vacío = sin verificación (dev/test). En K8s via Secret `agent-secrets.webhook-secret` (`optional: true`) | 3 |
+| `REMEDIATION_ROLLBACK_ENABLED` | `true` | Activa el mecanismo de rollback automático post-patch | Mini-Fase 4 |
+| `REMEDIATION_ROLLBACK_TIMEOUT` | `300` | Segundos de espera antes de evaluar salud del pod tras un patch | Mini-Fase 4 |
+| `REMEDIATION_ROLLBACK_GRACE` | `30` | Segundos de gracia para el rollout antes del health check (reservado, no usado aún en polling) | Mini-Fase 4 |
 | `HTTP_TIMEOUT` | `120.0` | Timeout general del cliente HTTP (segundos) | 0+ |
 | `HEALTH_TIMEOUT` | `5.0` | Timeout para health checks (segundos) | 0+ |
 | `RETRY_MAX_ATTEMPTS` | `3` | Intentos máximos de retry hacia Ollama | 0+ |
@@ -234,6 +264,8 @@ Endpoint `GET /metrics` expuesto via `prometheus-fastapi-instrumentator`:
 **Contadores custom**:
 - `aiops_ollama_retries_total{outcome}` — resultado del retry ("success" / "exhausted")
 - `aiops_extraction_total{method}` — método de extracción usado ("direct" / "markdown_block" / "regex_search" / "failed")
+
+- `aiops_remediation_rollback_total{outcome}` — resultado del rollback post-patch (`scheduled` / `skipped_no_snapshot` / `healthy` / `reverted` / `revert_failed` / `evaluation_error`)
 
 **Datos reales observados** (2026-03-18, pod con ~40 min de uptime):
 - `/healthz` latencia media: ~1.8ms (puro in-memory, sin dependencias)

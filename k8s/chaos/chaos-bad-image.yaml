@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: arturo-chaos
+  labels:
+    managed-by: aiops-agent
+    project: uniovi-ai-infra-agent
+    environment: chaos
+    created-by: arturofernandezg
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaos-bad-image-target
+  namespace: arturo-chaos
+  labels:
+    managed-by: aiops-agent
+    project: uniovi-ai-infra-agent
+    environment: chaos
+    created-by: arturofernandezg
+    chaos-type: bad-image
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chaos-bad-image-target
+  template:
+    metadata:
+      labels:
+        app: chaos-bad-image-target
+        chaos-type: bad-image
+    spec:
+      nodeSelector:
+        guaranteed: "true"
+      tolerations:
+      - key: "guaranteed"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      # Imagen intencionalmente inexistente — provoca ImagePullBackOff.
+      # No requiere mirror previo: la imagen DEBE fallar el pull.
+      containers:
+      - name: bad-image
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/nonexistent:v999
+        imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "8Mi"
+            cpu: "10m"
+          limits:
+            memory: "16Mi"
+            cpu: "50m"
+      restartPolicy: Always

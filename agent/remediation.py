@@ -1,16 +1,18 @@
 """
-Validation layer y motor de decisión para remediación automática.
+Validation layer, motor de decisión y executor para remediación automática.
 
-Flujo: diagnosis dict → validate_commands() → decide_action() → execute_commands() stub
-→ build_remediation_result()
+Flujo: diagnosis dict → validate_commands() → decide_action()
+    → capture_pre_patch_value() → execute_commands()
+    → build_remediation_result()
 
-La ejecución real de comandos se implementa en S5 (subprocess / k8s client).
-Este módulo es pura lógica — 0 dependencias externas nuevas.
+Rollback (S5): si el pod sigue fallido tras REMEDIATION_ROLLBACK_TIMEOUT s,
+revert_patch() vuelve al valor capturado en PrePatchSnapshot.
 """
 
 import asyncio
 import re
 import shlex
+from dataclasses import dataclass
 from enum import Enum
 
 from config import logger, settings
@@ -29,6 +31,39 @@ class RemediationAction(str, Enum):
     AUTO_REMEDIATE = "auto_remediate"
     ESCALATE = "escalate"
     SUGGEST_ONLY = "suggest_only"
+
+
+# ── Structured result types ───────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class ExecuteResult:
+    """Structured result for a single command execution."""
+    command: str
+    success: bool
+    stdout: str
+    stderr: str
+    exit_code: int | None  # None for dry_run / skip / timeout / error
+    outcome: str           # 'ok' | 'failed' | 'timeout' | 'error' | 'skip' | 'dry_run'
+
+
+@dataclass
+class PrePatchSnapshot:
+    """Values captured from the cluster BEFORE a patch is applied."""
+    deployment: str
+    namespace: str
+    container: str
+    field: str
+    value: str      # pre-patch resource value (e.g. "512Mi")
+    selector: str   # label selector for pod health checks (e.g. "app=engine")
+
+
+@dataclass
+class PodHealthStatus:
+    """Health assessment of pods after a remediation patch."""
+    healthy: bool
+    reason: str
+    observed_phases: list[str]
+    observed_restarts: list[int]
 
 
 # ── Patrones de clasificación ─────────────────────────────────────────────────
@@ -303,39 +338,68 @@ def decide_action(
 
 # ── Executor ──────────────────────────────────────────────────────────────────
 
-async def execute_commands(commands: list[str]) -> str:
-    """Ejecuta una lista de comandos kubectl.
+def results_to_log(results: list[ExecuteResult]) -> str:
+    """Reconstruct a human-readable log string from a list of ExecuteResult."""
+    lines = []
+    for r in results:
+        if r.outcome == "dry_run":
+            lines.append(f"[DRY-RUN] {r.command}")
+        elif r.outcome == "ok":
+            lines.append(f"[OK] {r.command}\n{r.stdout}")
+        elif r.outcome == "failed":
+            lines.append(f"[FAILED exit={r.exit_code}] {r.command}\n{r.stderr}")
+        elif r.outcome == "timeout":
+            lines.append(f"[TIMEOUT] {r.command}")
+        elif r.outcome == "error":
+            lines.append(f"[ERROR] {r.command} — {r.stderr}")
+        elif r.outcome == "skip":
+            lines.append(f"[SKIP] {r.command} — {r.stderr}")
+        else:
+            lines.append(f"[{r.outcome.upper()}] {r.command}")
+    return "\n".join(lines)
+
+
+async def execute_commands(commands: list[str]) -> list[ExecuteResult]:
+    """Ejecuta una lista de comandos kubectl y devuelve resultados estructurados.
 
     Modes:
-    - remediation_dry_run=True (default): loguea sin ejecutar, prefija [DRY-RUN].
+    - remediation_dry_run=True (default): loguea sin ejecutar, outcome='dry_run'.
     - remediation_dry_run=False: ejecuta via asyncio subprocess con timeout configurado.
-      Solo permite comandos que empiecen por 'kubectl'. Exit code != 0 se loguea como warning.
+      Solo permite comandos que empiecen por 'kubectl'. Exit code != 0 → outcome='failed'.
 
-    La interfaz (entrada/salida) es estable entre modos — los callers no cambian.
+    Use results_to_log(results) to get a human-readable string for Mattermost/ChromaDB.
     """
     if not commands:
-        return ""
+        return []
 
     if settings.remediation_dry_run:
-        lines = []
+        results = []
         for cmd in commands:
             logger.info("DRY-RUN remediation command", extra={"command": cmd})
-            lines.append(f"[DRY-RUN] {cmd}")
-        return "\n".join(lines)
+            results.append(ExecuteResult(
+                command=cmd, success=True, stdout="", stderr="", exit_code=None, outcome="dry_run",
+            ))
+        return results
 
     # Ejecución real
-    lines = []
+    results = []
     for cmd in commands:
         try:
             args = shlex.split(cmd)
         except ValueError as exc:
             logger.warning("Cannot parse command", extra={"cmd": cmd, "error": str(exc)})
-            lines.append(f"[SKIP] {cmd} — parse error: {exc}")
+            results.append(ExecuteResult(
+                command=cmd, success=False, stdout="", stderr=f"parse error: {exc}",
+                exit_code=None, outcome="skip",
+            ))
             continue
 
         if not args or args[0] != "kubectl":
             logger.warning("Non-kubectl command skipped in real mode", extra={"cmd": cmd})
-            lines.append(f"[SKIP] {cmd} — only kubectl commands allowed")
+            results.append(ExecuteResult(
+                command=cmd, success=False, stdout="", stderr="only kubectl commands allowed",
+                exit_code=None, outcome="skip",
+            ))
             continue
 
         proc = None
@@ -357,14 +421,20 @@ async def execute_commands(commands: list[str]) -> str:
                     "Remediation command succeeded",
                     extra={"command": cmd, "exit_code": exit_code},
                 )
-                lines.append(f"[OK] {cmd}\n{output}")
+                results.append(ExecuteResult(
+                    command=cmd, success=True, stdout=output, stderr="",
+                    exit_code=exit_code, outcome="ok",
+                ))
             else:
                 err = stderr_bytes.decode().strip()
                 logger.warning(
                     "Remediation command failed",
                     extra={"command": cmd, "exit_code": exit_code, "stderr": err},
                 )
-                lines.append(f"[FAILED exit={exit_code}] {cmd}\n{err}")
+                results.append(ExecuteResult(
+                    command=cmd, success=False, stdout="", stderr=err,
+                    exit_code=exit_code, outcome="failed",
+                ))
 
         except asyncio.CancelledError:
             if proc is not None:
@@ -385,13 +455,217 @@ async def execute_commands(commands: list[str]) -> str:
                     await proc.communicate()
                 except Exception as kill_exc:
                     logger.debug("Failed to kill timed-out process", extra={"err": str(kill_exc)})
-            lines.append(f"[TIMEOUT] {cmd}")
+            results.append(ExecuteResult(
+                command=cmd, success=False, stdout="", stderr=f"timeout after {settings.remediation_command_timeout}s",
+                exit_code=None, outcome="timeout",
+            ))
 
         except Exception as exc:
             logger.warning("Remediation command error", extra={"cmd": cmd, "error": str(exc)})
-            lines.append(f"[ERROR] {cmd} — {exc}")
+            results.append(ExecuteResult(
+                command=cmd, success=False, stdout="", stderr=str(exc),
+                exit_code=None, outcome="error",
+            ))
 
-    return "\n".join(lines)
+    return results
+
+
+async def capture_pre_patch_value(proposed_action: dict) -> PrePatchSnapshot | None:
+    """Query the cluster for the current resource value BEFORE a patch is applied.
+
+    In dry-run mode, falls back to proposed_action.current_value (LLM-provided).
+    Returns None if required fields are missing or the cluster query fails.
+    """
+    if not isinstance(proposed_action, dict):
+        return None
+
+    name = proposed_action.get("name")
+    namespace = proposed_action.get("namespace")
+    container = proposed_action.get("container")
+    field = proposed_action.get("field", "")
+
+    if not all([name, namespace, container]):
+        logger.warning("capture_pre_patch_value: missing name/namespace/container")
+        return None
+
+    selector = f"app={name}"
+
+    if settings.remediation_dry_run:
+        value = proposed_action.get("current_value") or ""
+        logger.info(
+            "capture_pre_patch_value: dry-run, using LLM current_value",
+            extra={"value": value},
+        )
+        return PrePatchSnapshot(
+            deployment=name, namespace=namespace, container=container,
+            field=field, value=value, selector=selector,
+        )
+
+    # Query all containers' memory limits, parse the matching one
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "kubectl", "get", "deployment", name, "-n", namespace,
+            "-o", "jsonpath={range .spec.template.spec.containers[*]}{.name}:{.resources.limits.memory};{end}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=settings.remediation_command_timeout,
+        )
+    except Exception as exc:
+        logger.warning("capture_pre_patch_value: kubectl get exception", extra={"error": str(exc)})
+        return None
+
+    if proc.returncode != 0:
+        logger.warning(
+            "capture_pre_patch_value: kubectl get failed",
+            extra={"deployment": name, "namespace": namespace, "stderr": stderr_bytes.decode().strip()},
+        )
+        return None
+
+    raw = stdout_bytes.decode().strip()
+    captured_value = ""
+    for entry in raw.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        parts = entry.split(":", 1)
+        if len(parts) == 2 and parts[0] == container:
+            captured_value = parts[1]
+            break
+
+    if not captured_value:
+        logger.warning(
+            "capture_pre_patch_value: container not found or empty memory limit",
+            extra={"container": container, "raw": raw},
+        )
+        return None
+
+    logger.info(
+        "capture_pre_patch_value: captured pre-patch value",
+        extra={"deployment": name, "container": container, "value": captured_value},
+    )
+    return PrePatchSnapshot(
+        deployment=name, namespace=namespace, container=container,
+        field=field, value=captured_value, selector=selector,
+    )
+
+
+async def check_pod_health(snapshot: PrePatchSnapshot) -> PodHealthStatus:
+    """Check if pods matching snapshot.selector are healthy after a remediation patch.
+
+    Healthy = all pods have phase==Running and restartCount==0.
+    In dry-run, always returns healthy=True (no real patch was executed).
+    """
+    if settings.remediation_dry_run:
+        return PodHealthStatus(
+            healthy=True, reason="dry_run", observed_phases=[], observed_restarts=[],
+        )
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "kubectl", "get", "pods", "-n", snapshot.namespace,
+            "-l", snapshot.selector,
+            "-o", "jsonpath={range .items[*]}{.status.phase}|{.status.containerStatuses[0].restartCount};{end}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=settings.remediation_command_timeout,
+        )
+    except Exception as exc:
+        logger.warning("check_pod_health: kubectl get pods exception", extra={"error": str(exc)})
+        return PodHealthStatus(
+            healthy=False, reason=f"kubectl_error: {exc}", observed_phases=[], observed_restarts=[],
+        )
+
+    if proc.returncode != 0:
+        err = stderr_bytes.decode().strip()
+        return PodHealthStatus(
+            healthy=False, reason=f"kubectl_failed: {err}", observed_phases=[], observed_restarts=[],
+        )
+
+    raw = stdout_bytes.decode().strip()
+    if not raw:
+        return PodHealthStatus(
+            healthy=False, reason="no_pods_found", observed_phases=[], observed_restarts=[],
+        )
+
+    phases: list[str] = []
+    restarts: list[int] = []
+    for entry in raw.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        parts = entry.split("|", 1)
+        phase = parts[0] if parts else ""
+        try:
+            restart_count = int(parts[1]) if len(parts) > 1 else 0
+        except ValueError:
+            restart_count = 0
+        phases.append(phase)
+        restarts.append(restart_count)
+
+    if not phases:
+        return PodHealthStatus(
+            healthy=False, reason="no_pods_parsed", observed_phases=[], observed_restarts=[],
+        )
+
+    unhealthy = [p for p in phases if p != "Running"]
+    restarting = [r for r in restarts if r > 0]
+
+    if unhealthy:
+        return PodHealthStatus(
+            healthy=False, reason=f"pods_not_running: {unhealthy}",
+            observed_phases=phases, observed_restarts=restarts,
+        )
+    if restarting:
+        return PodHealthStatus(
+            healthy=False, reason=f"pods_restarting: {restarting}",
+            observed_phases=phases, observed_restarts=restarts,
+        )
+
+    return PodHealthStatus(
+        healthy=True, reason="all_pods_running_no_restarts",
+        observed_phases=phases, observed_restarts=restarts,
+    )
+
+
+async def revert_patch(snapshot: PrePatchSnapshot) -> ExecuteResult:
+    """Revert a patch to the pre-patch value captured in snapshot.
+
+    Constructs a kubectl set resources command and delegates to execute_commands().
+    Respects dry_run (if True, execute_commands returns a dry_run result).
+    Rule 4.5 does NOT apply here: a rollback intentionally restarts pods.
+    """
+    if not snapshot.value:
+        logger.warning("revert_patch: no pre-patch value, cannot revert")
+        return ExecuteResult(
+            command="<no-op>", success=False, stdout="", stderr="no pre-patch value available",
+            exit_code=None, outcome="error",
+        )
+
+    cmd = (
+        f"kubectl set resources deployment {snapshot.deployment} "
+        f"-n {snapshot.namespace} "
+        f"--containers={snapshot.container} "
+        f"--limits=memory={snapshot.value}"
+    )
+    logger.info(
+        "revert_patch: executing rollback command",
+        extra={
+            "deployment": snapshot.deployment,
+            "namespace": snapshot.namespace,
+            "value": snapshot.value,
+        },
+    )
+    results = await execute_commands([cmd])
+    if results:
+        return results[0]
+    return ExecuteResult(
+        command=cmd, success=False, stdout="", stderr="no result from execute_commands",
+        exit_code=None, outcome="error",
+    )
 
 
 def _get_safe_commands(validations: list[dict]) -> list[str]:
@@ -408,17 +682,18 @@ def build_remediation_result(
     diagnosis: dict,
     action: RemediationAction,
     command_validations: list[dict],
-    execution_log: str = "",
+    execute_results: list[ExecuteResult],
 ) -> dict:
     """Construye el dict de resultado de remediación.
 
     Keys:
         action: RemediationAction
-        command_validations: list[dict]  — clasificación de cada comando
-        safe_commands: list[str]         — comandos SAFE o MUTATING
-        blocked_commands: list[str]      — comandos BLOCKED
-        execution_attempted: bool        — True si el executor fue invocado (incluso en dry-run)
-        execution_log: str               — salida del executor stub
+        command_validations: list[dict]   — clasificación de cada comando
+        safe_commands: list[str]          — comandos SAFE o MUTATING
+        blocked_commands: list[str]       — comandos BLOCKED
+        execution_attempted: bool         — True si el executor fue invocado (incluso en dry-run)
+        execution_log: str                — log legible reconstruido de execute_results
+        execute_results: list[ExecuteResult] — resultados estructurados por comando
     """
     safe_commands = _get_safe_commands(command_validations)
     blocked_commands = [
@@ -431,21 +706,23 @@ def build_remediation_result(
         "safe_commands": safe_commands,
         "blocked_commands": blocked_commands,
         "execution_attempted": action == RemediationAction.AUTO_REMEDIATE,
-        "execution_log": execution_log,
+        "execution_log": results_to_log(execute_results),
+        "execute_results": execute_results,
     }
 
 
 # ── Entry point principal ─────────────────────────────────────────────────────
 
 async def process_remediation(diagnosis: dict) -> dict:
-    """Pipeline completo: validate → decide → execute (stub) → resultado.
+    """Pipeline completo: validate → decide → snapshot → execute → resultado.
 
     Args:
         diagnosis: dict con keys diagnosis, commands, confidence, risk, explanation...
                    (output de generate_diagnosis() en diagnosis.py)
 
     Returns:
-        build_remediation_result() dict
+        build_remediation_result() dict, extended with:
+            pre_patch_snapshot: PrePatchSnapshot | None  — captured before AUTO_REMEDIATE
     """
     raw_commands = diagnosis.get("commands") or []
     commands: list[str] = [c for c in raw_commands if isinstance(c, str)]
@@ -457,12 +734,18 @@ async def process_remediation(diagnosis: dict) -> dict:
     validations = validate_commands(commands)
     action = decide_action(diagnosis, validations)
 
-    execution_log = ""
+    execute_results: list[ExecuteResult] = []
+    pre_patch_snapshot: PrePatchSnapshot | None = None
+
     if action == RemediationAction.AUTO_REMEDIATE:
         safe_cmds = _get_safe_commands(validations)
-        execution_log = await execute_commands(safe_cmds)
+        proposed_action = diagnosis.get("proposed_action")
+        if isinstance(proposed_action, dict):
+            pre_patch_snapshot = await capture_pre_patch_value(proposed_action)
+        execute_results = await execute_commands(safe_cmds)
 
-    result = build_remediation_result(diagnosis, action, validations, execution_log)
+    result = build_remediation_result(diagnosis, action, validations, execute_results)
+    result["pre_patch_snapshot"] = pre_patch_snapshot
     logger.info(
         "Remediation decision",
         extra={
@@ -471,6 +754,7 @@ async def process_remediation(diagnosis: dict) -> dict:
             "confidence": diagnosis.get("confidence"),
             "commands_total": len(commands),
             "blocked": len(result["blocked_commands"]),
+            "snapshot_captured": pre_patch_snapshot is not None,
         },
     )
     return result

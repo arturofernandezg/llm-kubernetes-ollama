@@ -7,7 +7,8 @@
 | Fase 0 (Legado) | Agente + Ollama + extracción de params + generación .tf | Completa (En desuso activo) |
 | Fase 1 (Observabilidad) | Prometheus standalone + Alertmanager, webhook, Mattermost ChatOps | En curso (~95%) |
 | Fase 2 (RAG) | ChromaDB dual-collection, embeddings in-cluster, diagnóstico contextual | **Completa** (2026-04-23) |
-| Fase 3 (Remediación) | Auto-patch K8s API, validation layer, feedback loop cerrado | Pendiente |
+| Fase 3 (Remediación) | Auto-patch K8s API, validation layer, feedback loop cerrado | **Completa** (2026-05-12) |
+| Mini-Fase 4 (Production Readiness) | Chaos engineering, métricas reales, slash command MM, rollback, hardening | En curso (sesión #6/6) |
 
 ---
 
@@ -270,6 +271,35 @@ medidas en el pipeline real.
 | Auto-patch | Fix aplicado pero alerta no cesa | Monitorización post-fix (30-60s). Si persiste → revertir + escalar a humano |
 | ChromaDB | Pod evicted (spot node) | StatefulSet con PVC garantiza datos persistentes. Pod se re-schedula automáticamente |
 | Ollama | Modelo no cargado tras restart de nodo | Readiness probe existente (/readyz) ya detecta esto. El agente no procesa hasta que Ollama esté ready |
+
+---
+
+## Mini-Fase 4 — Production Readiness (En curso, sesión #6/6, 2026-05-19)
+
+Objetivo: pasar de "capacidad demostrada" a "evidencia medida" para defensa de TFG.
+
+| Sesión | Objetivo | Estado |
+|---|---|---|
+| #1 — Chaos Engineering #1 | OOMKilled + CrashLoopBackOff, harness reproducible | ✅ Infraestructura lista (2026-05-18) |
+| #2 — Chaos Engineering #2 | Deploy defectuoso + nodo saturado | ✅ Infraestructura lista (2026-05-19) |
+| #3 — Dashboard Chaos | Grafana "AIOps — Chaos" con MTTD/MTTR | ✅ Infraestructura lista (2026-05-18) — screenshot pendiente (requiere cluster) |
+| #4 — Slash command MM | `/aiops status`, `/aiops incidents`, `/aiops help` | ✅ Completada (2026-05-19) |
+| #5 — Rollback automático | Rollback si remediación no resuelve en N min | ✅ Completada (2026-05-19) |
+| #6 — Hardening pre-prod | smoke.sh, backup ChromaDB, flip `DRY_RUN=false` (acuerdo tutor) | ⏳ En ejecución (2026-05-19) |
+
+- [x] **Sesión #1** (2026-05-18): manifests `k8s/chaos/`, script `scripts/chaos.sh`, métricas `aiops_chaos_*`, doc `docs/12-chaos-engineering.md`.
+- [x] **Sesión #2** (2026-05-19): `k8s/chaos/chaos-bad-image.yaml` + `chaos-cpu-stress.yaml`, regla `KubePodImagePullBackOff` en `k8s/prometheus.yaml`, 2 casos nuevos en `scripts/chaos.sh`, 279 tests.
+- [x] **Sesión #3** (2026-05-18): Dashboard "AIOps — Chaos" en `k8s/grafana.yaml` (ConfigMap `grafana-dashboard-aiops`). 7 paneles: MTTD/MTTR p95, MTTD p50/p95 global, pie outcome, stat total, ALERTS, tabla histórico.
+- [x] **Sesión #4** (2026-05-19): `POST /webhook/command` — slash command `/aiops` (status/incidents/help). Schema `MattermostCommandPayload`, config `MM_COMMAND_TOKEN` (fail-open), ~15 tests. K8s env en `deployment-agent.yaml`.
+- [x] **Sesión #5** (2026-05-19): Rollback automático. `ExecuteResult` dataclass (frozen) + `execute_commands() → list[ExecuteResult]`. Helpers `capture_pre_patch_value()`, `check_pod_health()`, `revert_patch()`. `IN_FLIGHT_ROLLBACKS` registry + `asyncio.create_task`. Counter `aiops_remediation_rollback_total{outcome}` (6 outcomes). ~310 tests.
+- [ ] **Sesión #6** (2026-05-19): Hardening pre-prod. Artefactos entregados: `scripts/smoke.sh`, pin imagen `:3fde9f8`. Pendiente ejecución: pytest gate + Cloud Build + deploy + chaos experiments (MTTD/MTTR) + screenshot Grafana + backup ChromaDB.
+
+---
+
+## Gates pendientes (bloqueados por tutor — pre-producción real)
+
+- [ ] **[tutor-gate] Flip `REMEDIATION_DRY_RUN=false`** en `deployment-agent.yaml` — cambiar `value: "true"` a `value: "false"` + apply + verificar con `bash scripts/smoke.sh` que alerta real genera PATCH (no dry-run). Procedimiento de rollback: `kubectl set env deployment/agent REMEDIATION_DRY_RUN=true -n arturo-llm-test`.
+- [ ] **[tutor-gate] Excepción a regla 4.5** en `agent/remediation.py` — autorizar `kubectl set resources` sobre deployments del namespace `arturo-llm-test` si `confidence ≥ 0.9` AND `risk ≤ medium`. Scope mínimo: solo memory limit, nunca scale/rollout restart sin criterio adicional. Requiere acuerdo explícito del tutor antes de modificar código.
 
 ---
 

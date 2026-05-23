@@ -10,15 +10,16 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hmac
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, Form, HTTPException, Request, BackgroundTasks
 from fastapi.responses import RedirectResponse
 import httpx
 import time
 import uuid
 
 from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Counter
+from prometheus_client import Counter, Histogram
 
 from config import settings, logger
 from schemas import (
@@ -31,10 +32,13 @@ from validation import validate_params
 from mattermost import send_mattermost_alert, send_escalation_with_buttons, make_hmac_token
 from rag import (
     build_rag_query, retrieve_context, get_chroma_client, ensure_collections,
-    build_incident_document, ingest_incident,
+    build_incident_document, ingest_incident, COLLECTION_INCIDENTS,
 )
 from diagnosis import generate_diagnosis
-from remediation import process_remediation, execute_commands, RemediationAction
+from remediation import (
+    process_remediation, execute_commands, results_to_log, RemediationAction,
+    capture_pre_patch_value, check_pod_health, revert_patch, PrePatchSnapshot,
+)
 from utils import backoff_delay
 
 # ── Métricas Prometheus ──────────────────────────────────────────────────────
@@ -64,6 +68,33 @@ FEEDBACK_COUNTER = Counter(
     ["outcome"],  # "persisted" | "skipped" | "failed"
 )
 
+# ── Métricas Chaos Engineering ───────────────────────────────────────────────
+# Activas solo cuando la alerta proviene del namespace arturo-chaos.
+CHAOS_EXPERIMENT_COUNTER = Counter(
+    "aiops_chaos_experiment_total",
+    "Chaos experiments processed by the agent",
+    ["experiment", "outcome"],
+)
+CHAOS_MTTD_HISTOGRAM = Histogram(
+    "aiops_chaos_mttd_seconds",
+    "Mean Time To Detect: seconds from alert.startsAt to agent webhook receipt",
+    ["experiment"],
+    buckets=[10, 30, 60, 120, 300],
+)
+CHAOS_MTTR_HISTOGRAM = Histogram(
+    "aiops_chaos_mttr_seconds",
+    "Mean Time To Respond: seconds from alert.startsAt to pipeline completion",
+    ["experiment"],
+    buckets=[30, 60, 180, 300, 600],
+)
+
+# ── Rollback metrics ─────────────────────────────────────────────────────────
+ROLLBACK_COUNTER = Counter(
+    "aiops_remediation_rollback_total",
+    "Rollback evaluations by outcome",
+    ["outcome"],  # scheduled | skipped_disabled | skipped_no_snapshot | skipped_no_execution | healthy | reverted | revert_failed | evaluation_error
+)
+
 
 # ── Human Escalation State ────────────────────────────────────────────────────
 
@@ -81,6 +112,21 @@ class PendingEscalation:
 
 PENDING_ESCALATIONS: dict[str, PendingEscalation] = {}
 _PENDING_LOCK = asyncio.Lock()
+
+
+# ── Rollback State ────────────────────────────────────────────────────────────
+
+@dataclass
+class RollbackContext:
+    incident_id: str
+    snapshot: PrePatchSnapshot
+    alert_item: AlertItem
+    diagnosis: dict
+    scheduled_at: datetime
+
+
+IN_FLIGHT_ROLLBACKS: dict[str, RollbackContext] = {}
+_ROLLBACK_LOCK = asyncio.Lock()
 
 
 def _verify_hmac_token(incident_id: str, action: str, token: str | None) -> bool:
@@ -103,10 +149,120 @@ async def _cleanup_expired_escalations() -> None:
             del PENDING_ESCALATIONS[k]
 
 
+async def _cleanup_expired_rollbacks() -> None:
+    """Elimina rollbacks cuya ventana de evaluación ha expirado sin ser procesados."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.remediation_rollback_timeout * 2)
+    async with _ROLLBACK_LOCK:
+        expired = [k for k, v in IN_FLIGHT_ROLLBACKS.items() if v.scheduled_at < cutoff]
+        for k in expired:
+            logger.warning("Expiring stale in-flight rollback", extra={"incident_id": k})
+            del IN_FLIGHT_ROLLBACKS[k]
+
+
+async def _schedule_rollback_evaluation(
+    incident_id: str,
+    snapshot: PrePatchSnapshot,
+    alert_item: AlertItem,
+    diagnosis: dict,
+) -> None:
+    """Register a rollback context and schedule the evaluation task."""
+    async with _ROLLBACK_LOCK:
+        IN_FLIGHT_ROLLBACKS[incident_id] = RollbackContext(
+            incident_id=incident_id,
+            snapshot=snapshot,
+            alert_item=alert_item,
+            diagnosis=diagnosis,
+            scheduled_at=datetime.now(timezone.utc),
+        )
+    ROLLBACK_COUNTER.labels(outcome="scheduled").inc()
+    logger.info(
+        "Rollback evaluation scheduled",
+        extra={"incident_id": incident_id, "timeout_s": settings.remediation_rollback_timeout},
+    )
+    asyncio.create_task(_evaluate_rollback(incident_id))
+
+
+async def _evaluate_rollback(incident_id: str) -> None:
+    """Wait REMEDIATION_ROLLBACK_TIMEOUT seconds, then check pod health and revert if needed."""
+    try:
+        await asyncio.sleep(settings.remediation_rollback_timeout)
+
+        async with _ROLLBACK_LOCK:
+            ctx = IN_FLIGHT_ROLLBACKS.get(incident_id)
+
+        if ctx is None:
+            logger.info("Rollback context already cleared", extra={"incident_id": incident_id})
+            return
+
+        health = await check_pod_health(ctx.snapshot)
+        logger.info(
+            "Rollback evaluation: pod health check",
+            extra={
+                "incident_id": incident_id,
+                "healthy": health.healthy,
+                "reason": health.reason,
+                "phases": health.observed_phases,
+            },
+        )
+
+        _, alert_name, _, _ = _extract_alert_meta(ctx.alert_item)
+
+        if health.healthy:
+            ROLLBACK_COUNTER.labels(outcome="healthy").inc()
+            msg = (
+                f"✅ **Remediation healthy** — `{alert_name}`\n"
+                f"Pod(s) running normally {settings.remediation_rollback_timeout}s after patch. "
+                f"No rollback needed.\n"
+                f"_Deployment: `{ctx.snapshot.deployment}` · NS: `{ctx.snapshot.namespace}`_"
+            )
+            await send_mattermost_alert(msg)
+        else:
+            result = await revert_patch(ctx.snapshot)
+            if result.success:
+                ROLLBACK_COUNTER.labels(outcome="reverted").inc()
+                msg = (
+                    f"🔄 **Rollback executed** — `{alert_name}`\n"
+                    f"Pod(s) still failing after {settings.remediation_rollback_timeout}s "
+                    f"(reason: `{health.reason}`). "
+                    f"Reverted `{ctx.snapshot.deployment}` memory to `{ctx.snapshot.value}`.\n"
+                    f"```\n{results_to_log([result])}\n```"
+                )
+            else:
+                ROLLBACK_COUNTER.labels(outcome="revert_failed").inc()
+                msg = (
+                    f"⚠️ **Rollback FAILED** — `{alert_name}`\n"
+                    f"Pod(s) unhealthy (reason: `{health.reason}`) AND revert command failed.\n"
+                    f"Manual intervention required on `{ctx.snapshot.deployment}` in NS `{ctx.snapshot.namespace}`.\n"
+                    f"```\n{results_to_log([result])}\n```"
+                )
+            await send_mattermost_alert(msg)
+            logger.warning(
+                "Rollback outcome",
+                extra={
+                    "incident_id": incident_id,
+                    "outcome": "reverted" if result.success else "revert_failed",
+                    "deployment": ctx.snapshot.deployment,
+                    "namespace": ctx.snapshot.namespace,
+                    "pre_patch_value": ctx.snapshot.value,
+                },
+            )
+
+    except Exception as exc:
+        ROLLBACK_COUNTER.labels(outcome="evaluation_error").inc()
+        logger.error(
+            "Rollback evaluation error",
+            extra={"incident_id": incident_id, "error": str(exc)},
+        )
+    finally:
+        async with _ROLLBACK_LOCK:
+            IN_FLIGHT_ROLLBACKS.pop(incident_id, None)
+
+
 async def _periodic_cleanup() -> None:
     while True:
         await asyncio.sleep(300)
         await _cleanup_expired_escalations()
+        await _cleanup_expired_rollbacks()
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -154,6 +310,11 @@ async def lifespan(app: FastAPI):
     if not settings.webhook_secret:
         logger.warning(
             "WEBHOOK_SECRET not configured — Mattermost button callbacks accept any token"
+        )
+
+    if not settings.mm_command_token:
+        logger.warning(
+            "MM_COMMAND_TOKEN not configured — /aiops slash command accepts any token"
         )
 
     cleanup_task = asyncio.create_task(_periodic_cleanup())
@@ -335,6 +496,68 @@ def _format_escalation_body(diagnosis: dict, remediation: dict) -> str:
     return "\n".join(parts)
 
 
+# ── Slash command helpers ─────────────────────────────────────────────────────
+
+def _query_recent_incidents(chroma_client, limit: int) -> list[dict]:
+    """Return last `limit` incidents from ChromaDB sorted by timestamp desc.
+
+    Fail-open: returns [] if ChromaDB unavailable or collection empty.
+    """
+    if chroma_client is None:
+        return []
+    try:
+        coll = chroma_client.get_or_create_collection(
+            name=COLLECTION_INCIDENTS, metadata={"hnsw:space": "cosine"},
+        )
+        if coll.count() == 0:
+            return []
+        raw = coll.get(include=["documents", "metadatas"])
+        rows = [
+            {"id": rid, "document": doc, "metadata": meta}
+            for rid, doc, meta in zip(raw["ids"], raw["documents"], raw["metadatas"])
+        ]
+        rows.sort(key=lambda r: int(r["metadata"].get("timestamp", 0)), reverse=True)
+        return rows[:limit]
+    except Exception as exc:
+        logger.warning("Failed to query recent incidents: %s", exc)
+        return []
+
+
+def _format_status_response(ollama_ok: bool, chroma_ok: bool) -> str:
+    ollama = "UP" if ollama_ok else "DOWN"
+    chroma = "UP" if chroma_ok else "DOWN"
+    mode = "DRY-RUN" if settings.remediation_dry_run else "LIVE"
+    return (
+        f"**AIOps Agent — Status**\n"
+        f"- Ollama: {ollama} ({settings.ollama_model})\n"
+        f"- ChromaDB: {chroma}\n"
+        f"- Remediation: {'enabled' if settings.remediation_enabled else 'disabled'} ({mode})\n"
+        f"- Pending escalations: {len(PENDING_ESCALATIONS)}\n"
+    )
+
+
+def _format_incidents_response(incidents: list[dict]) -> str:
+    if not incidents:
+        return "_No incidents persisted yet._"
+    lines = ["**Last incidents:**"]
+    for row in incidents:
+        meta = row["metadata"]
+        ts = meta.get("timestamp", "?")
+        outcome = meta.get("outcome", "?")
+        err = meta.get("error_class", "?")
+        conf = meta.get("confidence", 0.0)
+        lines.append(f"- `{ts}` **{err}** → {outcome} (conf {int(float(conf) * 100)}%)")
+    return "\n".join(lines)
+
+
+HELP_TEXT = (
+    "**`/aiops` — AIOps agent commands**\n"
+    "- `/aiops status` — agent + dependencies status\n"
+    "- `/aiops incidents [N]` — last N incidents (default 5, max 20)\n"
+    "- `/aiops help` — this help\n"
+)
+
+
 async def _process_alert_with_diagnosis(
     alert: AlertItem,
     http_client: httpx.AsyncClient,
@@ -342,6 +565,9 @@ async def _process_alert_with_diagnosis(
 ) -> None:
     """Background task: RAG query → retrieve context → LLM diagnosis → Mattermost."""
     severity, alert_name, pod, namespace = _extract_alert_meta(alert)
+    is_chaos = namespace == "arturo-chaos"
+    t_pipeline_start = time.time()
+    chaos_outcome = "pipeline_failed"
     try:
         description = alert.annotations.get("description", "")
         query = build_rag_query(alert.labels, description)
@@ -376,6 +602,20 @@ async def _process_alert_with_diagnosis(
                 logger.warning("Remediation processing failed for %s: %s", alert_name, exc)
                 REMEDIATION_COUNTER.labels(action="skipped").inc()
 
+        # Rollback scheduling: if AUTO_REMEDIATE executed at least one command, schedule health check
+        if (
+            settings.remediation_rollback_enabled
+            and remediation_result is not None
+            and remediation_result["action"] == RemediationAction.AUTO_REMEDIATE
+            and any(r.success for r in remediation_result.get("execute_results", []))
+        ):
+            snapshot: PrePatchSnapshot | None = remediation_result.get("pre_patch_snapshot")
+            if snapshot is not None:
+                incident_id = str(uuid.uuid4())
+                await _schedule_rollback_evaluation(incident_id, snapshot, alert, diagnosis)
+            else:
+                ROLLBACK_COUNTER.labels(outcome="skipped_no_snapshot").inc()
+
         # Feedback loop: persist incident in ChromaDB (fail-open)
         if diagnosis is not None:
             try:
@@ -393,6 +633,8 @@ async def _process_alert_with_diagnosis(
                 FEEDBACK_COUNTER.labels(outcome="failed").inc()
         else:
             FEEDBACK_COUNTER.labels(outcome="skipped").inc()
+
+        chaos_outcome = remediation_result["action"].value if remediation_result else "no_diagnosis"
 
         # Escalations with approvable commands → send with interactive buttons
         if (
@@ -436,6 +678,21 @@ async def _process_alert_with_diagnosis(
             await send_mattermost_alert(fallback)
         except Exception as fallback_exc:
             logger.error("Fallback Mattermost send also failed for %s: %s", alert_name, fallback_exc)
+    finally:
+        if is_chaos:
+            try:
+                starts_at_epoch = datetime.fromisoformat(alert.startsAt.replace("Z", "+00:00")).timestamp()
+                mttd = max(0.0, t_pipeline_start - starts_at_epoch)
+                mttr = max(0.0, time.time() - starts_at_epoch)
+                CHAOS_EXPERIMENT_COUNTER.labels(experiment=alert_name, outcome=chaos_outcome).inc()
+                CHAOS_MTTD_HISTOGRAM.labels(experiment=alert_name).observe(mttd)
+                CHAOS_MTTR_HISTOGRAM.labels(experiment=alert_name).observe(mttr)
+                logger.info(
+                    "Chaos metrics recorded",
+                    extra={"experiment": alert_name, "mttd_s": round(mttd, 1), "mttr_s": round(mttr, 1), "outcome": chaos_outcome},
+                )
+            except Exception as chaos_exc:
+                logger.warning("Failed to record chaos metrics for %s: %s", alert_name, chaos_exc)
 
 
 @app.post(
@@ -538,7 +795,8 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
 
     if action == "approve":
         try:
-            log = await execute_commands(incident.safe_commands)
+            execute_results = await execute_commands(incident.safe_commands)
+            log = results_to_log(execute_results)
             REMEDIATION_COUNTER.labels(action="human_approved").inc()
         except Exception as exc:
             logger.error("Command execution failed for incident %s: %s", incident.incident_id, exc)
@@ -603,6 +861,66 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             "props": {"attachments": []},
         }
     }
+
+
+@app.post(
+    "/webhook/command",
+    summary="Recibe slash commands de Mattermost (/aiops ...)",
+)
+async def handle_slash_command(
+    token: Annotated[str | None, Form()] = None,
+    command: Annotated[str, Form()] = "",
+    text: Annotated[str, Form()] = "",
+    user_name: Annotated[str | None, Form()] = None,
+) -> dict:
+    """
+    Atiende el slash command /aiops de Mattermost.
+    MM envía application/x-www-form-urlencoded. Responde ephemeral (solo el invocador lo ve).
+    Auth: MM_COMMAND_TOKEN static shared secret — fail-open si no configurado (dev/test).
+    """
+    if settings.mm_command_token:
+        if not token or not hmac.compare_digest(token, settings.mm_command_token):
+            raise HTTPException(status_code=401, detail="Invalid command token")
+
+    if command != "/aiops":
+        return {"response_type": "ephemeral", "text": f"Unknown command: `{command}`"}
+
+    parts = text.strip().split()
+    sub = parts[0].lower() if parts else "help"
+
+    if sub == "status":
+        ollama_ok = False
+        try:
+            r = await app.state.http_client.get(settings.ollama_tags, timeout=settings.health_timeout)
+            ollama_ok = r.status_code == 200
+        except Exception:
+            pass
+        text_out = _format_status_response(ollama_ok, app.state.chroma_client is not None)
+
+    elif sub == "incidents":
+        limit = 5
+        if len(parts) > 1:
+            try:
+                limit = max(1, min(20, int(parts[1])))
+            except ValueError:
+                return {
+                    "response_type": "ephemeral",
+                    "text": f"Invalid N: `{parts[1]}` (expected integer 1–20)",
+                }
+        rows = _query_recent_incidents(app.state.chroma_client, limit)
+        text_out = _format_incidents_response(rows)
+
+    elif sub == "help":
+        text_out = HELP_TEXT
+
+    else:
+        text_out = f"Unknown subcommand: `{sub}`\n\n{HELP_TEXT}"
+
+    logger.info(
+        "Slash command processed",
+        extra={"command": command, "subcommand": sub, "user": user_name},
+    )
+    return {"response_type": "ephemeral", "text": text_out}
 
 
 @app.post(

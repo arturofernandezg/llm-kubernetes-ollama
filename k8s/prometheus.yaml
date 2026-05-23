@@ -295,6 +295,20 @@ data:
                 Prometheus target {{ $labels.instance }} (job={{ $labels.job }})
                 has been unreachable for 2 minutes.
 
+          # 6. ImagePullBackOff — contenedor no puede pullar imagen (deploy defectuoso)
+          - alert: KubePodImagePullBackOff
+            expr: kube_pod_container_status_waiting_reason{reason="ImagePullBackOff"} == 1
+            for: 1m
+            labels:
+              severity: critical
+              team: aiops
+            annotations:
+              summary: "Pod {{ $labels.pod }} cannot pull image"
+              description: >
+                Container {{ $labels.container }} in pod {{ $labels.pod }}
+                (ns {{ $labels.namespace }}) is in ImagePullBackOff for >1m.
+                Likely cause: wrong image tag, missing registry auth, or unreachable registry.
+
 ---
 
 # ── Deployment Prometheus ─────────────────────────────────────────────────────

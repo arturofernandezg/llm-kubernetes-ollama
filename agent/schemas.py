@@ -96,3 +96,21 @@ class MattermostActionPayload(BaseModel):
     post_id: str | None = None
     type: str | None = None
     context: ActionCallbackContext
+
+
+# ── Mattermost Slash Command Schemas (Mini-Fase 4 — ChatOps consulta) ─────────
+
+class MattermostCommandPayload(BaseModel):
+    """Payload que envía Mattermost al disparar un slash command.
+
+    MM envía application/x-www-form-urlencoded. El endpoint construye este
+    modelo a partir de los Form fields.
+    """
+    token: str | None = None
+    command: str = ""
+    text: str = ""
+    team_id: str | None = None
+    channel_id: str | None = None
+    user_id: str | None = None
+    user_name: str | None = None
+    response_url: str | None = None

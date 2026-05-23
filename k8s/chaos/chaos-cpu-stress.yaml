@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: arturo-chaos
+  labels:
+    managed-by: aiops-agent
+    project: uniovi-ai-infra-agent
+    environment: chaos
+    created-by: arturofernandezg
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaos-cpu-target
+  namespace: arturo-chaos
+  labels:
+    managed-by: aiops-agent
+    project: uniovi-ai-infra-agent
+    environment: chaos
+    created-by: arturofernandezg
+    chaos-type: cpu-stress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chaos-cpu-target
+  template:
+    metadata:
+      labels:
+        app: chaos-cpu-target
+        chaos-type: cpu-stress
+    spec:
+      nodeSelector:
+        guaranteed: "true"
+      tolerations:
+      - key: "guaranteed"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      # Mirror ya disponible desde sesion #1:
+      # crane copy --platform linux/amd64 polinux/stress:latest \
+      #   europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/polinux-stress:latest
+      containers:
+      - name: stress
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/polinux-stress:latest
+        imagePullPolicy: Always
+        command: ["stress-ng"]
+        # --cpu 2 con limits.cpu 100m -> uso ~200% del limit -> HighCPU (for: 5m)
+        # timeout 600s > for: 5m garantiza que la regla dispare antes de que el pod termine
+        args: ["--cpu", "2", "--timeout", "600s"]
+        resources:
+          requests:
+            memory: "16Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+        securityContext:
+          runAsNonRoot: false
+          allowPrivilegeEscalation: false
+      restartPolicy: Always

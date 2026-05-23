@@ -22,10 +22,8 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: agent
-        # En producción, sustituir :latest por el SHA del commit:
-        #   image: ...aiops-agent:$COMMIT_SHA
-        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:latest
-        imagePullPolicy: Always
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:3fde9f8
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
         resources:
@@ -79,6 +77,12 @@ spec:
           value: "true"
         - name: REMEDIATION_DRY_RUN
           value: "true"
+        - name: REMEDIATION_ROLLBACK_ENABLED
+          value: "true"
+        - name: REMEDIATION_ROLLBACK_TIMEOUT
+          value: "300"
+        - name: REMEDIATION_ROLLBACK_GRACE
+          value: "30"
         - name: MATTERMOST_WEBHOOK_URL
           valueFrom:
             secretKeyRef:
@@ -91,6 +95,12 @@ spec:
             secretKeyRef:
               name: agent-secrets
               key: webhook-secret
+              optional: true
+        - name: MM_COMMAND_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: agent-secrets
+              key: mm-command-token
               optional: true
       volumes:
       - name: tmp

@@ -6,6 +6,7 @@ Todos los tests usan mocks de Ollama (no requieren cluster ni LLM).
 """
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,7 +18,9 @@ from main import (
     app, _format_diagnosis_message, _format_escalation_body, _extract_alert_meta,
     PENDING_ESCALATIONS, PendingEscalation, _cleanup_expired_escalations,
     _process_alert_with_diagnosis,
+    CHAOS_EXPERIMENT_COUNTER, CHAOS_MTTD_HISTOGRAM, CHAOS_MTTR_HISTOGRAM,
 )
+from prometheus_client import REGISTRY
 from mattermost import make_hmac_token
 from schemas import AlertItem
 from tests.helpers import (
@@ -1037,3 +1040,318 @@ class TestProcessAlertFallbackException:
         mock_send.assert_called_once()
         fallback_msg = mock_send.call_args[0][0]
         assert "TestAlert" in fallback_msg
+
+
+# ── Chaos Engineering Metrics ─────────────────────────────────────────────────
+
+def _get_counter(name: str, labels: dict) -> float:
+    return REGISTRY.get_sample_value(name + "_total", labels) or 0.0
+
+
+def _get_histogram_count(name: str, labels: dict) -> float:
+    return REGISTRY.get_sample_value(name + "_count", labels) or 0.0
+
+
+class TestChaosMetrics:
+    """Métricas chaos se registran cuando el namespace es arturo-chaos."""
+
+    def _chaos_alert(self, alertname: str = "KubePodOOMKilled") -> AlertItem:
+        return AlertItem(
+            status="firing",
+            labels={"alertname": alertname, "severity": "critical", "pod": "chaos-pod", "namespace": "arturo-chaos"},
+            annotations={"description": "Chaos experiment"},
+            startsAt="2026-05-18T10:00:00Z",
+        )
+
+    @pytest.mark.asyncio
+    async def test_chaos_counter_incremented_on_chaos_namespace(self):
+        alert = self._chaos_alert()
+        before = _get_counter("aiops_chaos_experiment", {"experiment": "KubePodOOMKilled", "outcome": "no_diagnosis"})
+
+        with patch("main.build_rag_query", return_value="query"), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=Exception("llm down")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(alert, AsyncMock(), None)
+
+        after = _get_counter("aiops_chaos_experiment", {"experiment": "KubePodOOMKilled", "outcome": "no_diagnosis"})
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_chaos_mttd_histogram_observed(self):
+        alert = self._chaos_alert()
+        before = _get_histogram_count("aiops_chaos_mttd_seconds", {"experiment": "KubePodOOMKilled"})
+
+        with patch("main.build_rag_query", return_value="query"), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=Exception("llm down")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(alert, AsyncMock(), None)
+
+        after = _get_histogram_count("aiops_chaos_mttd_seconds", {"experiment": "KubePodOOMKilled"})
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_chaos_mttr_histogram_observed(self):
+        alert = self._chaos_alert()
+        before = _get_histogram_count("aiops_chaos_mttr_seconds", {"experiment": "KubePodOOMKilled"})
+
+        with patch("main.build_rag_query", return_value="query"), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=Exception("llm down")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(alert, AsyncMock(), None)
+
+        after = _get_histogram_count("aiops_chaos_mttr_seconds", {"experiment": "KubePodOOMKilled"})
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_non_chaos_namespace_does_not_increment_chaos_counter(self):
+        alert = AlertItem(
+            status="firing",
+            labels={"alertname": "KubePodOOMKilled", "severity": "critical", "pod": "prod-pod", "namespace": "arturo-llm-test"},
+            annotations={"description": "Prod alert"},
+            startsAt="2026-05-18T10:00:00Z",
+        )
+        before = _get_counter("aiops_chaos_experiment", {"experiment": "KubePodOOMKilled", "outcome": "no_diagnosis"})
+
+        with patch("main.build_rag_query", return_value="query"), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=Exception("llm down")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(alert, AsyncMock(), None)
+
+        after = _get_counter("aiops_chaos_experiment", {"experiment": "KubePodOOMKilled", "outcome": "no_diagnosis"})
+        assert after == before  # no increment para namespace no-chaos
+
+    @pytest.mark.asyncio
+    async def test_chaos_outcome_reflects_remediation_action(self):
+        alert = self._chaos_alert()
+
+        with patch("main.build_rag_query", return_value="query"), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_escalate()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value={"action": main.RemediationAction.ESCALATE, "safe_commands": [], "reason": "r", "reason_code": "rc"}), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            before = _get_counter("aiops_chaos_experiment", {"experiment": "KubePodOOMKilled", "outcome": "escalate"})
+            await _process_alert_with_diagnosis(alert, AsyncMock(), None)
+            after = _get_counter("aiops_chaos_experiment", {"experiment": "KubePodOOMKilled", "outcome": "escalate"})
+
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_chaos_metrics_bad_image_alertname(self):
+        alert = self._chaos_alert(alertname="KubePodImagePullBackOff")
+        before = _get_counter("aiops_chaos_experiment", {"experiment": "KubePodImagePullBackOff", "outcome": "no_diagnosis"})
+
+        with patch("main.build_rag_query", return_value="query"), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=Exception("llm down")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(alert, AsyncMock(), None)
+
+        after = _get_counter("aiops_chaos_experiment", {"experiment": "KubePodImagePullBackOff", "outcome": "no_diagnosis"})
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_chaos_metrics_high_cpu_alertname(self):
+        alert = self._chaos_alert(alertname="HighCPU")
+        before = _get_counter("aiops_chaos_experiment", {"experiment": "HighCPU", "outcome": "no_diagnosis"})
+
+        with patch("main.build_rag_query", return_value="query"), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=Exception("llm down")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(alert, AsyncMock(), None)
+
+        after = _get_counter("aiops_chaos_experiment", {"experiment": "HighCPU", "outcome": "no_diagnosis"})
+        assert after == before + 1
+
+
+# ── POST /webhook/command ─────────────────────────────────────────────────────
+
+def _make_incidents_chroma(n: int = 10) -> MagicMock:
+    """ChromaDB mock con n incidents ordenados de forma no-cronológica para verificar el sort."""
+    mock_client = MagicMock()
+    coll = MagicMock()
+    coll.count.return_value = n
+    ids = [f"incident-OOMKilled-{1000 + i}" for i in range(n)]
+    docs = [f"Alert: OOMKilled incident {i}" for i in range(n)]
+    # timestamps scrambled — test must verify sorted output
+    metadatas = [
+        {
+            "timestamp": str(1000 + (n - i)),  # descending order reversed: oldest first in list
+            "outcome": "escalate",
+            "error_class": "OOMKilled",
+            "confidence": "0.9",
+        }
+        for i in range(n)
+    ]
+    coll.get.return_value = {"ids": ids, "documents": docs, "metadatas": metadatas}
+    mock_client.get_or_create_collection.return_value = coll
+    return mock_client
+
+
+class TestSlashCommandEndpoint:
+    """POST /webhook/command — slash commands /aiops de Mattermost."""
+
+    def test_status_returns_ephemeral_ollama_up(self, api_client):
+        """Happy path: Ollama responde 200, ChromaDB not None → status UP."""
+        mock_http = mock_http_client("")
+        with patch.object(app.state, "http_client", mock_http), \
+             patch.object(app.state, "chroma_client", MagicMock()):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "status",
+            })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["response_type"] == "ephemeral"
+        assert "UP" in body["text"]
+        assert "AIOps Agent" in body["text"]
+
+    def test_status_marks_ollama_down_when_unreachable(self, api_client):
+        """Ollama down → status shows DOWN, still 200 ephemeral."""
+        with patch.object(app.state, "http_client", mock_ollama_unreachable()), \
+             patch.object(app.state, "chroma_client", MagicMock()):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "status",
+            })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["response_type"] == "ephemeral"
+        assert "DOWN" in body["text"]
+
+    def test_incidents_default_5_sorted_by_timestamp_desc(self, api_client):
+        """incidents without N → returns 5 entries sorted by timestamp desc."""
+        mock_chroma = _make_incidents_chroma(n=10)
+        with patch.object(app.state, "chroma_client", mock_chroma):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "incidents",
+            })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["response_type"] == "ephemeral"
+        lines = [l for l in body["text"].split("\n") if l.startswith("-")]
+        assert len(lines) == 5
+        # verify descending order: first timestamp > second timestamp
+        timestamps = [int(re.search(r"`(\d+)`", l).group(1)) for l in lines]
+        assert timestamps == sorted(timestamps, reverse=True)
+
+    def test_incidents_n_argument_clamps_to_20(self, api_client):
+        """incidents 100 → clamped to 20, no error."""
+        mock_chroma = _make_incidents_chroma(n=25)
+        with patch.object(app.state, "chroma_client", mock_chroma):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "incidents 100",
+            })
+        assert r.status_code == 200
+        body = r.json()
+        lines = [l for l in body["text"].split("\n") if l.startswith("-")]
+        assert len(lines) == 20
+
+    def test_incidents_n_1_returns_single_entry(self, api_client):
+        """incidents 1 → exactly 1 row."""
+        mock_chroma = _make_incidents_chroma(n=5)
+        with patch.object(app.state, "chroma_client", mock_chroma):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "incidents 1",
+            })
+        assert r.status_code == 200
+        lines = [l for l in r.json()["text"].split("\n") if l.startswith("-")]
+        assert len(lines) == 1
+
+    def test_incidents_invalid_n_returns_error_ephemeral(self, api_client):
+        """incidents abc → ephemeral error, not 422."""
+        r = api_client.post("/webhook/command", data={
+            "command": "/aiops", "text": "incidents abc",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["response_type"] == "ephemeral"
+        assert "Invalid N" in body["text"]
+        assert "abc" in body["text"]
+
+    def test_help_returns_help_text(self, api_client):
+        """text=help → table with all subcommands."""
+        r = api_client.post("/webhook/command", data={
+            "command": "/aiops", "text": "help",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["response_type"] == "ephemeral"
+        assert "status" in body["text"]
+        assert "incidents" in body["text"]
+
+    def test_empty_text_defaults_to_help(self, api_client):
+        """No text → treated as help."""
+        r = api_client.post("/webhook/command", data={
+            "command": "/aiops", "text": "",
+        })
+        assert r.status_code == 200
+        assert "incidents" in r.json()["text"]
+
+    def test_unknown_subcommand_returns_help_fallback(self, api_client):
+        """Unknown subcommand → help text included in response."""
+        r = api_client.post("/webhook/command", data={
+            "command": "/aiops", "text": "foobar",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["response_type"] == "ephemeral"
+        assert "foobar" in body["text"] or "Unknown" in body["text"]
+        assert "status" in body["text"]
+
+    def test_missing_token_returns_401_when_secret_set(self, api_client):
+        """MM_COMMAND_TOKEN set, no token field → 401."""
+        with patch.object(main.settings, "mm_command_token", "real-token"):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "help",
+            })
+        assert r.status_code == 401
+
+    def test_wrong_token_returns_401_when_secret_set(self, api_client):
+        """MM_COMMAND_TOKEN set, wrong token → 401."""
+        with patch.object(main.settings, "mm_command_token", "real-token"):
+            r = api_client.post("/webhook/command", data={
+                "token": "wrong-token", "command": "/aiops", "text": "help",
+            })
+        assert r.status_code == 401
+
+    def test_correct_token_passes_when_secret_set(self, api_client):
+        """MM_COMMAND_TOKEN set, correct token → 200."""
+        with patch.object(main.settings, "mm_command_token", "real-token"):
+            r = api_client.post("/webhook/command", data={
+                "token": "real-token", "command": "/aiops", "text": "help",
+            })
+        assert r.status_code == 200
+
+    def test_no_token_passes_when_secret_unset(self, api_client):
+        """MM_COMMAND_TOKEN empty → fail-open, request processed without token."""
+        with patch.object(main.settings, "mm_command_token", ""):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "help",
+            })
+        assert r.status_code == 200
+
+    def test_incidents_empty_chromadb_returns_no_incidents_message(self, api_client):
+        """ChromaDB collection empty → friendly 'no incidents' message."""
+        mock_chroma = MagicMock()
+        coll = MagicMock()
+        coll.count.return_value = 0
+        mock_chroma.get_or_create_collection.return_value = coll
+        with patch.object(app.state, "chroma_client", mock_chroma):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "incidents",
+            })
+        assert r.status_code == 200
+        assert "No incidents" in r.json()["text"]
+
+    def test_incidents_chromadb_none_returns_no_incidents_message(self, api_client):
+        """chroma_client is None (down at startup) → fail-open, no crash."""
+        with patch.object(app.state, "chroma_client", None):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "incidents",
+            })
+        assert r.status_code == 200
+        assert "No incidents" in r.json()["text"]

@@ -16,10 +16,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from remediation import (
     CommandSafety,
     RemediationAction,
+    ExecuteResult,
+    PrePatchSnapshot,
+    PodHealthStatus,
     classify_command,
     validate_commands,
     decide_action,
     execute_commands,
+    results_to_log,
+    capture_pre_patch_value,
+    check_pod_health,
+    revert_patch,
     process_remediation,
     parse_memory_to_bytes,
     implies_pod_restart,
@@ -225,29 +232,72 @@ class TestDecideAction:
         assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
 
 
+# ── TestExecuteResult ─────────────────────────────────────────────────────────
+
+class TestExecuteResult:
+
+    def test_equality(self):
+        r1 = ExecuteResult(command="kubectl get pods", success=True, stdout="ok", stderr="", exit_code=0, outcome="ok")
+        r2 = ExecuteResult(command="kubectl get pods", success=True, stdout="ok", stderr="", exit_code=0, outcome="ok")
+        assert r1 == r2
+
+    def test_frozen_immutable(self):
+        r = ExecuteResult(command="kubectl get pods", success=True, stdout="", stderr="", exit_code=None, outcome="dry_run")
+        with pytest.raises(Exception):
+            r.success = False  # type: ignore[misc]
+
+    def test_results_to_log_dry_run(self):
+        results = [ExecuteResult(command="kubectl get pods", success=True, stdout="", stderr="", exit_code=None, outcome="dry_run")]
+        log = results_to_log(results)
+        assert "[DRY-RUN]" in log
+        assert "kubectl get pods" in log
+
+    def test_results_to_log_ok(self):
+        results = [ExecuteResult(command="kubectl get pods", success=True, stdout="pod Running", stderr="", exit_code=0, outcome="ok")]
+        log = results_to_log(results)
+        assert "[OK]" in log
+        assert "pod Running" in log
+
+    def test_results_to_log_failed(self):
+        results = [ExecuteResult(command="kubectl get pods", success=False, stdout="", stderr="not found", exit_code=1, outcome="failed")]
+        log = results_to_log(results)
+        assert "[FAILED exit=1]" in log
+        assert "not found" in log
+
+    def test_results_to_log_skip(self):
+        results = [ExecuteResult(command="helm up", success=False, stdout="", stderr="only kubectl commands allowed", exit_code=None, outcome="skip")]
+        log = results_to_log(results)
+        assert "[SKIP]" in log
+        assert "only kubectl commands allowed" in log
+
+    def test_results_to_log_empty(self):
+        assert results_to_log([]) == ""
+
+
 # ── TestExecuteCommands ───────────────────────────────────────────────────────
 
 class TestExecuteCommands:
 
     @pytest.mark.asyncio
-    async def test_dry_run_prefix(self):
+    async def test_dry_run_returns_list_with_dry_run_outcome(self):
         cmds = ["kubectl describe pod engine -n prod"]
         result = await execute_commands(cmds)
-        assert "[DRY-RUN]" in result
-        assert "kubectl describe pod engine -n prod" in result
+        assert len(result) == 1
+        assert result[0].outcome == "dry_run"
+        assert result[0].success is True
+        assert result[0].command == "kubectl describe pod engine -n prod"
 
     @pytest.mark.asyncio
-    async def test_multiple_commands(self):
+    async def test_multiple_commands_all_dry_run(self):
         cmds = ["kubectl get pods", "kubectl describe pod p"]
         result = await execute_commands(cmds)
-        lines = result.strip().split("\n")
-        assert len(lines) == 2
-        assert all("[DRY-RUN]" in line for line in lines)
+        assert len(result) == 2
+        assert all(r.outcome == "dry_run" for r in result)
 
     @pytest.mark.asyncio
-    async def test_empty_list_returns_empty_string(self):
+    async def test_empty_list_returns_empty_list(self):
         result = await execute_commands([])
-        assert result == ""
+        assert result == []
 
 
 # ── TestExecuteCommandsRealMode ───────────────────────────────────────────────
@@ -265,11 +315,12 @@ class TestExecuteCommandsRealMode:
     """Tests para execute_commands() con remediation_dry_run=False."""
 
     @pytest.mark.asyncio
-    async def test_dry_run_true_returns_dry_run_prefix(self, monkeypatch):
-        """Regression: dry_run=True (default) sigue devolviendo [DRY-RUN]."""
+    async def test_dry_run_true_returns_dry_run_outcome(self, monkeypatch):
+        """Regression: dry_run=True (default) sigue devolviendo outcome=dry_run."""
         monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
         result = await execute_commands(["kubectl get pods"])
-        assert "[DRY-RUN]" in result
+        assert len(result) == 1
+        assert result[0].outcome == "dry_run"
 
     @pytest.mark.asyncio
     async def test_real_execution_success(self, monkeypatch):
@@ -278,8 +329,10 @@ class TestExecuteCommandsRealMode:
         proc = _make_proc(stdout=b"pod/engine Running", returncode=0)
         with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             result = await execute_commands(["kubectl get pods -n prod"])
-        assert "[OK]" in result
-        assert "pod/engine Running" in result
+        assert len(result) == 1
+        assert result[0].outcome == "ok"
+        assert result[0].success is True
+        assert "pod/engine Running" in result[0].stdout
 
     @pytest.mark.asyncio
     async def test_real_execution_nonzero_exit_code(self, monkeypatch):
@@ -288,8 +341,10 @@ class TestExecuteCommandsRealMode:
         proc = _make_proc(stderr=b"not found", returncode=1)
         with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             result = await execute_commands(["kubectl get pods -n prod"])
-        assert "[FAILED exit=1]" in result
-        assert "not found" in result
+        assert result[0].outcome == "failed"
+        assert result[0].success is False
+        assert result[0].exit_code == 1
+        assert "not found" in result[0].stderr
 
     @pytest.mark.asyncio
     async def test_real_execution_timeout(self, monkeypatch):
@@ -299,7 +354,8 @@ class TestExecuteCommandsRealMode:
         proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
         with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             result = await execute_commands(["kubectl get pods -n prod"])
-        assert "[TIMEOUT]" in result
+        assert result[0].outcome == "timeout"
+        assert result[0].success is False
 
     @pytest.mark.asyncio
     async def test_real_execution_skips_non_kubectl(self, monkeypatch):
@@ -307,35 +363,33 @@ class TestExecuteCommandsRealMode:
         with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock()) as mock_exec:
             result = await execute_commands(["helm upgrade engine ./chart"])
         mock_exec.assert_not_called()
-        assert "[SKIP]" in result
-        assert "only kubectl commands allowed" in result
+        assert result[0].outcome == "skip"
+        assert "only kubectl commands allowed" in result[0].stderr
 
     @pytest.mark.asyncio
     async def test_real_execution_empty_list(self, monkeypatch):
         monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
         result = await execute_commands([])
-        assert result == ""
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_create_subprocess_raises_timeout_no_unbound_error(self, monkeypatch):
-        """create_subprocess_exec raises TimeoutError before proc is assigned.
-        Guard proc=None prevents UnboundLocalError; result contains [TIMEOUT].
-        """
+        """create_subprocess_exec raises TimeoutError before proc is assigned — outcome=timeout."""
         monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
         monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
         with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(side_effect=asyncio.TimeoutError)):
             result = await execute_commands(["kubectl get pods -n prod"])
-        assert "[TIMEOUT]" in result
+        assert result[0].outcome == "timeout"
 
     @pytest.mark.asyncio
     async def test_create_subprocess_raises_oserror_returns_error_entry(self, monkeypatch):
-        """create_subprocess_exec raises OSError; result contains [ERROR], no crash."""
+        """create_subprocess_exec raises OSError — outcome=error, no crash."""
         monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
         monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
         with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(side_effect=OSError("no such binary"))):
             result = await execute_commands(["kubectl get pods -n prod"])
-        assert "[ERROR]" in result
-        assert "no such binary" in result
+        assert result[0].outcome == "error"
+        assert "no such binary" in result[0].stderr
 
     @pytest.mark.asyncio
     async def test_cancelled_error_propagates(self, monkeypatch):
@@ -363,8 +417,8 @@ class TestExecuteCommandsRealMode:
                 "kubectl get pods -n prod",
                 "kubectl describe pod bad-pod -n prod",
             ])
-        assert "[OK]" in result
-        assert "[FAILED exit=1]" in result
+        assert result[0].outcome == "ok"
+        assert result[1].outcome == "failed"
 
 
 # ── TestProcessRemediation ────────────────────────────────────────────────────
@@ -398,6 +452,8 @@ class TestProcessRemediation:
         assert "command_validations" in result
         assert "safe_commands" in result
         assert "blocked_commands" in result
+        assert "execute_results" in result
+        assert all(r.outcome == "dry_run" for r in result["execute_results"])
 
     @pytest.mark.asyncio
     async def test_no_commands_gives_suggest_only(self, monkeypatch):
@@ -696,6 +752,241 @@ class TestValidateCommandsNonString:
         assert len(result) == 2
         assert result[0]["safety"] == CommandSafety.SAFE
         assert result[1]["safety"] == CommandSafety.BLOCKED
+
+
+# ── TestCapturePrePatchValue ──────────────────────────────────────────────────
+
+class TestCapturePrePatchValue:
+    """capture_pre_patch_value() queries the cluster or falls back to LLM value."""
+
+    def _proposed(self, **kwargs):
+        base = {
+            "kind": "Deployment", "name": "engine", "namespace": "prod",
+            "container": "engine", "field": "resources.limits.memory",
+            "current_value": "256Mi", "new_value": "512Mi",
+        }
+        return {**base, **kwargs}
+
+    @pytest.mark.asyncio
+    async def test_dry_run_returns_snapshot_with_llm_value(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        result = await capture_pre_patch_value(self._proposed())
+        assert result is not None
+        assert result.value == "256Mi"
+        assert result.deployment == "engine"
+        assert result.namespace == "prod"
+        assert result.container == "engine"
+
+    @pytest.mark.asyncio
+    async def test_dry_run_missing_current_value_uses_empty_string(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        result = await capture_pre_patch_value(self._proposed(current_value=None))
+        assert result is not None
+        assert result.value == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_non_dict(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        assert await capture_pre_patch_value(None) is None
+        assert await capture_pre_patch_value("string") is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_missing_required_fields(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        assert await capture_pre_patch_value({"name": "engine"}) is None  # missing namespace+container
+
+    @pytest.mark.asyncio
+    async def test_real_mode_success(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"engine:512Mi;sidecar:128Mi;", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await capture_pre_patch_value(self._proposed())
+        assert result is not None
+        assert result.value == "512Mi"
+
+    @pytest.mark.asyncio
+    async def test_real_mode_kubectl_fails_returns_none(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stderr=b"not found", returncode=1)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await capture_pre_patch_value(self._proposed())
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_real_mode_container_not_found_returns_none(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"other-container:256Mi;", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await capture_pre_patch_value(self._proposed())
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_real_mode_exception_returns_none(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(side_effect=OSError("no binary"))):
+            result = await capture_pre_patch_value(self._proposed())
+        assert result is None
+
+
+# ── TestCheckPodHealth ────────────────────────────────────────────────────────
+
+class TestCheckPodHealth:
+    """check_pod_health() assesses pod state after a remediation patch."""
+
+    def _snapshot(self):
+        return PrePatchSnapshot(
+            deployment="engine", namespace="prod", container="engine",
+            field="resources.limits.memory", value="256Mi", selector="app=engine",
+        )
+
+    @pytest.mark.asyncio
+    async def test_dry_run_always_healthy(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        result = await check_pod_health(self._snapshot())
+        assert result.healthy is True
+        assert result.reason == "dry_run"
+
+    @pytest.mark.asyncio
+    async def test_all_running_zero_restarts_is_healthy(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"Running|0;Running|0;", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await check_pod_health(self._snapshot())
+        assert result.healthy is True
+        assert result.observed_phases == ["Running", "Running"]
+
+    @pytest.mark.asyncio
+    async def test_pending_pod_is_unhealthy(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"Pending|0;", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await check_pod_health(self._snapshot())
+        assert result.healthy is False
+        assert "Pending" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_restart_count_nonzero_is_unhealthy(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"Running|3;", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await check_pod_health(self._snapshot())
+        assert result.healthy is False
+        assert result.observed_restarts == [3]
+
+    @pytest.mark.asyncio
+    async def test_no_pods_found_is_unhealthy(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await check_pod_health(self._snapshot())
+        assert result.healthy is False
+        assert result.reason == "no_pods_found"
+
+    @pytest.mark.asyncio
+    async def test_kubectl_error_is_unhealthy(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(side_effect=OSError("fail"))):
+            result = await check_pod_health(self._snapshot())
+        assert result.healthy is False
+        assert "kubectl_error" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_kubectl_nonzero_exit_is_unhealthy(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stderr=b"forbidden", returncode=1)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await check_pod_health(self._snapshot())
+        assert result.healthy is False
+        assert "kubectl_failed" in result.reason
+
+
+# ── TestRevertPatch ───────────────────────────────────────────────────────────
+
+class TestRevertPatch:
+    """revert_patch() builds and executes the kubectl set resources rollback command."""
+
+    def _snapshot(self, value="256Mi"):
+        return PrePatchSnapshot(
+            deployment="engine", namespace="prod", container="engine",
+            field="resources.limits.memory", value=value, selector="app=engine",
+        )
+
+    @pytest.mark.asyncio
+    async def test_dry_run_returns_dry_run_outcome(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        result = await revert_patch(self._snapshot())
+        assert result.outcome == "dry_run"
+        assert result.success is True
+        assert "256Mi" in result.command
+
+    @pytest.mark.asyncio
+    async def test_real_mode_success_returns_ok_outcome(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"deployment.apps/engine resource requirements updated", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await revert_patch(self._snapshot())
+        assert result.outcome == "ok"
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_empty_value_returns_error(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        result = await revert_patch(self._snapshot(value=""))
+        assert result.outcome == "error"
+        assert result.success is False
+
+
+# ── TestProcessRemediationSnapshot ────────────────────────────────────────────
+
+class TestProcessRemediationSnapshot:
+    """process_remediation() captures pre_patch_snapshot when AUTO_REMEDIATE."""
+
+    @pytest.mark.asyncio
+    async def test_snapshot_captured_when_auto_remediate(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "prod",
+                "container": "engine", "field": "resources.limits.memory",
+                "current_value": "256Mi", "new_value": "512Mi",
+            },
+        }
+        result = await process_remediation(diagnosis)
+        assert result["action"] == RemediationAction.AUTO_REMEDIATE
+        assert result["pre_patch_snapshot"] is not None
+        assert result["pre_patch_snapshot"].value == "256Mi"
+
+    @pytest.mark.asyncio
+    async def test_snapshot_none_when_escalate(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        result = await process_remediation(mock_diagnosis_escalate())
+        assert result["action"] == RemediationAction.ESCALATE
+        assert result["pre_patch_snapshot"] is None
+
+    @pytest.mark.asyncio
+    async def test_snapshot_none_when_no_proposed_action(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        diagnosis = {**mock_diagnosis_auto_remediate(), "proposed_action": None}
+        result = await process_remediation(diagnosis)
+        assert result["pre_patch_snapshot"] is None
 
 
 # ── TestProcessRemediationNonStringFilter ─────────────────────────────────────

@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: arturo-chaos
+  labels:
+    managed-by: aiops-agent
+    project: uniovi-ai-infra-agent
+    environment: chaos
+    created-by: arturofernandezg
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaos-oom-target
+  namespace: arturo-chaos
+  labels:
+    managed-by: aiops-agent
+    project: uniovi-ai-infra-agent
+    environment: chaos
+    created-by: arturofernandezg
+    chaos-type: oom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chaos-oom-target
+  template:
+    metadata:
+      labels:
+        app: chaos-oom-target
+        chaos-type: oom
+    spec:
+      nodeSelector:
+        guaranteed: "true"
+      tolerations:
+      - key: "guaranteed"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      # Mirror obligatorio antes de aplicar:
+      # crane copy --platform linux/amd64 polinux/stress:latest \
+      #   europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/polinux-stress:latest
+      containers:
+      - name: stress
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/polinux-stress:latest
+        imagePullPolicy: Always
+        command: ["stress-ng"]
+        args: ["--vm", "1", "--vm-bytes", "100M", "--timeout", "60s"]
+        resources:
+          requests:
+            memory: "16Mi"
+            cpu: "10m"
+          limits:
+            memory: "32Mi"
+            cpu: "100m"
+        securityContext:
+          runAsNonRoot: false
+          allowPrivilegeEscalation: false
+      restartPolicy: Always

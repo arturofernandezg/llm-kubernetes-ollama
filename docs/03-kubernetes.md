@@ -28,7 +28,7 @@
 | `networkpolicy.yaml` | NetworkPolicy (2 políticas) | Segmentación de tráfico entre pods |
 | `prometheus.yaml` | ServiceAccounts, ClusterRoles, ConfigMaps, Deployments, Services para Prometheus + KSM | Monitoring stack en `arturo-monitoring` |
 | `alertmanager.yaml` | Deployment + ConfigMap + Service para Alertmanager | Routing de alertas a webhook del agente |
-| `grafana.yaml` | Deployment stateless + ConfigMaps provisioning + Service + Secret ref | Datasource Prometheus, dashboard AIOps, contact point webhook |
+| `grafana.yaml` | Deployment stateless + ConfigMaps provisioning + Service + Secret ref | Datasource Prometheus, dashboards "AIOps Agent — Overview" + "AIOps — Chaos", contact point webhook |
 | `job-ingest-runbooks.yaml` | K8s Job `runbooks-ingest` en `arturo-llm-test` | Ingesta idempotente (upsert) de 16 runbooks en ChromaDB |
 | `rbac.yaml` | Role + RoleBinding en `arturo-llm-test` | RBAC para remediación autónoma del agente |
 
@@ -198,6 +198,29 @@ tolerations:
 - Si los nodos guaranteed no tienen taint `guaranteed:NoSchedule`, las tolerations son inocuas (no afectan al scheduling).
 - `chromadb.yaml` mantiene también la toleration GCP Spot existente como safety net por si se elimina el nodeSelector accidentalmente.
 - Verificación post-apply: `kubectl get pods -n arturo-llm-test -o wide` → columna NODE debe mostrar nodos guaranteed.
+
+## Namespace `arturo-chaos` — Chaos Engineering (Mini-Fase 4)
+
+Namespace aislado para experimentos de chaos engineering. No interfiere con `arturo-llm-test`, `arturo-monitoring` ni `arturo-mattermost`.
+
+**Manifests:**
+- `k8s/chaos/chaos-oom.yaml` — Deployment que consume >memory limit (OOMKilled)
+- `k8s/chaos/chaos-crashloop.yaml` — Deployment con `/bin/false` (CrashLoopBackOff)
+
+**Prerrequisito**: mirror de `polinux/stress` a AR antes de aplicar chaos-oom.yaml:
+```
+crane copy --platform linux/amd64 polinux/stress:latest europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/polinux-stress:latest
+```
+
+**Comandos rápidos:**
+```bash
+./scripts/chaos.sh oom         # experimento OOMKilled
+./scripts/chaos.sh crashloop   # experimento CrashLoopBackOff
+./scripts/chaos.sh status      # ver pods en arturo-chaos
+./scripts/chaos.sh cleanup     # borrar namespace arturo-chaos
+```
+
+El agente detecta alertas de este namespace e incrementa `aiops_chaos_*` en `/metrics`. Ver `docs/12-chaos-engineering.md` para tabla de resultados.
 
 ## Grafana — Acceso y dashboard
 
@@ -372,3 +395,40 @@ pydantic-settings lo recoge sin rebuild de imagen (duración observada: ~187s).
 El cluster-autoscaler puede no conseguir reemplazarlo si no hay capacidad spot en la zona.
 **Solución**: con los resources ajustados actuales, todo cabe en 1 nodo.
 Si necesitas forzar 2 nodos: `gcloud container clusters resize ai-infra-agent --node-pool spot-e411 --num-nodes 2 --zone europe-southwest1-a`
+
+---
+
+## Backup ChromaDB
+
+ChromaDB persiste los runbooks y los incidentes procesados en un PVC (`chromadb-pvc`). **Nunca borrar este PVC** — perderías los 16 runbooks ingestados y el histórico de incidentes. El backup manual extrae el contenido del PVC al directorio local.
+
+### Procedimiento (ejecutar desde Cloud Shell)
+
+```bash
+# Paso 1 — Crear el tar dentro del pod
+kubectl exec -n arturo-llm-test chromadb-0 -- tar czf /tmp/chromadb-backup.tar.gz -C /chroma chroma
+
+# Paso 2 — Copiar al entorno local (Cloud Shell)
+kubectl cp -n arturo-llm-test chromadb-0:/tmp/chromadb-backup.tar.gz ./chromadb-backup-$(date +%Y%m%d).tar.gz
+
+# Paso 3 — Verificar tamaño (debe ser > 0)
+ls -lh chromadb-backup-*.tar.gz
+
+# Paso 4 — Limpiar /tmp del pod
+kubectl exec -n arturo-llm-test chromadb-0 -- rm /tmp/chromadb-backup.tar.gz
+```
+
+### Restauración (si el PVC se pierde)
+
+```bash
+# Copiar el tar al pod
+kubectl cp chromadb-backup-<fecha>.tar.gz arturo-llm-test/chromadb-0:/tmp/chromadb-restore.tar.gz
+
+# Extraer al directorio correcto
+kubectl exec -n arturo-llm-test chromadb-0 -- tar xzf /tmp/chromadb-restore.tar.gz -C /chroma
+
+# Reiniciar el pod para que ChromaDB recargue
+kubectl rollout restart statefulset/chromadb -n arturo-llm-test
+```
+
+**Nota**: un backup automatizado vía CronJob o VolumeSnapshot requiere configuración adicional — queda como mejora post-TFM.

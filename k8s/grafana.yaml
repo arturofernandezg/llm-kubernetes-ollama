@@ -365,6 +365,270 @@ data:
       "uid": "aiops-agent-overview",
       "version": 1
     }
+  chaos.json: |
+    {
+      "annotations": {"list": []},
+      "description": "Chaos Engineering — MTTD/MTTR, outcomes y correlación con alertas Prometheus",
+      "editable": false,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+          "id": 10,
+          "title": "Chaos — Latencias",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 90},
+                  {"color": "red", "value": 360}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1},
+          "id": 1,
+          "options": {
+            "legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, experiment) (rate(aiops_chaos_mttd_seconds_bucket[5m])))",
+              "legendFormat": "{{experiment}}",
+              "refId": "A"
+            }
+          ],
+          "title": "MTTD p95 por experimento",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 300},
+                  {"color": "red", "value": 600}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1},
+          "id": 2,
+          "options": {
+            "legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, experiment) (rate(aiops_chaos_mttr_seconds_bucket[5m])))",
+              "legendFormat": "{{experiment}}",
+              "refId": "A"
+            }
+          ],
+          "title": "MTTR p95 por experimento",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {
+            "defaults": {"unit": "s"},
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "p95"},
+                "properties": [{"id": "custom.lineWidth", "value": 2}]
+              }
+            ]
+          },
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 9},
+          "id": 3,
+          "options": {
+            "legend": {"calcs": ["mean", "max"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(aiops_chaos_mttd_seconds_bucket[5m])))",
+              "legendFormat": "MTTD p95",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(aiops_chaos_mttd_seconds_bucket[5m])))",
+              "legendFormat": "MTTD p50",
+              "refId": "B"
+            }
+          ],
+          "title": "MTTD p50 / p95 (global)",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17},
+          "id": 11,
+          "title": "Chaos — Outcomes",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
+          "id": 4,
+          "options": {
+            "legend": {"displayMode": "list", "placement": "right"},
+            "pieType": "pie",
+            "tooltip": {"mode": "single"}
+          },
+          "targets": [
+            {
+              "expr": "sum by (outcome) (aiops_chaos_experiment_total)",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Experimentos por outcome",
+          "type": "piechart"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "blue", "value": null}]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
+          "id": 5,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "area",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": {"calcs": ["sum"], "fields": "", "values": false},
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "expr": "sum(aiops_chaos_experiment_total)",
+              "legendFormat": "Total",
+              "refId": "A"
+            }
+          ],
+          "title": "Total experimentos",
+          "type": "stat"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 26},
+          "id": 12,
+          "title": "Chaos — Correlación Alertas",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 27},
+          "id": 6,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "ALERTS{namespace=\"arturo-chaos\", alertstate=\"firing\"}",
+              "legendFormat": "{{alertname}}",
+              "refId": "A"
+            }
+          ],
+          "title": "ALERTS firing (namespace=arturo-chaos)",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 35},
+          "id": 13,
+          "title": "Chaos — Histórico",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 36},
+          "id": 7,
+          "options": {
+            "footer": {"show": false},
+            "showHeader": true
+          },
+          "targets": [
+            {
+              "expr": "sum by (experiment, outcome) (increase(aiops_chaos_experiment_total[1h]))",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "",
+              "refId": "A"
+            }
+          ],
+          "title": "Experimentos por tipo y outcome (última hora)",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "job": true,
+                  "instance": true
+                }
+              }
+            }
+          ],
+          "type": "table"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 38,
+      "tags": ["aiops", "chaos", "kubernetes"],
+      "templating": {
+        "list": [
+          {
+            "current": {},
+            "hide": 2,
+            "includeAll": false,
+            "multi": false,
+            "name": "DS_PROMETHEUS",
+            "options": [],
+            "query": "prometheus",
+            "refresh": 1,
+            "type": "datasource"
+          }
+        ]
+      },
+      "time": {"from": "now-1h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "AIOps — Chaos",
+      "uid": "aiops-chaos",
+      "version": 1
+    }
 
 ---
 

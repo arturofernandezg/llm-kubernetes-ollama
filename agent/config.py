@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     remediation_auto_max_risk: str = "low"
     remediation_dry_run: bool = True          # False = ejecución real via kubectl
     remediation_command_timeout: int = 30     # segundos por comando
+    remediation_rollback_enabled: bool = True
+    remediation_rollback_timeout: int = 300  # seconds to wait before evaluating rollback
+    remediation_rollback_grace: int = 30     # seconds for pod rollout before health check
 
     # Human escalation callback URL (Fase 3 — botones interactivos Mattermost)
     # URL base del agente accesible desde Mattermost (intra-cluster FQDN)
@@ -60,6 +63,10 @@ class Settings(BaseSettings):
     # HMAC signing secret for Mattermost button callbacks (Fase 3 — X5)
     # Empty = HMAC disabled (dev/test). Set via K8s Secret in production.
     webhook_secret: str = ""
+
+    # Mattermost slash command token (Mini-Fase 4 — ChatOps consulta)
+    # Token que MM genera al crear el slash command. Empty = auth disabled (dev).
+    mm_command_token: str = ""
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 
