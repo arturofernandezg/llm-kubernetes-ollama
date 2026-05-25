@@ -319,10 +319,10 @@ Ejecutar en secuencia en el cluster. Contexto completo: `docs_sesion/2026-05-19-
 
 **Cierre tras pasar todos los gates**: actualizar S6 → ✅ en roadmap, `09-estado-actual-tutor.md`, `CLAUDE.md`, `12-chaos-engineering.md`.
 
-### 2. Tutor-gates (aprobados ✅ 2026-05-23 — implementar en próximo deploy)
+### 2. Tutor-gates (aprobados ✅ 2026-05-23 — código implementado 2026-05-25)
 
-- [ ] **Flip `REMEDIATION_DRY_RUN=false`** — en `k8s/deployment-agent.yaml` línea 81: cambiar `value: "true"` → `value: "false"`. Ejecutar junto al Gate 2. Rollback: `kubectl set env deployment/agent REMEDIATION_DRY_RUN=true -n arturo-llm-test`.
-- [ ] **Excepción regla 4.5** — en `agent/remediation.py`: autorizar `kubectl set resources` sobre deployments de `arturo-llm-test` si `confidence ≥ 0.9` AND `risk ≤ medium` AND `field == resources.limits.memory`. NUNCA: scale, rollout restart, patch deployment sin criterio adicional.
+- [x] **Flip `REMEDIATION_DRY_RUN=false`** — `k8s/deployment-agent.yaml` (línea 79, env var `REMEDIATION_DRY_RUN`). Implementado 2026-05-25. Rollback si falla en cluster: `kubectl set env deployment/agent REMEDIATION_DRY_RUN=true -n arturo-llm-test`. *(Nota: docs anteriores decían "línea 81" — error; línea 81 es `REMEDIATION_ROLLBACK_ENABLED`.)*
+- [x] **Excepción regla 4.5** — `agent/remediation.py`: constantes `_SET_RESOURCES_EXCEPTION_MIN_CONFIDENCE=0.9` / `_MAX_RISK="medium"`, helper `_set_resources_memory_exception()`. Autoriza `kubectl set resources` si `confidence ≥ 0.9` AND `risk ≤ medium` AND `proposed_action.field == resources.limits.memory`. NUNCA scale/rollout/patch. 10 tests nuevos. Implementado 2026-05-25. *(Nota: con `risk=high` del LLM en OOM típico, rule 5 sigue escalando — defensa en profundidad.)*
 
 ### 3. Cierre Fase 1 — Webhook entrante Mattermost
 
@@ -352,7 +352,8 @@ El directorio `docs/img/` existe pero está vacío. Capturar post Gate 8.
 - [ ] Mapeo de ServiceAccounts de Kubernetes (Workload Identity) a IAM GCP.
 - [ ] Solicitar rol `roles/logging.logWriter` para service account de Cloud Build.
 - [ ] Buckets de histograma Prometheus personalizados para /webhook/alert (5s, 10s, 30s, 60s).
-- [ ] Caché in-memory (dict con TTL) para embeddings de alertas frecuentes (si el volumen lo justifica).
+- [ ] Caché in-memory (dict con TTL) para embeddings + resultados RAG: indexar por fingerprint `alertname+namespace+pod`. Alertas repetidas del mismo tipo (OOMKilled en loop) evitan llamadas redundantes a Ollama (~200ms/embedding) y a ChromaDB. Sin deps nuevas — dict Python en `main.py`. Ver `docs/01-architecture.md § Alternativas descartadas` para contexto.
+- [ ] Cola de mensajes entre Alertmanager y agente (NATS in-cluster o Redis Streams): el webhook HTTP actual es fire-and-forget — si el agente se reinicia mientras procesa un diagnóstico de 78s, la alerta se pierde. At-least-once delivery + replay = salto de producción real. NATS es la opción más ligera.
 - [ ] Re-ranking con cross-encoder si la colección `incidents` supera ~500 documentos.
 - [ ] Clasificador supervisado (multi-label) si se acumulan >5k incidentes etiquetados.
 - [ ] Migración de nodos Spot a Standard para ChromaDB (evaluación coste vs estabilidad).

@@ -712,6 +712,144 @@ class TestDecideActionTutorRule:
         validations = self._validations("kubectl annotate deployment engine note=ok -n prod")
         assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
 
+    # ── Rule 4.5 exception (tutor-approved 2026-05-23) ────────────────────────
+
+    def _memory_proposed_action(self, current: str = "256Mi", new: str = "512Mi") -> dict:
+        return {
+            "kind": "Deployment", "name": "engine", "namespace": "arturo-llm-test",
+            "container": "engine", "field": "resources.limits.memory",
+            "current_value": current, "new_value": new,
+        }
+
+    def test_set_resources_memory_exception_auto_remediates(self, monkeypatch):
+        """set resources memory + conf≥0.9 + risk=low + bump≤2× → rule 4.5 exception → AUTO_REMEDIATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._memory_proposed_action("256Mi", "512Mi"),
+        }
+        validations = self._validations(
+            "kubectl set resources deployment engine --limits=memory=512Mi -n arturo-llm-test"
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+    def test_set_resources_exception_medium_risk_with_medium_max(self, monkeypatch):
+        """risk=medium passes the exception (≤ medium); rule 5 also needs max_risk=medium to allow it."""
+        self._base_monkeypatch(monkeypatch)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "medium")
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "medium", "confidence": 0.9,
+            "proposed_action": self._memory_proposed_action("256Mi", "512Mi"),
+        }
+        validations = self._validations(
+            "kubectl set resources deployment engine --limits=memory=512Mi -n arturo-llm-test"
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+    def test_set_resources_low_confidence_escalates(self, monkeypatch):
+        """confidence=0.85 < 0.9 → exception not granted → rule 4.5 blocks → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.85,
+            "proposed_action": self._memory_proposed_action("256Mi", "512Mi"),
+        }
+        validations = self._validations(
+            "kubectl set resources deployment engine --limits=memory=512Mi -n arturo-llm-test"
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_set_resources_high_risk_escalates(self, monkeypatch):
+        """risk=high > medium → exception not granted → rule 4.5 blocks → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "high", "confidence": 0.9,
+            "proposed_action": self._memory_proposed_action("256Mi", "512Mi"),
+        }
+        validations = self._validations(
+            "kubectl set resources deployment engine --limits=memory=512Mi -n arturo-llm-test"
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_set_resources_non_memory_field_escalates(self, monkeypatch):
+        """field=resources.limits.cpu → exception not granted → rule 4.5 blocks → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "arturo-llm-test",
+                "container": "engine", "field": "resources.limits.cpu",
+                "current_value": "100m", "new_value": "200m",
+            },
+        }
+        validations = self._validations(
+            "kubectl set resources deployment engine --limits=memory=512Mi -n arturo-llm-test"
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_set_resources_no_proposed_action_escalates(self, monkeypatch):
+        """proposed_action=None → exception not granted (no field to check) → rule 4.5 blocks → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {**mock_diagnosis_auto_remediate(), "risk": "low", "confidence": 0.9, "proposed_action": None}
+        validations = self._validations(
+            "kubectl set resources deployment engine --limits=memory=512Mi -n arturo-llm-test"
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_scale_escalates_despite_high_conf_low_risk(self, monkeypatch):
+        """scale is not covered by the exception (only set-resources) → ESCALATE. Critical guard."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._memory_proposed_action(),
+        }
+        validations = self._validations("kubectl scale deployment engine --replicas=2 -n arturo-llm-test")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_rollout_restart_escalates_despite_high_conf(self, monkeypatch):
+        """rollout restart is not covered by the exception → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._memory_proposed_action(),
+        }
+        validations = self._validations("kubectl rollout restart deployment engine -n arturo-llm-test")
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_set_resources_plus_scale_escalates(self, monkeypatch):
+        """Authorized set-resources + scale in same list: exception lets set-resources through,
+        scale (second command) still escalates via rule 4.5. continue does not skip remaining."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._memory_proposed_action(),
+        }
+        validations = self._validations(
+            "kubectl set resources deployment engine --limits=memory=512Mi -n arturo-llm-test",
+            "kubectl scale deployment engine --replicas=0 -n arturo-llm-test",
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_set_resources_exception_then_46_caps_memory(self, monkeypatch):
+        """Passes rule 4.5 exception but new_value=1Gi > 2× 256Mi → rule 4.6 escalates. Defense in depth."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._memory_proposed_action("256Mi", "1Gi"),
+        }
+        validations = self._validations(
+            "kubectl set resources deployment engine --limits=memory=1Gi -n arturo-llm-test"
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
 
 # ── TestClassifyCommandTypeGuard ──────────────────────────────────────────────
 

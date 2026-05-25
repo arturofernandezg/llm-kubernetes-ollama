@@ -101,6 +101,12 @@ MUTATING_PATTERNS = [
 # Orden de riesgo para comparar risk levels
 RISK_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
 
+# Rule 4.5 exception (tutor-approved 2026-05-23): a controlled memory-limit bump via
+# `kubectl set resources` may restart the pod, and that restart is acceptable when the
+# diagnosis is high-confidence and bounded-risk. Never applies to scale/rollout/patch.
+_SET_RESOURCES_EXCEPTION_MIN_CONFIDENCE = 0.9
+_SET_RESOURCES_EXCEPTION_MAX_RISK = "medium"
+
 # Razones legibles por clasificación
 _SAFETY_REASONS: dict[CommandSafety, str] = {
     CommandSafety.SAFE: "read-only command",
@@ -236,6 +242,24 @@ def validate_commands(commands: list[str]) -> list[dict]:
     return results
 
 
+def _set_resources_memory_exception(reason_code: str, diagnosis: dict) -> bool:
+    """True if a restart-implying command qualifies for the rule 4.5 exception.
+
+    Only `kubectl set resources` (reason_code set_resources_triggers_rollout) on a
+    memory limit, with confidence >= 0.9 and risk <= medium. Never scale/rollout/patch.
+    """
+    if reason_code != "set_resources_triggers_rollout":
+        return False
+    proposed_action = diagnosis.get("proposed_action")
+    if not (isinstance(proposed_action, dict)
+            and proposed_action.get("field") == "resources.limits.memory"):
+        return False
+    if diagnosis.get("confidence", 0.0) < _SET_RESOURCES_EXCEPTION_MIN_CONFIDENCE:
+        return False
+    risk = diagnosis.get("risk", "high")
+    return RISK_ORDER.get(risk, 2) <= RISK_ORDER.get(_SET_RESOURCES_EXCEPTION_MAX_RISK, 1)
+
+
 # ── Motor de decisión ─────────────────────────────────────────────────────────
 
 def decide_action(
@@ -269,11 +293,17 @@ def decide_action(
     if CommandSafety.UNKNOWN in safeties:
         return RemediationAction.SUGGEST_ONLY
 
-    # Rule 4.5 — tutor condition: block any command that restarts pods
+    # Rule 4.5 — tutor condition: block any command that restarts pods (except authorized memory bumps)
     for v in command_validations:
         if v["safety"] == CommandSafety.MUTATING:
             restarts, reason_code = implies_pod_restart(v["command"])
             if restarts:
+                if _set_resources_memory_exception(reason_code, diagnosis):
+                    logger.info(
+                        "Rule 4.5 exception: authorized set-resources memory change",
+                        extra={"command": v["command"], "reason_code": reason_code},
+                    )
+                    continue
                 logger.warning(
                     "Remediation blocked: command implies pod restart",
                     extra={"reason_code": reason_code, "command": v["command"]},

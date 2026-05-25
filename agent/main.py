@@ -94,6 +94,11 @@ ROLLBACK_COUNTER = Counter(
     "Rollback evaluations by outcome",
     ["outcome"],  # scheduled | skipped_disabled | skipped_no_snapshot | skipped_no_execution | healthy | reverted | revert_failed | evaluation_error
 )
+WEBHOOK_COUNTER = Counter(
+    "aiops_webhook_requests_total",
+    "Alert webhook requests received by the agent",
+    ["status"],  # "success" | "error"
+)
 
 
 # ── Human Escalation State ────────────────────────────────────────────────────
@@ -316,6 +321,15 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "MM_COMMAND_TOKEN not configured — /aiops slash command accepts any token"
         )
+
+    # Pre-initialize labeled counters so they appear in /metrics from startup.
+    # prometheus_client only emits label combinations after the first observation.
+    for _action in ("auto_remediate", "escalate", "suggest_only"):
+        REMEDIATION_COUNTER.labels(action=_action).inc(0)
+    for _outcome in ("scheduled", "healthy", "reverted", "revert_failed"):
+        ROLLBACK_COUNTER.labels(outcome=_outcome).inc(0)
+    WEBHOOK_COUNTER.labels(status="success").inc(0)
+    WEBHOOK_COUNTER.labels(status="error").inc(0)
 
     cleanup_task = asyncio.create_task(_periodic_cleanup())
 
@@ -738,6 +752,7 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
             msg = f"🟢 **[RESOLVED] [{severity}] {alert_name}** | Pod: `{pod}` | NS: `{namespace}`"
             background_tasks.add_task(send_mattermost_alert, msg)
         
+    WEBHOOK_COUNTER.labels(status="success").inc()
     return {
         "status": "success",
         "alerts_processed": len(payload.alerts),

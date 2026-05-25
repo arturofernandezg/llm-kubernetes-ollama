@@ -22,7 +22,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: agent
-        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:3fde9f8
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:1210f1e
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
@@ -76,7 +76,7 @@ spec:
         - name: REMEDIATION_ENABLED
           value: "true"
         - name: REMEDIATION_DRY_RUN
-          value: "true"
+          value: "false"
         - name: REMEDIATION_ROLLBACK_ENABLED
           value: "true"
         - name: REMEDIATION_ROLLBACK_TIMEOUT

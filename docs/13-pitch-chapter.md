@@ -126,7 +126,7 @@ Ver detalle completo: [`docs/07-roadmap.md § TODO Consolidado`](07-roadmap.md#t
 > *Rellena con tus preferencias reales antes de la reunión.*
 
 - [ ] _ej. Equipo de Platform / SRE — trabajo en infraestructura, fiabilidad, automatización_
-- [ ] _ej. Equipo de Data / AI — MLOps, modelos en producción, observabilidad de sistemas IA_
+- [x ] _ej. Equipo de Data / AI — MLOps, modelos en producción, observabilidad de sistemas IA_
 - [ ] _ej. Equipo de Backend — APIs distribuidas, sistemas event-driven_
 
 **Lo que NO quiero:** _ej. trabajo puramente de mantenimiento sin margen de diseño / equipos sin cultura de testing_

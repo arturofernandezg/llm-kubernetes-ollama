@@ -63,8 +63,8 @@ Cada alerta pasa por las 9 reglas en este orden:
 | 7 | risk=low y confidence≥0.8 | **auto_remediate** |
 | 8 | Sin clasificar | suggest_only |
 
-- `REMEDIATION_ENABLED=true`, `REMEDIATION_DRY_RUN=true` activos en cluster (flip aprobado ✅ 2026-05-23 — pendiente ejecutar en próximo deploy)
-- **Regla 4.5**: actualmente bloquea TODO. Excepción aprobada por tutor (2026-05-23): autorizar memory-limit-only con confidence ≥ 0.9 AND risk ≤ medium — pendiente implementar en `remediation.py`.
+- `REMEDIATION_ENABLED=true`, `REMEDIATION_DRY_RUN=false` en manifest (`k8s/deployment-agent.yaml` línea 79). Flip implementado 2026-05-25 — pendiente deploy en cluster (Gate 2).
+- **Regla 4.5 excepción**: implementada en `agent/remediation.py` (2026-05-25). Autoriza `kubectl set resources` sobre memoria con confidence ≥ 0.9 AND risk ≤ medium AND `proposed_action.field == resources.limits.memory`. Scale/rollout/patch siguen bloqueados. 10 tests nuevos. Con `risk=high` típico del LLM en OOM → sigue escalando por rule 5 (defensa en profundidad).
 
 ### 4. ChatOps (Mattermost) con botones interactivos
 - Mattermost en cluster con PostgreSQL propio
