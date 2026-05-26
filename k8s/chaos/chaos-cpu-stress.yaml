@@ -44,10 +44,10 @@ spec:
       - name: stress
         image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/polinux-stress:latest
         imagePullPolicy: Always
-        command: ["stress-ng"]
+        command: ["stress"]
         # --cpu 2 con limits.cpu 100m -> uso ~200% del limit -> HighCPU (for: 5m)
-        # timeout 600s > for: 5m garantiza que la regla dispare antes de que el pod termine
-        args: ["--cpu", "2", "--timeout", "600s"]
+        # timeout 600 > for: 5m garantiza que la regla dispare antes de que el pod termine
+        args: ["--cpu", "2", "--timeout", "600"]
         resources:
           requests:
             memory: "16Mi"

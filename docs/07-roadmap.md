@@ -324,7 +324,16 @@ Ejecutar en secuencia en el cluster. Contexto completo: `docs_sesion/2026-05-19-
 - [x] **Flip `REMEDIATION_DRY_RUN=false`** — `k8s/deployment-agent.yaml` (línea 79, env var `REMEDIATION_DRY_RUN`). Implementado 2026-05-25. Rollback si falla en cluster: `kubectl set env deployment/agent REMEDIATION_DRY_RUN=true -n arturo-llm-test`. *(Nota: docs anteriores decían "línea 81" — error; línea 81 es `REMEDIATION_ROLLBACK_ENABLED`.)*
 - [x] **Excepción regla 4.5** — `agent/remediation.py`: constantes `_SET_RESOURCES_EXCEPTION_MIN_CONFIDENCE=0.9` / `_MAX_RISK="medium"`, helper `_set_resources_memory_exception()`. Autoriza `kubectl set resources` si `confidence ≥ 0.9` AND `risk ≤ medium` AND `proposed_action.field == resources.limits.memory`. NUNCA scale/rollout/patch. 10 tests nuevos. Implementado 2026-05-25. *(Nota: con `risk=high` del LLM en OOM típico, rule 5 sigue escalando — defensa en profundidad.)*
 
-### 3. Cierre Fase 1 — Webhook entrante Mattermost
+### 3. Demo para chapter/tutor (post chaos experiments)
+
+Solicitud del tutor (2026-05-26): preparar demo en vivo después de cerrar los chaos experiments.
+
+- [ ] **Guion demo**: provocar fallo real (OOMKilled con stress pod), mostrar flujo completo en pantalla — Prometheus → Alertmanager → agente → Mattermost con botones → aprobar → ejecución.
+- [ ] **Preparar entorno**: tener Grafana, Mattermost y logs del agente visibles en paralelo (3 ventanas / port-forwards activos).
+- [ ] **Script de provocación**: uno o dos one-liners para lanzar el fallo y otro para hacer cleanup post-demo.
+- [ ] **Fallback**: si el LLM tarda mucho en directo, tener capturas de pantalla del último chaos experiment como respaldo visual.
+
+### 4. Cierre Fase 1 — Webhook entrante Mattermost
 
 Pendiente desde 2026-04-22. No bloquea defensa pero cierra la fase formalmente.
 

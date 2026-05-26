@@ -20,7 +20,7 @@ _usage() {
     echo "  oom        Experimento OOMKilled (requiere mirror de polinux/stress a AR)"
     echo "  crashloop  Experimento CrashLoopBackOff"
     echo "  bad-image  Experimento ImagePullBackOff (imagen inexistente -> alerta KubePodImagePullBackOff)"
-    echo "  cpu        Experimento HighCPU (stress-ng --cpu 2, limits 100m -> alerta HighCPU)"
+    echo "  cpu        Experimento HighCPU (stress --cpu 2, limits 100m -> alerta HighCPU)"
     echo "  status     Ver pods en arturo-chaos"
     echo "  cleanup    Borrar namespace arturo-chaos"
     exit 1
@@ -51,10 +51,11 @@ _wait_for_pod_failure() {
     return 1
 }
 
-# Espera hasta ver la alerta en los logs del agente. Imprime mensajes a stderr.
+# Espera hasta ver la alerta en los logs del agente, posteriores a T0.
+# Args: <alertname> <t0_epoch>
 # stdout: ISO timestamp del log cuando se detecta; retorno 1 si timeout.
 _wait_for_agent_log() {
-    local alertname="$1"
+    local alertname="$1" t0_epoch="${2:-0}"
     local agent_pod waited=0
     agent_pod=$(_agent_pod)
     if [ -z "$agent_pod" ]; then
@@ -66,7 +67,9 @@ _wait_for_agent_log() {
         local ts
         ts=$(kubectl logs -n "$NS_AGENT" "$agent_pod" --tail=200 --since=10m 2>/dev/null \
             | python3 -c "
-import sys, json
+import sys, json, re
+from datetime import datetime, timezone
+t0 = $t0_epoch
 for line in sys.stdin:
     line=line.strip()
     if not line:
@@ -78,10 +81,13 @@ for line in sys.stdin:
         if '$alertname' in a or '$alertname' in ev:
             t=d.get('timestamp','')
             if t:
-                print(t)
+                s=re.sub(r'[,.].*','',t)
+                ep=int(datetime.strptime(s,'%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc).timestamp())
+                if ep >= t0:
+                    print(t)
     except Exception:
         pass
-" 2>/dev/null | grep -v '^$' | tail -1 || true)
+" 2>/dev/null | grep -v '^$' | head -1 || true)
         if [ -n "$ts" ]; then
             echo "[chaos] Alerta detectada en logs: $ts" >&2
             echo "$ts"
@@ -94,9 +100,11 @@ for line in sys.stdin:
     return 1
 }
 
-# Convierte ISO timestamp a unix epoch (GNU date, disponible en Cloud Shell)
+# Convierte ISO timestamp a unix epoch (GNU date o python3 como fallback para macOS)
 _iso_to_epoch() {
-    date -d "$1" +%s 2>/dev/null || echo "0"
+    date -d "$1" +%s 2>/dev/null || \
+    python3 -c "import re; s=re.sub(r'[,.].*','','$1'); from datetime import datetime,timezone; print(int(datetime.strptime(s,'%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc).timestamp()))" 2>/dev/null || \
+    echo "0"
 }
 
 _run_experiment() {
@@ -108,7 +116,7 @@ _run_experiment() {
     echo "========================================================"
 
     echo "[chaos] Validando manifest (dry-run)..."
-    kubectl apply -f "$manifest" --dry-run=client -q
+    kubectl apply -f "$manifest" --dry-run=client
     echo "[chaos] dry-run OK"
 
     echo "[chaos] Aplicando manifest: $manifest"
@@ -127,7 +135,7 @@ _run_experiment() {
     echo "[chaos] T_pod_fail: ${elapsed_fail}s desde T0"
 
     local T_agent_ts
-    T_agent_ts=$(_wait_for_agent_log "$alertname") || {
+    T_agent_ts=$(_wait_for_agent_log "$alertname" "$T0") || {
         echo "[chaos] Alerta no detectada en logs del agente — revisar Prometheus/Alertmanager"
         kubectl delete deployment -n "$NS_CHAOS" "$deploy_label" --ignore-not-found
         return 1

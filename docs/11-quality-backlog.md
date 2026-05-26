@@ -90,6 +90,14 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 
 ---
 
+## Chaos script — pendientes (2026-05-25)
+
+| ID | Severidad | Localización | Descripción | Fix propuesto | Estado |
+|---|---|---|---|---|---|
+| C1 | low | scripts/chaos.sh:_wait_for_agent_log | Búsqueda de log usa `--since=10m` sin filtrar por T0 — encuentra entradas anteriores al experimento actual y produce MTTD negativo (ej. crashloop detectó log de experimento OOM previo) | Pasar epoch T0 a la función y filtrar solo líneas con timestamp > T0 | FIXED 2026-05-26 |
+
+---
+
 ## Notas
 
 - Los `WONTFIX` reflejan decisiones conscientemente aceptadas para el MVP del TFG.

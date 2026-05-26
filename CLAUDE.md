@@ -74,7 +74,7 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ Config Mattermost requerida: `MM_PLUGINSETTINGS_ENABLE=true` + `MM_SERVICEALLOWEDUNTRUSTEDINTERNALCONNECTIONS=agent-svc.arturo-llm-test.svc.cluster.local` en `k8s/mattermost.yaml`.
   - ✅ Calidad código sesión #7 (2026-05-12): S2 guard ValueError en `generate_embedding()`, S3 `m.get()` seguro en list comprehensions Ollama, S4 warning startup `WEBHOOK_SECRET`, M10 try/except fallback Mattermost, X2 `backoff_delay()` extraído a `utils.py`. 272 tests.
   - ✅ Calidad código sesión #8 (2026-05-12): `nodeSelector: guaranteed="true"` + tolerations en `deployment-agent`, `deployment-ollama`, `chromadb`. Workloads críticos fijados a nodos guaranteed. Docs sync cierre Fase 3. Sesiones #1-#8 completadas.
-  - ✅ [tutor-gate] Implementado (2026-05-25): excepción regla 4.5 (`_set_resources_memory_exception`, conf≥0.9, risk≤medium, field=resources.limits.memory, 10 tests) + `REMEDIATION_DRY_RUN=false` en `k8s/deployment-agent.yaml`. Pendiente deploy en cluster (Gate 2 sesión de pruebas E2E).
+  - ✅ [tutor-gate] Implementado y desplegado (2026-05-25): excepción regla 4.5 (`_set_resources_memory_exception`, conf≥0.9, risk≤medium, field=resources.limits.memory, 10 tests) + `REMEDIATION_DRY_RUN=false` en `k8s/deployment-agent.yaml`. Imagen `a4421f4` en cluster.
   - ✅ Defensa prep (2026-05-15): `defensa.md §3` completada (12 preguntas difíciles + respuestas). Presentación: **Reveal.js** (decisión bloqueada en `defensa.md §6`).
 - **Mini-Fase 4 (Production Readiness)**: En curso — código S1-S6 listo (2026-05-19), sesión de pruebas E2E pendiente.
   - ✅ Sesión #1 — Chaos Engineering #1: manifests `k8s/chaos/`, script `scripts/chaos.sh`, métricas `aiops_chaos_*` en agente (Counter + Histogram), doc `docs/12-chaos-engineering.md`.
@@ -82,8 +82,8 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ Sesión #3 — Dashboard Grafana "AIOps — Chaos": key `chaos.json` añadida al ConfigMap `grafana-dashboard-aiops` en `k8s/grafana.yaml`. 7 paneles: MTTD/MTTR p95 por experimento, MTTD p50/p95 global, pie outcome, stat total, ALERTS correlation, tabla histórico.
   - ✅ Sesión #4 — Slash command Mattermost `/aiops` (2026-05-19): `POST /webhook/command`, schema `MattermostCommandPayload`, config `MM_COMMAND_TOKEN` (fail-open + warning startup), helpers `_query_recent_incidents` (recencia desc, clamp 1–20) + `_format_status_response` + `_format_incidents_response`. 294 tests. K8s: `MM_COMMAND_TOKEN` en `deployment-agent.yaml` desde `agent-secrets` (`optional: true`).
   - ✅ Sesión #5 — Rollback automático (2026-05-19): `ExecuteResult` dataclass + refactor `execute_commands() → list[ExecuteResult]` + `results_to_log()`. Helpers `capture_pre_patch_value()` + `check_pod_health()` + `revert_patch()` en `remediation.py`. `IN_FLIGHT_ROLLBACKS` registry + `_schedule_rollback_evaluation()` + `_evaluate_rollback()` en `main.py`. Counter `aiops_remediation_rollback_total{outcome}`. ~310 tests. K8s: `REMEDIATION_ROLLBACK_ENABLED/TIMEOUT/GRACE` en `deployment-agent.yaml`.
-  - ⏳ Sesión #6 — Hardening pre-prod (2026-05-19): Artefactos listos: `scripts/smoke.sh`, pin imagen `:3fde9f8` en `deployment-agent.yaml`, procedimiento backup ChromaDB (`docs/03-kubernetes.md`). Gates pendientes: pytest + Cloud Build + deploy + chaos experiments (MTTD/MTTR) + screenshot Grafana.
-  - ⏳ **Sesión de pruebas (en curso 2026-05-25)**: código listo (excepción 4.5 + DRY_RUN flip). Pendiente: Gates 0-9 en cluster (pytest → Cloud Build → repin SHA → deploy → smoke → chaos → MTTD/MTTR → Grafana screenshots → backup ChromaDB) + cierre de docs con datos reales. Ver `docs_sesion/2026-05-25-pruebas-e2e.md`.
+  - ⏳ Sesión #6 — Hardening pre-prod: bugs fijados en esta sesión: `scripts/chaos.sh` (-q flag, stress-ng→stress, _iso_to_epoch macOS); `k8s/chaos/chaos-oom.yaml` (stress-ng→stress, "60s"→"60"); `agent/main.py` (WEBHOOK_COUNTER añadido + pre-init labeled counters). Pendiente: screenshot Grafana + backup ChromaDB.
+  - ⏳ **Sesión de pruebas (en curso 2026-05-25)**: Gates 0-5 ✅ (369 tests, build a4421f4, deploy, smoke limpio, métricas OK). Gate 6 parcial: OOM ✅ MTTD≈46s MTTR≈256s; crashloop ⚠️ T_pod_fail=6s (MTTD inválido, bug C1 log-search); bad-image ❌ pendiente (kubectl apply -f k8s/prometheus.yaml primero — regla 6 no desplegada); cpu ❌ pendiente. Gates 7-9 pendientes. Ver `docs_sesion/2026-05-25-pruebas-e2e.md`.
 
 ## Stack
 
@@ -102,10 +102,10 @@ agent/mattermost.py     → Cliente HTTP async Mattermost con retry/backoff
 agent/rag.py            → Cliente ChromaDB, ingesta, query, embeddings via Ollama
 agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON estructurado
 agent/utils.py          → backoff_delay() helper (exponential backoff compartido)
-agent/tests/            → ~310 tests en 11 ficheros (incluye TestChaosMetrics, TestSlashCommandEndpoint, TestRollbackScheduling, TestEvaluateRollback)
+agent/tests/            → 369 tests en 11 ficheros (incluye TestChaosMetrics, TestSlashCommandEndpoint, TestRollbackScheduling, TestEvaluateRollback, TestDecideActionTutorRule)
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
 k8s/                    → Manifiestos K8s (agent, ollama, chromadb, networkpolicy)
-k8s/prometheus.yaml     → Prometheus + kube-state-metrics + ClusterRoles + 5 reglas
+k8s/prometheus.yaml     → Prometheus + kube-state-metrics + ClusterRoles + 6 reglas (IMPORTANTE: hacer kubectl apply al inicio de próxima sesión — regla 6 KubePodImagePullBackOff no desplegada aún)
 k8s/alertmanager.yaml   → Alertmanager standalone en arturo-monitoring
 k8s/mattermost.yaml     → Mattermost + PostgreSQL en arturo-mattermost
 k8s/rbac.yaml           → Role + RoleBinding para remediación autónoma (arturo-llm-test)
@@ -119,7 +119,7 @@ cloudbuild.yaml         → Pipeline: tests (gate) + build + push
 - **Cluster**: ai-infra-agent (europe-southwest1-a, e2-standard-2 spot + 2 nodos guaranteed con label `guaranteed=true` desde 2026-05-06)
 - **Namespaces**: `arturo-llm-test` (core), `arturo-monitoring` (alertmanager), `arturo-mattermost` (chatops), `arturo-chaos` (chaos experiments)
 - **Registry**: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent
-- **Imagen actual**: `aiops-agent:1033c9f` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
+- **Imagen actual**: `aiops-agent:a4421f4` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
 - **Ollama models**: qwen2.5:1.5b (generación), nomic-embed-text:latest (embeddings)
 - **NO hay Python local en Windows** — tests se ejecutan en GCloud Shell
 - **Sin Cloud NAT** — pods no tienen internet, modelos se cargan manualmente

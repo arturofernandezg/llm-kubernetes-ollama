@@ -44,8 +44,8 @@ spec:
       - name: stress
         image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/polinux-stress:latest
         imagePullPolicy: Always
-        command: ["stress-ng"]
-        args: ["--vm", "1", "--vm-bytes", "100M", "--timeout", "60s"]
+        command: ["stress"]
+        args: ["--vm", "1", "--vm-bytes", "100M", "--timeout", "60"]
         resources:
           requests:
             memory: "16Mi"

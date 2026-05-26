@@ -28,10 +28,11 @@ Prometheus detecta problema
 ## Qué funciona HOY (demostrable en cluster)
 
 ### 1. Agente FastAPI desplegado en GKE
-- Pod corriendo en `arturo-llm-test`, imagen `aiops-agent:1033c9f` (S4 — pendiente build + deploy S6)
-- CI/CD: Cloud Build ejecuta ~310 tests antes de construir imagen (pendiente ejecución S6)
+- Pod corriendo en `arturo-llm-test`, imagen `aiops-agent:a4421f4` (desplegada 2026-05-25)
+- CI/CD: Cloud Build ejecuta 369 tests antes de construir imagen ✅
 - Endpoints: `/webhook/alert`, `/webhook/action`, `/healthz`, `/readyz`, `/metrics`
 - Scheduled en nodos `guaranteed=true` (NodeSelector + tolerations — nunca en spot)
+- `REMEDIATION_DRY_RUN=false`, `REMEDIATION_ROLLBACK_ENABLED=true` activos en cluster
 
 ### 2. Pipeline de diagnóstico (RAG + LLM)
 - **16 runbooks** cargados como base de conocimiento (OOMKilled, CrashLoopBackOff, ImagePullBackOff, HighCPU, etc.)
@@ -80,9 +81,9 @@ Cada alerta pasa por las 9 reglas en este orden:
 - **kube-state-metrics** — mirror a Artifact Registry (registry.k8s.io inaccesible sin Cloud NAT)
 
 ### 6. Tests
-- **~310 tests** en 11 ficheros, todos pasando (<1s)
+- **369 tests** en 11 ficheros, todos pasando (<1s)
 - Mocking completo: no necesitan cluster ni LLM
-- CI/CD: Cloud Build ejecuta todos antes de construir imagen
+- CI/CD: Cloud Build ejecuta todos antes de construir imagen ✅ verificado 2026-05-25
 
 ---
 
@@ -152,4 +153,4 @@ Ver tabla de sesiones y secuencia completa de gates en [docs/07-roadmap.md § TO
 
 ---
 
-*Pendientes: ver [docs/07-roadmap.md § TODO Consolidado](07-roadmap.md#todo-consolidado--siguientes-pasos). Actualizar este doc tras ejecutar la sesión de pruebas E2E (imagen deployada, MTTD/MTTR reales, DRY_RUN flip confirmado).*
+*Actualizado 2026-05-25: imagen `a4421f4` desplegada, DRY_RUN=false confirmado, 369 tests. Chaos OOM verificado E2E (MTTD≈46s, MTTR≈256s). Pendiente: experimentos bad-image + cpu + Gates 7-9 (Grafana screenshots + backup ChromaDB). Ver `docs_sesion/2026-05-25-pruebas-e2e.md §Estado de Gates`.*
