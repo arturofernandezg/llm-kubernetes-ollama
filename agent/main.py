@@ -591,7 +591,7 @@ async def _process_alert_with_diagnosis(
             rag_context = await retrieve_context(query, http_client, chroma_client)
             DIAGNOSIS_COUNTER.labels(outcome="rag_ok").inc()
         except Exception as exc:
-            logger.warning("RAG retrieval failed for %s, proceeding without context: %s", alert_name, exc)
+            logger.warning("RAG retrieval failed for %s, proceeding without context: %r", alert_name, exc)
             rag_context = {"runbooks": [], "incidents": [], "query": query}
             DIAGNOSIS_COUNTER.labels(outcome="rag_failed").inc()
 
@@ -603,7 +603,7 @@ async def _process_alert_with_diagnosis(
             )
             DIAGNOSIS_COUNTER.labels(outcome="success").inc()
         except Exception as exc:
-            logger.warning("Diagnosis generation failed for %s: %s", alert_name, exc)
+            logger.warning("Diagnosis generation failed for %s: %r", alert_name, exc)
             diagnosis = None
             DIAGNOSIS_COUNTER.labels(outcome="llm_failed").inc()
 
@@ -613,7 +613,7 @@ async def _process_alert_with_diagnosis(
                 remediation_result = await process_remediation(diagnosis)
                 REMEDIATION_COUNTER.labels(action=remediation_result["action"].value).inc()
             except Exception as exc:
-                logger.warning("Remediation processing failed for %s: %s", alert_name, exc)
+                logger.warning("Remediation processing failed for %s: %r", alert_name, exc)
                 REMEDIATION_COUNTER.labels(action="skipped").inc()
 
         # Rollback scheduling: if AUTO_REMEDIATE executed at least one command, schedule health check
