@@ -25,7 +25,8 @@
 | `deployment-apache.yaml` | Deployment apache (1 réplica) | Validación de red |
 | `service-apache.yaml` | ClusterIP :80 | Validación de red |
 | `chromadb.yaml` | StatefulSet + Service chromadb (1 réplica) | PVC 10Gi, imagen 0.6.3, probes /api/v1/heartbeat |
-| `networkpolicy.yaml` | NetworkPolicy (2 políticas) | Segmentación de tráfico entre pods |
+| `redis.yaml` | Deployment `redis:7-alpine` + Service `redis-svc:6379` | Estado de escalaciones (TTL 60 min), sobrevive reinicios del agente |
+| `networkpolicy.yaml` | NetworkPolicy (6 políticas) | Segmentación de tráfico: ollama←agent, agent←{apache,alertmanager,prometheus,grafana,mattermost}, chromadb←agent, redis←agent, mattermost←agent, postgres←mattermost |
 | `prometheus.yaml` | ServiceAccounts, ClusterRoles, ConfigMaps, Deployments, Services para Prometheus + KSM | Monitoring stack en `arturo-monitoring` |
 | `alertmanager.yaml` | Deployment + ConfigMap + Service para Alertmanager | Routing de alertas a webhook del agente |
 | `grafana.yaml` | Deployment stateless + ConfigMaps provisioning + Service + Secret ref | Datasource Prometheus, dashboards "AIOps Agent — Overview" + "AIOps — Chaos", contact point webhook |
@@ -71,7 +72,7 @@ annotations:
   prometheus.io/path: "/metrics"
 ```
 
-### 5 reglas de alerting
+### 6 reglas de alerting
 
 | Alerta | Expresión | For | Severity |
 |---|---|---|---|
@@ -80,8 +81,30 @@ annotations:
 | `HighMemory` | `container_memory_working_set_bytes / kube_pod_container_resource_limits{resource="memory"} > 0.9` | 5m | warning |
 | `HighCPU` | `rate(container_cpu_usage_seconds_total[5m]) / kube_pod_container_resource_limits{resource="cpu"} > 0.9` | 5m | warning |
 | `TargetDown` | `up == 0` | 2m | critical |
+| `KubePodImagePullBackOff` | `kube_pod_container_status_waiting_reason{reason="ImagePullBackOff"} == 1` | 1m | critical |
 
 Todas tienen `labels.team: aiops` — Alertmanager las enruta al webhook del agente.
+
+### Namespace label collision KSM/cAdvisor (fix aplicado 2026-05-26)
+
+Prometheus scrapeaba KSM (en `arturo-monitoring`) y aplicaba `namespace=arturo-monitoring` como target label, renombrando el `namespace` original de los pods a `exported_namespace`. Esto causaba:
+- Join `on(namespace, pod, container)` de HighCPU/HighMemory fallaba (cAdvisor tiene `namespace=arturo-chaos`, KSM tenía `namespace=arturo-monitoring`)
+- Alertas en Mattermost mostraban `pod=kube-state-metrics-xxx` en lugar del pod afectado real
+
+**Fix** (`k8s/prometheus.yaml`, job `kubernetes-endpoints`):
+```yaml
+metric_relabel_configs:
+  - source_labels: [exported_namespace]
+    regex: (.+)
+    target_label: namespace
+  - regex: exported_namespace
+    action: labeldrop
+  - source_labels: [exported_pod]
+    regex: (.+)
+    target_label: pod
+  - regex: exported_pod
+    action: labeldrop
+```
 
 ### Verificación
 
@@ -89,7 +112,32 @@ Todas tienen `labels.team: aiops` — Alertmanager las enruta al webhook del age
 kubectl get pods -n arturo-monitoring
 kubectl port-forward svc/prometheus-svc 9090:9090 -n arturo-monitoring
 # http://localhost:9090/targets  → agent-svc + kube-state-metrics-svc + cadvisor UP
-# http://localhost:9090/rules    → 5 reglas cargadas
+# http://localhost:9090/rules    → 6 reglas cargadas
+```
+
+## Redis (estado de escalaciones)
+
+Desplegado en `arturo-llm-test` via `k8s/redis.yaml`. Proporciona persistencia de escalaciones pendientes entre reinicios del pod agente (reemplaza el dict in-memory `PENDING_ESCALATIONS`).
+
+| Propiedad | Valor |
+|---|---|
+| Imagen | `europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/redis:7-alpine` |
+| Service | `redis-svc:6379` (ClusterIP, solo accesible desde el agente) |
+| Recursos | req 32Mi/10m — limits 64Mi/50m |
+| Persistencia | **Sin PVC** — estado efímero (TTL 60 min por key). Sobrevive reinicios del *agente* (objetivo principal), no del pod Redis en sí |
+| SecurityContext | `runAsUser: 999`, `allowPrivilegeEscalation: false`, `capabilities: drop ALL` |
+| Probes | `tcpSocket :6379` para liveness y readiness |
+| NetworkPolicy | `redis-allow-agent-only` — solo acepta ingress del pod `app=agent` en puerto 6379 |
+
+**Mirror de imagen** (sin Cloud NAT):
+```bash
+crane copy --platform linux/amd64 redis:7-alpine europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/redis:7-alpine
+```
+
+**Verificación**:
+```bash
+kubectl get pods -n arturo-llm-test -l app=redis
+kubectl exec -n arturo-llm-test deploy/redis -- redis-cli ping
 ```
 
 ## Probes del agente

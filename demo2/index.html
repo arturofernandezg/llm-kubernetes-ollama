@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<!--
+  AIOps TFG — Presentación académica para el tutor
+  Framework: Reveal.js 5.x
+
+  ANTES DE ABRIR: vendoriza Reveal.js con este comando desde la raíz del proyecto:
+    mkdir -p demo2/vendor/reveal && curl -sL https://registry.npmjs.org/reveal.js/-/reveal.js-5.1.0.tgz | tar -xz -C demo2/vendor/reveal --strip-components=1 package/dist package/plugin
+
+  PARA VER (cualquier opción):
+    a) Abrir demo2/index.html directamente en Firefox (Chrome bloquea file:// fetch)
+    b) cd llm-kubernetes-ollama && python3 -m http.server 8080 && open http://localhost:8080/demo2/
+
+  TECLAS útiles:
+    → / ↓   = avanzar slide
+    O       = vista overview
+    S       = speaker notes (ventana separada)
+    F       = pantalla completa
+    ?print-pdf  = añadir al URL para exportar PDF (en Chrome, Ctrl+P → Guardar como PDF)
+
+  ESTRUCTURA DE SESIONES:
+    Sesión A (esta) : sections 01–04  ← COMPLETAS
+    Sesión B        : sections 05–09  ← STUBS
+    Sesión C        : sections 10–15  ← STUBS
+    Sesión D        : guion.html       ← PENDIENTE
+-->
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AIOps Infrastructure Agent — Defensa TFG</title>
+
+  <link rel="stylesheet" href="vendor/reveal/dist/reveal.css">
+  <link rel="stylesheet" href="vendor/reveal/dist/theme/black.css">
+  <link rel="stylesheet" href="css/custom.css">
+</head>
+<body>
+
+<div class="reveal">
+<div class="slides">
+
+<!-- ═══════════════════════════════════════════════════════════════
+     01  PORTADA
+     ═══════════════════════════════════════════════════════════════ -->
+<section class="portada">
+  <div class="logo-badge">TFG · MasOrange / Telecable · 2026</div>
+  <h1>AIOps Infrastructure Agent</h1>
+  <p class="subtitle">Detección, diagnóstico y remediación autónoma de fallos en Kubernetes con LLM local</p>
+  <div class="meta">
+    <div><strong>Arturo Fernández García</strong><br>Ingeniería de Telecomunicaciones</div>
+    <div><strong>Rol en el proyecto</strong><br>AIOps Engineer</div>
+    <div><strong>Tutor</strong><br>MasOrange / Telecable</div>
+  </div>
+  <aside class="notes">
+    Saluda al tutor. Una frase de contexto:
+    "He construido un sistema que detecta fallos en Kubernetes, los diagnostica con un LLM corriendo
+    en el propio cluster — sin GPU, sin APIs externas — y actúa o escala al operador de forma segura."
+    30 segundos máximo. Pasar pronto al problema.
+  </aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     02  EL PROBLEMA
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>El problema que resuelve</h2>
+  <div class="cols-3">
+    <div class="card card-red">
+      <h3>🚨 El operador de guardia</h3>
+      <p>Son las 3am. Prometheus dispara. El operador recibe la página, abre el runbook correcto (si lo encuentra),
+         diagnostica manualmente, aplica el fix.</p>
+      <ul>
+        <li>MTTR de <strong>minutos a horas</strong></li>
+        <li>Carga cognitiva alta bajo presión</li>
+        <li>Un fallo humano = incidencia mayor</li>
+      </ul>
+    </div>
+    <div class="card card-orange">
+      <h3>📄 Runbooks dispersos</h3>
+      <p>16+ runbooks en wikis, repos y docs. Ninguno está en el flujo de alerta. El operador los busca
+         bajo estrés, sin contexto del pod/namespace afectado.</p>
+      <ul>
+        <li>Conocimiento desconectado del sistema de alertas</li>
+        <li>Sin histórico de incidentes anteriores</li>
+        <li>Sin priorización por severidad</li>
+      </ul>
+    </div>
+    <div class="card card-blue">
+      <h3>🔒 Restricciones telco</h3>
+      <p>Entorno MasOrange: los datos del cluster <strong>no pueden salir a APIs externas</strong>.
+         Sin Cloud NAT. Sin presupuesto por token de LLM.</p>
+      <ul>
+        <li>OpenAI / Vertex AI descartados</li>
+        <li>El LLM tiene que correr in-cluster</li>
+        <li>Sin GPU garantizada en GKE spot</li>
+      </ul>
+    </div>
+  </div>
+  <aside class="notes">
+    Este slide es el "por qué". Las tres restricciones juntas son las que hacen interesante el problema:
+    no es solo "voy a usar un LLM" — es "tengo que hacerlo con un modelo pequeño, en CPU, sin salir del cluster,
+    y que sea seguro para producción".
+    Tiempo estimado: 2 minutos. Puedes leer las tarjetas de izquierda a derecha y añadir:
+    "El proyecto nace de intentar resolver estas tres tensiones a la vez."
+  </aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     03  TESIS / PREGUNTA DE INVESTIGACIÓN
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>La pregunta de investigación</h2>
+  <div style="text-align:center; margin: 1em 0 1.2em;">
+    <p style="font-size:1.15em; color: var(--orange-light); font-style:italic; max-width:22em; margin:0 auto; line-height:1.5;">
+      "¿Puede un modelo de lenguaje de 1.5B parámetros, corriendo en CPU sin GPU y sin APIs externas,
+      asistir la remediación de incidencias en Kubernetes de forma segura?"
+    </p>
+  </div>
+
+  <div class="cols-2">
+    <div class="card card-orange">
+      <h3>Hipótesis</h3>
+      <p>Sí — si se combina con tres capas de control independientes:</p>
+      <ul>
+        <li><strong>RAG in-cluster</strong> para contexto relevante (runbooks + histórico)</li>
+        <li><strong>Validation layer</strong> (9 reglas) que bloquea acciones destructivas antes de ejecutar</li>
+        <li><strong>Human-in-the-loop</strong> cuando la confianza o el riesgo lo requieren</li>
+      </ul>
+    </div>
+    <div class="card card-blue">
+      <h3>Validación</h3>
+      <ul>
+        <li>Evaluación offline: N=10 alertas, RAG vs zero-shot</li>
+        <li>Safety 100% SAFE con RAG (vs 25% zero-shot)</li>
+        <li>Confidence +37% relativo con contexto RAG</li>
+        <li>E2E verificado en GKE: alerta → diagnóstico → Mattermost → operador</li>
+        <li>Chaos engineering: 4 experimentos en cluster real</li>
+      </ul>
+    </div>
+  </div>
+
+  <aside class="notes">
+    Este slide establece el marco científico. El tutor quiere ver que hay una hipótesis formulada y un
+    método de validación — no solo "construí cosas".
+    Recuerda: NO afirmar MTTD/MTTR como medidos. Los números de safety y confidence SÍ son reales
+    (docs/10-evaluation.md, N=10, metodología offline).
+    Tiempo estimado: 2 minutos.
+    Transición: "Para responder esa pregunta, diseñé la siguiente arquitectura..."
+  </aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     04  ARQUITECTURA — VISIÓN COMPLETA
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Arquitectura del sistema</h2>
+  <div class="cols-2-3">
+    <div>
+      <p class="text-small text-muted" style="margin-top:0">Todo in-cluster — los datos no salen del GKE</p>
+      <div style="font-size:0.68em; line-height:2; background: var(--card-bg); border-radius:8px; padding:0.9em 1.1em; border:1px solid var(--card-border); font-family: 'Consolas', monospace; white-space:pre;">
+Prometheus (métricas + 6 reglas)
+    │  alerta firing
+    ▼
+Alertmanager (routing)
+    │  POST /webhook/alert
+    ▼
+<span style="color:var(--orange-light); font-weight:700;">FastAPI Agent  ◄──► ChromaDB</span>
+    │               <span style="color:var(--text-muted)">(16 runbooks + histórico)</span>
+    │◄──────────────┘ contexto RAG
+    │
+    ▼
+<span style="color:var(--blue);">Ollama (qwen2.5:1.5b, in-cluster)</span>
+    │  JSON: diagnosis + commands
+    │       + confidence + risk
+    ▼
+<span style="color:var(--orange-light); font-weight:700;">Validation Layer (9 reglas)</span>
+    │
+    ├─ risk=low, conf≥0.8 ──► kubectl patch
+    │                              │
+    │                         rollback si falla
+    │
+    └─ risk=high / conf&lt;0.8 ──► Mattermost
+                                    │
+                              ✅ Aprobar / ❌ Rechazar
+                                    │
+                               K8s API + ChromaDB
+                               (feedback loop)
+      </div>
+    </div>
+    <div>
+      <div class="card card-orange" style="margin-bottom:0.7em">
+        <h3>Propiedades de diseño clave</h3>
+        <ul style="font-size:0.82em">
+          <li><strong>Fail-open everywhere</strong> — si ChromaDB o el LLM fallan, el pipeline degrada (diagnóstico sin contexto) pero nunca bloquea la alerta</li>
+          <li><strong>Validation-first</strong> — el LLM nunca ejecuta directamente; dos capas independientes: whitelist regex + motor de decisión</li>
+          <li><strong>Soberanía de datos</strong> — LLM, vector store y ChatOps corren en el cluster GKE; ningún dato sale</li>
+          <li><strong>Feedback loop</strong> — cada incidente (outcome + fix) se ingesta en ChromaDB; el RAG mejora con el tiempo</li>
+        </ul>
+      </div>
+      <div class="card card-blue">
+        <h3>Stack (todo in-cluster)</h3>
+        <div class="text-small" style="line-height:1.7">
+          <span class="tag">Python 3.11 · FastAPI</span>
+          <span class="tag">Pydantic v2 · httpx</span>
+          <span class="tag">Ollama qwen2.5:1.5b</span>
+          <span class="tag">nomic-embed-text 768d</span>
+          <span class="tag">ChromaDB 0.6.3</span>
+          <span class="tag">Prometheus · Alertmanager</span>
+          <span class="tag">Grafana · Mattermost</span>
+          <span class="tag">GKE e2-standard-2 spot</span>
+          <span class="tag">Cloud Build · Artifact Registry</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    Este slide es la arquitectura completa. Deja que el tutor la absorba.
+    Puntos a destacar en voz:
+    1. "Todo el flujo es asíncrono — Prometheus dispara, el agente procesa, Mattermost notifica. No bloquea nada."
+    2. "La validation layer es independiente del LLM — aunque el LLM se equivoque, las reglas capturan el error."
+    3. "Fail-open: si ChromaDB cae, el agente sigue funcionando con diagnóstico sin contexto RAG. Una alerta perdida sería peor."
+    4. "El feedback loop es lo que diferencia esto de un sistema estático: cada incidente alimenta el vector store."
+    Tiempo estimado: 3 minutos. Es la slide más densa — no te apresures.
+    Transición: "Vamos a ver cómo llegué a esta arquitectura, fase por fase."
+  </aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     05  FASE 0 + FASE 1 — stub Sesión B
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Fase 0 — Legado Terraform + Fase 1 — Observabilidad</h2>
+  <div class="card card-orange" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN B — PENDIENTE ]</p>
+    <p>Terraform generator CLI · Prometheus standalone · Alertmanager · Grafana dashboards<br>
+       kube-state-metrics mirror · ClusterRole de lectura · NetworkPolicy scrape · E2E verificado</p>
+    <p class="text-small text-muted">Decisión clave: fail-open vs fail-closed · Alternativa descartada: Datadog/NewRelic</p>
+  </div>
+  <aside class="notes">Sesión B rellenará este stub con decisiones de diseño y alternativas descartadas.</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     06  FASE 2 — RAG — stub Sesión B
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Fase 2 — RAG (Retrieval-Augmented Generation)</h2>
+  <div class="card card-blue" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN B — PENDIENTE ]</p>
+    <p>ChromaDB StatefulSet · nomic-embed-text 768d · dual collections (runbooks + incidents)<br>
+       Triple fail-open · ingest_runbooks Job · 16 runbooks ingestados</p>
+    <p class="text-small text-muted">Decisión clave: retrieval-first vs clasificador supervisado · por qué no fine-tuning</p>
+  </div>
+  <aside class="notes">Sesión B rellenará este stub.</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     07  FASE 3 — REMEDIACIÓN — stub Sesión B
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Fase 3 — Validation Layer y Remediación Autónoma</h2>
+  <div class="card card-orange" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN B — PENDIENTE ]</p>
+    <p>9 reglas en cascada · whitelist/blacklist regex · reglas 4.5/4.6 (condición tutor)<br>
+       executor dual-mode · parse_memory_to_bytes · implies_pod_restart</p>
+    <p class="text-small text-muted">Decisión clave: validation layer obligatorio vs LLM decide directamente</p>
+  </div>
+  <aside class="notes">Sesión B rellenará este stub.</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     08  HUMAN-IN-THE-LOOP — stub Sesión B
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Human-in-the-Loop — Botones Mattermost + HMAC</h2>
+  <div class="card card-blue" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN B — PENDIENTE ]</p>
+    <p>send_escalation_with_buttons() · POST /webhook/action · PENDING_ESCALATIONS dict (TTL 60 min)<br>
+       HMAC-SHA256 en callbacks · WEBHOOK_SECRET · 4/4 escalate = human-in-the-loop seguro</p>
+    <p class="text-small text-muted">Decisión clave: HMAC vs sin autenticación · por qué TTL en lugar de DB</p>
+  </div>
+  <aside class="notes">Sesión B rellenará este stub.</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     09  ROLLBACK AUTOMÁTICO — stub Sesión B
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Rollback Automático con Captura Pre-patch</h2>
+  <div class="card card-green" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN B — PENDIENTE ]</p>
+    <p>capture_pre_patch_value() · ExecuteResult dataclass · check_pod_health() · revert_patch()<br>
+       IN_FLIGHT_ROLLBACKS registry · _evaluate_rollback() · counter aiops_remediation_rollback_total</p>
+    <p class="text-small text-muted">Decisión clave: rollback automático vs manual · captura estado antes de actuar</p>
+  </div>
+  <aside class="notes">Sesión B rellenará este stub.</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     10  EVALUACIÓN — stub Sesión C
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Evaluación — RAG vs Zero-Shot</h2>
+  <div class="card card-orange" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN C — PENDIENTE ]</p>
+    <p>N=10 alertas · precision@1=60% · precision@3=80% · Safety 100% SAFE (RAG) vs 25% (zero-shot)<br>
+       Confidence 0.86 vs 0.63 (+37% relativo) · 67% UNKNOWN en zero-shot (alucinaciones)</p>
+    <p class="text-small text-muted">Metodología · limitaciones (N pequeño) · work futuro: N=50 + eval_feedback_loop</p>
+  </div>
+  <aside class="notes">Sesión C rellenará este stub con los números reales de docs/10-evaluation.md.</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     11  CHAOS ENGINEERING — stub Sesión C
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Mini-Fase 4 — Chaos Engineering</h2>
+  <div class="card card-blue" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN C — PENDIENTE ]</p>
+    <p>4 experimentos: OOMKilled · CrashLoopBackOff · ImagePullBackOff · HighCPU<br>
+       Namespace arturo-chaos · Principles of Chaos · métricas aiops_chaos_* · dashboard Grafana MTTD/MTTR<br>
+       Rollback automático · /aiops slash command · 369 tests · Cloud Build CI/CD</p>
+    <p class="text-small text-muted">MTTD/MTTR: metodología implementada, medición con datos limpios pendiente (ver notas)</p>
+  </div>
+  <aside class="notes">
+    IMPORTANTE: NO afirmar MTTD/MTTR como medido. Decir:
+    "Implementé la metodología de medición y los dashboards. La corrida limpia de los 4 experimentos
+    está pendiente de completar en cluster debido a un bug de label collision en Prometheus que detecté
+    y corregí durante las pruebas E2E — ese hallazgo en sí mismo es un resultado del proyecto."
+    Sesión C rellenará este stub.
+  </aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     12  HALLAZGOS HONESTOS — stub Sesión C
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Hallazgos honestos — lo que no salió como se esperaba</h2>
+  <div class="card card-red" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN C — PENDIENTE ]</p>
+    <p>Latencia CPU ~200s (×5 vs zero-shot, sin GPU) · 4/4 escalate = human-in-the-loop seguro<br>
+       Contaminación del RAG por label collision KSM/cAdvisor → detectada y corregida<br>
+       Cada hallazgo: hipótesis → experimento → resultado → causa raíz → fix</p>
+  </div>
+  <aside class="notes">Sesión C rellenará este stub. La contaminación del RAG se enmarca como "bug cazado y corregido — modo de fallo MLOps real".</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     13  TESTING Y CI/CD — stub Sesión C
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Testing y CI/CD</h2>
+  <div class="card card-green" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN C — PENDIENTE ]</p>
+    <p>~369 tests en 11 ficheros · Cloud Build como gate (sin test no hay imagen)<br>
+       Mocking de Ollama (sin cluster en CI) · TestChaosMetrics · TestRollbackScheduling<br>
+       TestDecideActionTutorRule · Artifact Registry europe-southwest1</p>
+  </div>
+  <aside class="notes">Sesión C rellenará este stub.</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     14  LIMITACIONES Y TRABAJO FUTURO — stub Sesión C
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Limitaciones y trabajo futuro</h2>
+  <div class="card card-orange" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN C — PENDIENTE ]</p>
+    <p>MTTD/MTTR operacional sin medir · dataset evaluación N=10 (poco estadístico)<br>
+       Sin GPU (latencia CPU) · Predicción proactiva (Fase 5: loop periódico métricas → tendencias)<br>
+       Fine-tuning embedding AIOps-específico · eval_feedback_loop gain</p>
+  </div>
+  <aside class="notes">Sesión C rellenará este stub.</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     15  CIERRE — stub Sesión C
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Conclusiones</h2>
+  <div class="card card-orange" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN C — PENDIENTE ]</p>
+    <p>Tesis restablecida · Contribución técnica · Lo que aprendí que no estaba en el plan</p>
+  </div>
+  <aside class="notes">Sesión C rellenará este stub.</aside>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     16  Q&A — stub Sesión C
+     ═══════════════════════════════════════════════════════════════ -->
+<section>
+  <h2>Preguntas anticipadas</h2>
+  <div class="card card-blue" style="text-align:center; padding:2em">
+    <p class="text-muted text-small">[ SESIÓN C — PENDIENTE ]</p>
+    <p>12 preguntas difíciles de defensa.md §3 con respuestas estructuradas</p>
+  </div>
+  <aside class="notes">Sesión C rellenará este stub desde defensa.md §3.</aside>
+</section>
+
+</div><!-- /slides -->
+</div><!-- /reveal -->
+
+<script src="vendor/reveal/dist/reveal.js"></script>
+<script src="vendor/reveal/plugin/notes/notes.js"></script>
+<script>
+Reveal.initialize({
+  hash:                 true,
+  transition:           'fade',
+  transitionSpeed:      'fast',
+  backgroundTransition: 'none',
+  width:                1280,
+  height:               720,
+  margin:               0.04,
+  controls:             true,
+  progress:             true,
+  slideNumber:          'c/t',
+  pdfMaxPagesPerSlide:  1,
+  pdfSeparateFragments: false,
+  plugins: [ RevealNotes ]
+});
+</script>
+</body>
+</html>

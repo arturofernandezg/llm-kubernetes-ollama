@@ -21,6 +21,8 @@ import uuid
 from prometheus_fastapi_instrumentator import Instrumentator
 from prometheus_client import Counter, Histogram
 
+import redis.asyncio as aioredis
+
 from config import settings, logger
 from schemas import (
     InfraRequest, ExtractedParams, ExtractResponse,
@@ -40,6 +42,7 @@ from remediation import (
     capture_pre_patch_value, check_pod_health, revert_patch, PrePatchSnapshot,
 )
 from utils import backoff_delay
+from escalation_store import store_escalation, get_escalation, delete_escalation, count_escalations
 
 # ── Métricas Prometheus ──────────────────────────────────────────────────────
 RETRY_COUNTER = Counter(
@@ -99,6 +102,11 @@ WEBHOOK_COUNTER = Counter(
     "Alert webhook requests received by the agent",
     ["status"],  # "success" | "error"
 )
+DEDUP_COUNTER = Counter(
+    "aiops_dedup_skipped_total",
+    "Alert processing skipped due to in-flight duplicate",
+    ["alertname"],
+)
 
 
 # ── Human Escalation State ────────────────────────────────────────────────────
@@ -115,8 +123,10 @@ class PendingEscalation:
     expires_at: datetime
 
 
-PENDING_ESCALATIONS: dict[str, PendingEscalation] = {}
-_PENDING_LOCK = asyncio.Lock()
+# In-flight dedup registry — prevents duplicate LLM calls for the same alert.
+# Key: (alertname, namespace, pod). Cleared in the finally of _process_alert_with_diagnosis.
+IN_FLIGHT_ALERTS: set[tuple[str, str, str]] = set()
+_INFLIGHT_LOCK = asyncio.Lock()
 
 
 # ── Rollback State ────────────────────────────────────────────────────────────
@@ -144,14 +154,26 @@ def _verify_hmac_token(incident_id: str, action: str, token: str | None) -> bool
     return hmac.compare_digest(token, expected)
 
 
-async def _cleanup_expired_escalations() -> None:
-    """Elimina escalaciones expiradas del dict en memoria."""
-    now = datetime.now(timezone.utc)
-    async with _PENDING_LOCK:
-        expired = [k for k, v in PENDING_ESCALATIONS.items() if v.expires_at < now]
-        for k in expired:
-            logger.info("Expiring pending escalation", extra={"incident_id": k})
-            del PENDING_ESCALATIONS[k]
+def _escalation_to_dict(esc: PendingEscalation) -> dict:
+    """Serialize PendingEscalation to a JSON-serializable dict for Redis storage."""
+    return {
+        "incident_id": esc.incident_id,
+        "alert_item": esc.alert_item.model_dump(mode="json"),
+        "diagnosis": esc.diagnosis,
+        "safe_commands": esc.safe_commands,
+        "expires_at": esc.expires_at.isoformat(),
+    }
+
+
+def _dict_to_escalation(data: dict) -> PendingEscalation:
+    """Deserialize a Redis-stored dict back to PendingEscalation."""
+    return PendingEscalation(
+        incident_id=data["incident_id"],
+        alert_item=AlertItem(**data["alert_item"]),
+        diagnosis=data["diagnosis"],
+        safe_commands=data["safe_commands"],
+        expires_at=datetime.fromisoformat(data["expires_at"]),
+    )
 
 
 async def _cleanup_expired_rollbacks() -> None:
@@ -266,7 +288,6 @@ async def _evaluate_rollback(incident_id: str) -> None:
 async def _periodic_cleanup() -> None:
     while True:
         await asyncio.sleep(300)
-        await _cleanup_expired_escalations()
         await _cleanup_expired_rollbacks()
 
 
@@ -297,6 +318,19 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         app.state.chroma_client = None
         logger.warning("ChromaDB unavailable at startup: %s", exc)
+
+    # Redis client for persistent escalation storage (fail-open: None if unavailable)
+    try:
+        redis_client = aioredis.Redis(
+            host=settings.redis_host, port=settings.redis_port,
+            decode_responses=True,
+        )
+        await redis_client.ping()
+        app.state.redis = redis_client
+        logger.info("Redis connected at %s:%s", settings.redis_host, settings.redis_port)
+    except Exception as exc:
+        app.state.redis = None
+        logger.warning("Redis unavailable at startup — escalation persistence disabled: %s", exc)
 
     try:
         r = await app.state.http_client.get(settings.ollama_tags, timeout=10.0)
@@ -341,6 +375,8 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     await app.state.http_client.aclose()
+    if app.state.redis is not None:
+        await app.state.redis.aclose()
     logger.info("Agent shutting down — HTTP client closed")
 
 
@@ -438,6 +474,7 @@ def _format_diagnosis_message(
     alert: AlertItem,
     diagnosis: dict | None,
     remediation: dict | None = None,
+    llm_timeout: bool = False,
 ) -> str:
     """Format alert + diagnosis + remediation into a Mattermost-ready Markdown message."""
     icon = "🔴" if alert.status == "firing" else "🟢"
@@ -447,6 +484,12 @@ def _format_diagnosis_message(
 
     if diagnosis is None:
         desc = alert.annotations.get("description", "Sin descripcion")
+        if llm_timeout:
+            return (
+                f"{header}\n"
+                f"⏱️ **LLM timeout** — el modelo tardó más de {int(settings.http_timeout)}s y no generó diagnóstico.\n"
+                f"Alerta cruda:\n> {desc}"
+            )
         return f"{header}\n> {desc}\n\n_⚠️ Diagnosis unavailable_"
 
     confidence_pct = int(diagnosis.get("confidence", 0.0) * 100)
@@ -537,7 +580,7 @@ def _query_recent_incidents(chroma_client, limit: int) -> list[dict]:
         return []
 
 
-def _format_status_response(ollama_ok: bool, chroma_ok: bool) -> str:
+def _format_status_response(ollama_ok: bool, chroma_ok: bool, pending_count: int = 0) -> str:
     ollama = "UP" if ollama_ok else "DOWN"
     chroma = "UP" if chroma_ok else "DOWN"
     mode = "DRY-RUN" if settings.remediation_dry_run else "LIVE"
@@ -546,7 +589,7 @@ def _format_status_response(ollama_ok: bool, chroma_ok: bool) -> str:
         f"- Ollama: {ollama} ({settings.ollama_model})\n"
         f"- ChromaDB: {chroma}\n"
         f"- Remediation: {'enabled' if settings.remediation_enabled else 'disabled'} ({mode})\n"
-        f"- Pending escalations: {len(PENDING_ESCALATIONS)}\n"
+        f"- Pending escalations: {pending_count}\n"
     )
 
 
@@ -576,12 +619,15 @@ async def _process_alert_with_diagnosis(
     alert: AlertItem,
     http_client: httpx.AsyncClient,
     chroma_client,
+    redis_client=None,
 ) -> None:
     """Background task: RAG query → retrieve context → LLM diagnosis → Mattermost."""
     severity, alert_name, pod, namespace = _extract_alert_meta(alert)
     is_chaos = namespace == "arturo-chaos"
     t_pipeline_start = time.time()
     chaos_outcome = "pipeline_failed"
+    _llm_timeout = False
+    dedup_key: tuple[str, str, str] | None = (alert_name, namespace, pod)
     try:
         description = alert.annotations.get("description", "")
         query = build_rag_query(alert.labels, description)
@@ -595,13 +641,18 @@ async def _process_alert_with_diagnosis(
             rag_context = {"runbooks": [], "incidents": [], "query": query}
             DIAGNOSIS_COUNTER.labels(outcome="rag_failed").inc()
 
-        # LLM diagnosis (fail-open: None if Ollama down)
+        # LLM diagnosis (fail-open: None if Ollama down or timeout)
         try:
             diagnosis = await generate_diagnosis(
                 alert.labels, alert.annotations, alert.status,
                 rag_context, http_client,
             )
             DIAGNOSIS_COUNTER.labels(outcome="success").inc()
+        except httpx.TimeoutException as exc:
+            logger.warning("Diagnosis timed out for %s (HTTP_TIMEOUT=%ss): %r", alert_name, int(settings.http_timeout), exc)
+            diagnosis = None
+            _llm_timeout = True
+            DIAGNOSIS_COUNTER.labels(outcome="llm_failed").inc()
         except Exception as exc:
             logger.warning("Diagnosis generation failed for %s: %r", alert_name, exc)
             diagnosis = None
@@ -650,34 +701,46 @@ async def _process_alert_with_diagnosis(
 
         chaos_outcome = remediation_result["action"].value if remediation_result else "no_diagnosis"
 
-        # Escalations with approvable commands → send with interactive buttons
+        # Escalations with approvable commands → persist in Redis + send with interactive buttons
         if (
             remediation_result is not None
             and remediation_result["action"] == RemediationAction.ESCALATE
             and remediation_result.get("safe_commands")
         ):
             incident_id = str(uuid.uuid4())
-            async with _PENDING_LOCK:
-                PENDING_ESCALATIONS[incident_id] = PendingEscalation(
-                    incident_id=incident_id,
-                    alert_item=alert,
-                    diagnosis=diagnosis,
-                    safe_commands=remediation_result["safe_commands"],
-                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=ESCALATION_TTL_MINUTES),
-                )
-            logger.info(
-                "Stored pending escalation %s for %s (%d commands)",
-                incident_id, alert_name, len(remediation_result["safe_commands"]),
-            )
-            await send_escalation_with_buttons(
-                header=_format_escalation_header(alert),
-                attachment_text=_format_escalation_body(diagnosis, remediation_result),
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=ESCALATION_TTL_MINUTES)
+            esc = PendingEscalation(
                 incident_id=incident_id,
-                callback_base_url=settings.agent_callback_url,
-                webhook_secret=settings.webhook_secret,
+                alert_item=alert,
+                diagnosis=diagnosis,
+                safe_commands=remediation_result["safe_commands"],
+                expires_at=expires_at,
             )
+            ttl_seconds = ESCALATION_TTL_MINUTES * 60
+            stored = False
+            if redis_client is not None:
+                stored = await store_escalation(incident_id, _escalation_to_dict(esc), ttl_seconds, redis_client)
+            if stored:
+                logger.info(
+                    "Stored pending escalation %s for %s (%d commands) in Redis",
+                    incident_id, alert_name, len(remediation_result["safe_commands"]),
+                )
+                await send_escalation_with_buttons(
+                    header=_format_escalation_header(alert),
+                    attachment_text=_format_escalation_body(diagnosis, remediation_result),
+                    incident_id=incident_id,
+                    callback_base_url=settings.agent_callback_url,
+                    webhook_secret=settings.webhook_secret,
+                )
+            else:
+                # Redis unavailable — send degraded message without buttons
+                logger.warning(
+                    "Redis unavailable — sending escalation without buttons for %s", alert_name,
+                )
+                msg = _format_diagnosis_message(alert, diagnosis, remediation_result)
+                await send_mattermost_alert(msg + "\n\n_⚠️ Botones interactivos no disponibles (Redis caído)_")
         else:
-            msg = _format_diagnosis_message(alert, diagnosis, remediation_result)
+            msg = _format_diagnosis_message(alert, diagnosis, remediation_result, llm_timeout=_llm_timeout)
             await send_mattermost_alert(msg)
 
     except Exception as exc:
@@ -693,6 +756,10 @@ async def _process_alert_with_diagnosis(
         except Exception as fallback_exc:
             logger.error("Fallback Mattermost send also failed for %s: %s", alert_name, fallback_exc)
     finally:
+        # Remove dedup key so future occurrences of the same alert can be processed
+        if dedup_key is not None:
+            async with _INFLIGHT_LOCK:
+                IN_FLIGHT_ALERTS.discard(dedup_key)
         if is_chaos:
             try:
                 starts_at_epoch = datetime.fromisoformat(alert.startsAt.replace("Z", "+00:00")).timestamp()
@@ -741,10 +808,21 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
         )
 
         if alert.status == "firing":
+            # Dedup in-flight: skip if the same (alertname, namespace, pod) is already processing
+            dedup_key = (alert_name, alert.labels.get("namespace", ""), alert.labels.get("pod", ""))
+            async with _INFLIGHT_LOCK:
+                if dedup_key in IN_FLIGHT_ALERTS:
+                    logger.info(
+                        "Duplicate in-flight alert skipped",
+                        extra={"alertname": alert_name, "dedup_key": str(dedup_key)},
+                    )
+                    DEDUP_COUNTER.labels(alertname=alert_name).inc()
+                    continue
+                IN_FLIGHT_ALERTS.add(dedup_key)
             # Full RAG + diagnosis pipeline for firing alerts
             background_tasks.add_task(
                 _process_alert_with_diagnosis,
-                alert, app.state.http_client, app.state.chroma_client,
+                alert, app.state.http_client, app.state.chroma_client, app.state.redis,
             )
         else:
             # Resolved alerts: simple notification, no diagnosis needed
@@ -775,35 +853,43 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
     ):
         raise HTTPException(status_code=401, detail="Invalid callback token")
 
-    async with _PENDING_LOCK:
-        incident = PENDING_ESCALATIONS.get(payload.context.incident_id)
-        if incident is None:
-            logger.warning(
-                "Unknown or expired incident_id in callback",
-                extra={"incident_id": payload.context.incident_id},
-            )
-            return {
-                "ephemeral_text": "Escalación no encontrada o expirada. No se tomó ninguna acción.",
-                "update": {
-                    "message": "⏰ Escalación expirada o no encontrada — no se tomó ninguna acción.",
-                    "props": {"attachments": []},
-                },
-            }
-        if datetime.now(timezone.utc) > incident.expires_at:
-            del PENDING_ESCALATIONS[payload.context.incident_id]
-            logger.warning(
-                "Escalation expired (TTL %dm)",
-                ESCALATION_TTL_MINUTES,
-                extra={"incident_id": incident.incident_id},
-            )
-            return {
-                "ephemeral_text": "Escalación expirada. Por favor, espera una nueva alerta.",
-                "update": {
-                    "message": "⏰ Escalación expirada (TTL superado) — no se tomó ninguna acción.",
-                    "props": {"attachments": []},
-                },
-            }
-        PENDING_ESCALATIONS.pop(payload.context.incident_id)
+    redis_client = app.state.redis
+    incident_data = await get_escalation(payload.context.incident_id, redis_client) if redis_client else None
+    if incident_data is None:
+        logger.warning(
+            "Unknown or expired incident_id in callback",
+            extra={"incident_id": payload.context.incident_id},
+        )
+        return {
+            "ephemeral_text": "Escalación no encontrada o expirada. No se tomó ninguna acción.",
+            "update": {
+                "message": "⏰ Escalación expirada o no encontrada — no se tomó ninguna acción.",
+                "props": {"attachments": []},
+            },
+        }
+    try:
+        incident = _dict_to_escalation(incident_data)
+    except Exception as exc:
+        logger.error("Failed to deserialize escalation %s: %s", payload.context.incident_id, exc)
+        return {
+            "ephemeral_text": "Error interno al recuperar la escalación.",
+            "update": {"message": "⚠️ Error interno — no se pudo procesar la respuesta.", "props": {"attachments": []}},
+        }
+    if datetime.now(timezone.utc) > incident.expires_at:
+        await delete_escalation(payload.context.incident_id, redis_client)
+        logger.warning(
+            "Escalation expired (TTL %dm)",
+            ESCALATION_TTL_MINUTES,
+            extra={"incident_id": incident.incident_id},
+        )
+        return {
+            "ephemeral_text": "Escalación expirada. Por favor, espera una nueva alerta.",
+            "update": {
+                "message": "⏰ Escalación expirada (TTL superado) — no se tomó ninguna acción.",
+                "props": {"attachments": []},
+            },
+        }
+    await delete_escalation(payload.context.incident_id, redis_client)
 
     user = payload.user_name or "human"
     action = payload.context.action
@@ -910,7 +996,8 @@ async def handle_slash_command(
             ollama_ok = r.status_code == 200
         except Exception:
             pass
-        text_out = _format_status_response(ollama_ok, app.state.chroma_client is not None)
+        pending_count = await count_escalations(app.state.redis) if app.state.redis else 0
+        text_out = _format_status_response(ollama_ok, app.state.chroma_client is not None, pending_count)
 
     elif sub == "incidents":
         limit = 5

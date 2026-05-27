@@ -90,11 +90,31 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 
 ---
 
-## Chaos script — pendientes (2026-05-25)
+## Chaos script — (2026-05-25/26)
 
 | ID | Severidad | Localización | Descripción | Fix propuesto | Estado |
 |---|---|---|---|---|---|
-| C1 | low | scripts/chaos.sh:_wait_for_agent_log | Búsqueda de log usa `--since=10m` sin filtrar por T0 — encuentra entradas anteriores al experimento actual y produce MTTD negativo (ej. crashloop detectó log de experimento OOM previo) | Pasar epoch T0 a la función y filtrar solo líneas con timestamp > T0 | FIXED 2026-05-26 |
+| C1 | low | scripts/chaos.sh:_wait_for_agent_log | Búsqueda de log usa `--since=10m` sin filtrar por T0 — encuentra entradas anteriores al experimento actual y produce MTTD negativo | Pasar epoch T0 + filtrar ts>=T0 + head -1 | FIXED 2026-05-26 |
+| C2 | high | k8s/chaos/chaos-cpu-stress.yaml:47 | `stress-ng` en imagen que solo tiene `stress` — pod no arranca, HighCPU nunca dispara | `stress-ng`→`stress`, `600s`→`600` | FIXED 2026-05-26 |
+| Q1 | medium | scripts/chaos.sh:_wait_for_agent_log | `--since=10m --tail=200` es una ventana rodante: en HighCPU (~360s) la línea de detección puede salir de las 200 últimas; MTTR se leía a ojo de Mattermost | `--since-time=T0-10s` (kubectl RFC3339); nueva `_wait_for_chaos_metrics` (no-fatal) captura MTTD/MTTR/outcome del log "Chaos metrics recorded" | FIXED 2026-05-26 |
+
+## Prometheus KSM label collision — (2026-05-26)
+
+| ID | Severidad | Localización | Descripción | Fix propuesto | Estado |
+|---|---|---|---|---|---|
+| P1 | high | k8s/prometheus.yaml:kubernetes-endpoints | Prometheus relabela `namespace=arturo-monitoring` y `pod=kube-state-metrics-xxx` al scrapeear KSM, ocultando el namespace/pod real en `exported_*`. Consecuencias: (1) join HighCPU/HighMemory falla → alertas nunca disparan; (2) mensajes Mattermost muestran pod de KSM en lugar del pod afectado | `metric_relabel_configs`: `exported_namespace→namespace` + labeldrop, `exported_pod→pod` + labeldrop | FIXED + verified 2026-05-26 (aplicado en cluster; los 4 experimentos chaos dispararon `is_chaos` con namespace correcto) |
+
+---
+
+## Sesión pruebas E2E — findings de ejecución (2026-05-26)
+
+| ID | Severidad | Localización | Descripción | Fix propuesto | Estado |
+|---|---|---|---|---|---|
+| E1 | medium | k8s/deployment-agent.yaml:HTTP_TIMEOUT | `HTTP_TIMEOUT=240` demasiado ajustado: la inferencia de qwen2.5:1.5b en CPU llega a ~205–273s. BadImage superó 240s → `httpx.ReadTimeout` → `diagnosis=None` → `no_diagnosis` (fail-open OK: alerta cruda enviada). Margen p~max ≈ timeout | `HTTP_TIMEOUT` 240→300; re-run BadImage MTTR 273.5s → escalate | FIXED 2026-05-26 (imagen `5aaf9f9`) |
+| E2 | low | main.py:594,606,616 | Warnings del pipeline de diagnóstico logueaban `%s` sobre `exc`; las excepciones de timeout de httpx serializan a string vacío → `"Diagnosis generation failed for X: "` sin causa (black-box, contra principio de observabilidad) | `%s`→`%r` para mostrar el tipo (`ReadTimeout('')`) | FIXED 2026-05-26 |
+| E3 | medium | main.py:743 (handle_alert_webhook) | No hay guard de dedup in-flight: cada alerta `firing` lanza un pipeline de diagnóstico aunque ya haya uno corriendo para el mismo `alertname+pod`. Re-sends de Alertmanager + flapping de reglas `increase[15m]` saturan el LLM single-thread → contención y timeouts | Guard `IN_FLIGHT_DIAGNOSES` keyed en `alertname+pod`; skip si ya en curso. Requiere tests | TODO (no bloqueante para MVP; choreography mitiga en demo) |
+| E4 | medium | rag.py (feedback loop) / ChromaDB | Contaminación del RAG: incidentes registrados durante el bug de label-collision (pod=`kube-state-metrics`, NS=`arturo-monitoring`) se ingestaron en ChromaDB. Diagnósticos posteriores los recuperan y alucinan el pod/namespace erróneo en el texto (ej. BadImage re-run 4:36 PM: header correcto pero texto cita `kube-state-metrics … arturo-monitoring`) | Validar/deduplicar incidentes en ingest; purgar incidentes pre-fix de ChromaDB (metadata `namespace=arturo-monitoring` + chaos); considerar versionar el store ante cambios de schema/labels | TODO (defensa: limitación honesta del feedback loop ante calidad de datos) |
+| E5 | low | diagnosis.py (qwen2.5:1.5b) | Sobreconfianza: confidence 95–98% con razonamiento free-text incorrecto (HighCPU → "inadequate memory allocation"; CrashLoop → "insufficient memory limits" para un `/bin/false`). Los campos estructurados (pod/NS/alert) sí son correctos | Limitación del modelo pequeño en CPU. Future work: modelo mayor o calibración; o ponderar confidence con coherencia alert↔diagnóstico | WONTFIX (MVP — limitación conocida documentada) |
 
 ---
 

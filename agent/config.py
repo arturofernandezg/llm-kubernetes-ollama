@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # Token que MM genera al crear el slash command. Empty = auth disabled (dev).
     mm_command_token: str = ""
 
+    # Redis — persistencia de escalaciones pendientes (Mini-Fase 4 — mejora)
+    # Sin Redis, las escalaciones viven en memoria y se pierden si el pod reinicia.
+    redis_host: str = "redis-svc"
+    redis_port: int = 6379
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

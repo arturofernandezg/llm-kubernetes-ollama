@@ -15,6 +15,7 @@ from tests.helpers import mock_http_client
 # El TestClient no ejecuta el lifespan, así que creamos un mock por defecto.
 app.state.http_client = mock_http_client("")
 app.state.chroma_client = None
+app.state.redis = None  # Redis stub — individual tests set this to FakeRedis when needed
 
 
 @pytest.fixture

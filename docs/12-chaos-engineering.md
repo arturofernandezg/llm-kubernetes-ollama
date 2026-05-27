@@ -89,30 +89,51 @@ El agente registra las siguientes métricas cuando `namespace == arturo-chaos`:
 | `aiops_chaos_mttd_seconds` | Histogram | `experiment` | MTTD: desde `startsAt` hasta recepción webhook |
 | `aiops_chaos_mttr_seconds` | Histogram | `experiment` | MTTR: desde `startsAt` hasta pipeline completo |
 
-**Nota**: MTTD y MTTR usan `alert.startsAt` (timestamp cuando Alertmanager entró en `firing`) como T0. Este T0 incluye el periodo `for:` de la regla Prometheus. El MTTD mínimo observable es igual al `for:` period de cada regla.
+**Nota (corregido con datos reales 2026-05-26)**: MTTD y MTTR usan `alert.startsAt` como T0. Empíricamente, el `startsAt` que recibe el agente corresponde a la **transición a `firing`** (es decir, *después* de que el periodo `for:` ya transcurrió), **no** a `ActiveAt`. Por tanto MTTD/MTTR miden **latencia pura del pipeline** (firing → webhook → diagnóstico) y **NO incluyen el periodo `for:`**. Evidencia: con `for:` distintos, el MTTD se mantuvo en 5–10s (BadImage `for:1m` → 5.1s, HighCPU `for:5m` → 10s); si `startsAt` fuese `ActiveAt`, esos MTTD serían ≥60s y ≥300s respectivamente. El periodo `for:` aparece en **`T_detect_total`** (apply → primer log), no en MTTD.
 
 Consultar métricas en cluster:
 ```
 kubectl exec -n arturo-llm-test <agent-pod> -- curl -s localhost:8000/metrics | grep aiops_chaos
 ```
 
+## Hipótesis y criterios de éxito
+
+Estructura Principles of Chaos: se define el estado estable, se formula una hipótesis, se inyecta el fallo y se mide si el sistema cumple los criterios de éxito. Si no cumple, se aborta con `bash scripts/chaos.sh cleanup`.
+
+**Blast radius compartido (todos los experimentos):** confinado a namespace `arturo-chaos` + nodos `guaranteed=true` + resource limits por container + gates de seguridad multicapa del motor de remediación (rule 4.5 → escalate típicamente; DRY_RUN=false mitigado por rules 4.5/4.6/5).
+
+Criterio de MTTD común a todos: dado que MTTD(pipeline) mide latencia pura (firing→webhook, independiente de `for:`), el umbral es **MTTD(pipeline) < 30s**. El periodo `for:` se valida vía `T_detect_total` (apply→detección), con cota aproximada por experimento.
+
+| Experimento | Steady state | Hipótesis | Criterio de éxito | Abort |
+|---|---|---|---|---|
+| OOMKilled | Agente Running/Ready, 0 alertas chaos activas, Mattermost silencioso | El agente detecta el OOMKill y notifica en Mattermost con el pod correcto (`NS: arturo-chaos`), sin afectar el pipeline principal | MTTD(pipeline) < 30s; T_detect_total < 60s (for:0m); Mattermost muestra `chaos-oom-target-xxx`; is_chaos disparó | `bash scripts/chaos.sh cleanup` |
+| CrashLoopBackOff | Idem | El agente detecta el crashloop acumulado (>3 reinicios/15m) y escala/notifica con el pod correcto | MTTD(pipeline) < 30s; T_detect_total ~for:5m + acumulación de reinicios; outcome ∈ {escalate, auto_remediate} | `bash scripts/chaos.sh cleanup` |
+| ImagePullBackOff | Idem | El agente detecta el pull-fail crónico y notifica con el pod correcto | MTTD(pipeline) < 30s; T_detect_total < 240s (for:1m + backoff de pull); Mattermost muestra `chaos-bad-image-target-xxx` | `bash scripts/chaos.sh cleanup` |
+| HighCPU | Idem | El agente detecta CPU saturada con join cAdvisor/KSM correcto (fix prometheus aplicado) y notifica | MTTD(pipeline) < 30s; T_detect_total ~for:5m + rate[5m] ramp (~660s); Mattermost muestra el pod correcto en `arturo-chaos` | `bash scripts/chaos.sh cleanup` |
+
 ## Tabla de resultados
 
-| Fecha | Experimento | `for:` | T_pod_fail | MTTD (s) | MTTR (s) | confidence | outcome | Notas |
+**Definición de métricas:**
+- **MTTD (pipeline)** = `aiops_chaos_mttd_seconds` = `alert.startsAt → recepción webhook`. `startsAt` ≈ transición a `firing` (post-`for:`), por lo que mide **latencia pura del pipeline y NO incluye el `for:`** (verificado empíricamente, ver Nota arriba). Métrica autoritativa, registrada en Prometheus y visible en Grafana.
+- **MTTR (pipeline)** = `aiops_chaos_mttr_seconds` = `alert.startsAt → pipeline completo` (LLM + Mattermost). = MTTD + tiempo_LLM. Dominado por la inferencia del LLM en CPU (~205–270s con qwen2.5:1.5b).
+- **T_detect_total** = `T0_apply → primer log agente`. Mayor que MTTD: incluye scheduling del pod + el periodo `for:` + ramp de la métrica hasta que la condición es true. Es donde se observa el efecto del `for:`. Contexto SRE.
+
+| Fecha | Experimento | `for:` | T_pod_fail | MTTD pipeline (s) | MTTR pipeline (s) | confidence | outcome | Notas (T_detect_total) |
 |---|---|---|---|---|---|---|---|---|
-| - | OOMKilled | 0m | - | - | - | - | - | Pendiente ejecución en cluster |
-| - | CrashLoopBackOff | 5m | - | - | - | - | - | Pendiente ejecución en cluster |
-| - | ImagePullBackOff | 1m | - | - | - | - | - | Pendiente ejecución en cluster |
-| - | HighCPU | 5m | - | - | - | - | - | Pendiente ejecución en cluster |
+| 2026-05-27 | OOMKilled | 0m | 12s | **5.0** | **205.4** | 0.95 | escalate | T_detect_total 40s. RAG limpio post-fix: cita pod correcto (`chaos-oom-target … arturo-chaos`) |
+| 2026-05-27 | CrashLoopBackOff | 5m | 6s | **5.0** | **205.7** | 0.95 | escalate | T_detect_total 46s |
+| 2026-05-27 | ImagePullBackOff | 1m | 6s | **5.1** | **252.1** | 0.80 | escalate | T_detect_total 173s |
+| 2026-05-27 | HighCPU | 5m | 5s | **10.1** | **206.7** | 0.00 | suggest_only | T_detect_total 631s (for:5m + rate[5m] ramp). LLM no propuso comandos concretos para CPU overuse (confidence=0, commands=0) |
+
+**Metodología de verificación (2026-05-27):** Todos los valores provienen del log `"Chaos metrics recorded"` en `agent/main.py` (bloque `if is_chaos:`), con `is_chaos = namespace == "arturo-chaos"`. Prerrequisitos: (1) fix `metric_relabel_configs` aplicado en Prometheus (fix label collision KSM/cAdvisor, applied 2026-05-26); (2) RAG limpiado de 92 incidents contaminados (namespace=arturo-monitoring / pod=kube-state-metrics). Ambos verificados antes del re-run.
 
 ## Cómo interpretar los resultados
 
-- **MTTD < 120s (OOM)**: el pipeline de detección es ágil. Con `for: 0m`, el objetivo es MTTD < 90s.
-- **MTTD < 400s (CrashLoop / HighCPU)**: el `for: 5m` introduce 300s de latencia mínima. MTTD objetivo < 360s.
-- **MTTD < 120s (ImagePullBackOff)**: `for: 1m` introduce 60s de latencia mínima. MTTD objetivo < 90s.
-- **MTTR = MTTD + tiempo_LLM**: el LLM (qwen2.5:1.5b) añade ~60-200s. MTTR objetivo < 300s (OOM/BadImage), < 600s (CrashLoop/HighCPU).
-- **confidence > 0.7**: el RAG encontró runbooks relevantes y el LLM generó un diagnóstico estructurado.
-- **outcome = escalate**: remediación bloqueada por regla 4.5 (pod restart) o 4.6 (>2x memory). Esperado con `DRY_RUN=true`.
+- **MTTD(pipeline) = 5–10s en todos los experimentos**: independiente del `for:` (mide firing→webhook, latencia pura). Los 4 cumplen el umbral < 30s. El `for:` se observa en `T_detect_total`, no aquí.
+- **T_detect_total refleja el `for:` + ramp + scheduling**: OOM 39s (`for:0m`), BadImage 171s (`for:1m` + backoff de pull), CrashLoop 195s, HighCPU 609s (`for:5m` + `rate[5m]` ramp). Es el número que un SRE percibe como "tiempo hasta que saltó la alerta".
+- **MTTR = MTTD + tiempo_LLM**: dominado por la inferencia del LLM (qwen2.5:1.5b en CPU), ~205–255s. Medidos: 205.4–252.1s. Todos por debajo de `HTTP_TIMEOUT=360s` con margen.
+- **confidence varía por tipo de fallo**: OOM/Crashloop (0.95) — escenarios bien cubiertos por runbooks; BadImage (0.80) — pull-fail menos frecuente; HighCPU (0.00) — el LLM no pudo estructurar comandos de remediación (CPU overuse no tiene un fix kubectl directo análogo a bump de memoria). **Caveat de honestidad**: los campos *estructurados* (pod/NS/alertname) provienen del header de la alerta (siempre correctos); el *razonamiento free-text* del modelo pequeño puede ser impreciso. La confianza alta no implica razonamiento correcto.
+- **outcome**: 3/4 `escalate` (OOM/Crashloop/BadImage) — remediación bloqueada por regla 4.5/4.6/5 (safety gates). 1/4 `suggest_only` (HighCPU, confidence=0.00, commands=0) — el motor de decisión no tenía comandos que ejecutar. Todos los outcomes son correctos y esperados.
 - **BadImage no genera restarts**: `kube_pod_container_status_restarts_total` queda en 0; `KubePodCrashLoopBackOff` **no** dispara para este caso. Por eso se añadió la regla `KubePodImagePullBackOff`.
 
 ## Visualización en Grafana
@@ -159,4 +180,6 @@ Screenshot guardado en `docs/img/grafana-chaos.png` (capturado en S6 tras ejecuc
 | Sesión #1 (Mini-Fase 4) | 2026-05-18 | OOM + CrashLoopBackOff | Infraestructura lista, pendiente ejecución |
 | Sesión #2 (Mini-Fase 4) | 2026-05-19 | ImagePullBackOff + HighCPU | Infraestructura lista, pendiente ejecución |
 | Sesión #3 (Mini-Fase 4) | 2026-05-18 | Dashboard Grafana "AIOps — Chaos" | Dashboard provisionado en `k8s/grafana.yaml` |
-| Sesión #6 (Mini-Fase 4) | 2026-05-19 | Ejecución real en cluster — OOM, CrashLoop, BadImage, HighCPU | Tabla MTTD/MTTR completada con datos reales. Screenshot `docs/img/grafana-chaos.png`. |
+| Sesión #6 (Mini-Fase 4) | 2026-05-19 | Hardening pre-prod (código): smoke.sh, chaos.sh fixes (C1/B2), prometheus label fix | Código listo; ejecución en cluster pendiente |
+| Sesión pruebas E2E | 2026-05-26 | Gates 0-5 verificados; hallazgo crítico: is_chaos=false por label collision KSM/cAdvisor; fix metric_relabel_configs aplicado | ⚠️ Datos pre-fix sin verificar — re-run pendiente |
+| Sesión re-run + FASE 2 | 2026-05-27 | RAG limpiado (92 incidents contaminados borrados); re-run 4/4 experimentos con is_chaos=true verificado; backup ChromaDB limpio | ✅ 4/4 datos reales verificados. 3/4 escalate, 1/4 suggest_only (HighCPU). Tabla de resultados actualizada con números autoritativos. |

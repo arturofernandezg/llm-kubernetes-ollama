@@ -182,6 +182,21 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
             target_label: pod
+        metric_relabel_configs:
+          # KSM emite métricas con namespace/pod del pod monitorizado, pero
+          # Prometheus los renombra a exported_* al colisionar con los target labels
+          # (KSM corre en arturo-monitoring). Restauramos los valores reales aquí
+          # para que las reglas de alerting y los joins con cAdvisor funcionen.
+          - source_labels: [exported_namespace]
+            regex: (.+)
+            target_label: namespace
+          - regex: exported_namespace
+            action: labeldrop
+          - source_labels: [exported_pod]
+            regex: (.+)
+            target_label: pod
+          - regex: exported_pod
+            action: labeldrop
 
       # Scrape de métricas de contenedor (CPU/memoria) via kubelet/cAdvisor
       - job_name: kubernetes-cadvisor

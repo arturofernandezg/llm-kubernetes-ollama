@@ -22,7 +22,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: agent
-        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:a4421f4
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:5aaf9f9
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
@@ -72,7 +72,7 @@ spec:
         - name: OLLAMA_MODEL
           value: "qwen2.5:1.5b"
         - name: HTTP_TIMEOUT
-          value: "300"
+          value: "360"
         - name: REMEDIATION_ENABLED
           value: "true"
         - name: REMEDIATION_DRY_RUN
@@ -102,6 +102,10 @@ spec:
               name: agent-secrets
               key: mm-command-token
               optional: true
+        - name: REDIS_HOST
+          value: "redis-svc"
+        - name: REDIS_PORT
+          value: "6379"
       volumes:
       - name: tmp
         emptyDir: {}

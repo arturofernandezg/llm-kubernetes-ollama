@@ -7,12 +7,12 @@
 
 ## Estructura modular (`agent/`)
 
-Versión actual: 0.5.0
+Versión actual: 0.6.0
 
 | Módulo | Responsabilidad | Fase |
 |---|---|---|
-| `main.py` | FastAPI app, endpoints, lifespan, middleware de logging, retry logic | 0+ |
-| `config.py` | Pydantic BaseSettings, setup de logging JSON estructurado | 0+ |
+| `main.py` | FastAPI app, endpoints, lifespan, middleware de logging, retry logic, dedup in-flight | 0+ |
+| `config.py` | Pydantic BaseSettings, setup de logging JSON estructurado, `redis_host/redis_port` | 0+ |
 | `schemas.py` | Modelos Pydantic v2 (alertas, extracción, diagnóstico) | 0+ |
 | `extraction.py` | PROMPT_TEMPLATE, `extract_json()` con 3 estrategias de fallback | 0 (legacy) |
 | `validation.py` | `validate_params()` — validación no-bloqueante contra valores GCP | 0 (legacy) |
@@ -20,7 +20,9 @@ Versión actual: 0.5.0
 | `mattermost.py` | Cliente HTTP async para Mattermost con retry/backoff | 1 |
 | `rag.py` | Cliente ChromaDB, ingesta (runbooks + incidents), query con embedding, construcción de queries enriquecidas | 2 |
 | `diagnosis.py` | Prompt AIOps contextual, `generate_diagnosis()`, parsing JSON estructurado del LLM, `_clamp()` | 2 |
-| `remediation.py` | Validation layer (classify/validate commands), decision engine (7 reglas cascada), executor stub (dry-run) | 3 |
+| `remediation.py` | Validation layer (classify/validate commands), decision engine (9 reglas cascada), executor dual-mode + rollback | 3 |
+| `escalation_store.py` | Store/get/delete/count async de escalaciones sobre `redis.asyncio`. Serializa a JSON con TTL nativo. Fail-open. | Mini-Fase 4 |
+| `utils.py` | `backoff_delay()` helper (exponential backoff compartido) | 3 |
 
 ## Endpoints
 
@@ -51,7 +53,7 @@ Versión actual: 0.5.0
 **Fase 3 (implementado)**:
 9. Validation layer evalúa commands contra whitelist/blacklist.
 10. Motor de decisión (9 reglas): `AUTO_REMEDIATE` | `ESCALATE` | `SUGGEST_ONLY`.
-11. Si `ESCALATE` con `safe_commands` no vacío → mensaje Mattermost con botones `[✅ Ejecutar]` / `[❌ Rechazar]` (via `send_escalation_with_buttons`). El `incident_id` se guarda en `PENDING_ESCALATIONS` (in-memory, TTL 60 min).
+11. Si `ESCALATE` con `safe_commands` no vacío → mensaje Mattermost con botones `[✅ Ejecutar]` / `[❌ Rechazar]` (via `send_escalation_with_buttons`). El `incident_id` y payload se persisten en **Redis** via `escalation_store.store_escalation()` (TTL 60 min). Si Redis no está disponible → mensaje degradado sin botones (fail-open).
 12. Si `AUTO_REMEDIATE` → ejecuta kubectl directamente (respeta `REMEDIATION_DRY_RUN`).
 13. Resultado (aprobado/rechazado/auto) se persiste en colección `incidents` de ChromaDB.
 
@@ -115,6 +117,38 @@ Respuesta JSON que Mattermost usa para actualizar el mensaje original y eliminar
 ```
 
 Si el `incident_id` no existe (desconocido o expirado tras 60 min) → responde con `ephemeral_text` visible solo al operador, sin ejecutar nada.
+
+## Mejoras Mini-Fase 4 (2026-05-27)
+
+### Dedup in-flight por alerta+pod
+
+`IN_FLIGHT_ALERTS: set[tuple[str,str,str]]` protegido por `_INFLIGHT_LOCK` (asyncio.Lock). En `handle_alert_webhook`, para cada alerta `firing`:
+- Key = `(alertname, namespace, pod)`
+- Si la key ya está en el set → log `"duplicate in-flight, skipping"` + incrementa `aiops_dedup_skipped_total{alertname}` + **no** programa BackgroundTask
+- Si no está → añade key, programa tarea normalmente
+- Al terminar `_process_alert_with_diagnosis` (en `finally`) → `IN_FLIGHT_ALERTS.discard(key)`
+
+Garantiza que una misma alerta no lanza dos llamadas LLM simultáneas. La segunda alerta se procesa normalmente una vez termina la primera.
+
+### Mensajes claros en timeout LLM
+
+En el `except` de diagnóstico (`_process_alert_with_diagnosis`), `httpx.TimeoutException` se distingue de errores genéricos:
+- Timeout → flag `_llm_timeout = True`
+- `_format_diagnosis_message(llm_timeout=True)` → mensaje Mattermost: `"⚠️ Diagnóstico no disponible: el LLM agotó el tiempo (HTTP_TIMEOUT=Xs)."` + alerta cruda
+- Fallo genérico → `"⚠️ Diagnóstico no disponible (error interno)."` + alerta cruda
+
+### Persistencia de escalaciones en Redis
+
+`PENDING_ESCALATIONS` dict in-memory eliminado. Reemplazado por `escalation_store.py` + `app.state.redis`:
+
+| Función | Acción |
+|---|---|
+| `store_escalation(id, payload, ttl, redis)` | `SET escalation:{id} <json> EX ttl` |
+| `get_escalation(id, redis)` | `GET escalation:{id}` → dict o None |
+| `delete_escalation(id, redis)` | `DEL escalation:{id}` |
+| `count_escalations(redis)` | `SCAN MATCH escalation:*` → count |
+
+Redis init en `lifespan`: `aioredis.Redis(host, port, decode_responses=True)` + `ping()`. Fail-open: si ping falla → `app.state.redis = None`, warning en startup. `_cleanup_expired_escalations()` eliminado (Redis TTL nativo lo gestiona). Helpers de serialización `_escalation_to_dict` / `_dict_to_escalation` en `main.py` (evitan circular import con `PendingEscalation`).
 
 ## Flujo de /extract
 

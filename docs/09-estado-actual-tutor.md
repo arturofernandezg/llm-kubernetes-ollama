@@ -153,4 +153,4 @@ Ver tabla de sesiones y secuencia completa de gates en [docs/07-roadmap.md § TO
 
 ---
 
-*Actualizado 2026-05-25: imagen `a4421f4` desplegada, DRY_RUN=false confirmado, 369 tests. Chaos OOM verificado E2E (MTTD≈46s, MTTR≈256s). Pendiente: experimentos bad-image + cpu + Gates 7-9 (Grafana screenshots + backup ChromaDB). Ver `docs_sesion/2026-05-25-pruebas-e2e.md §Estado de Gates`.*
+*Actualizado 2026-05-26: OOM re-run MTTD=63s MTTR≈235s ✅. Encontrado y corregido: bug stress-ng en cpu manifest (C2) + namespace label collision KSM/Prometheus (P1 — fix en `prometheus.yaml`). Pendiente: `kubectl apply -f k8s/prometheus.yaml && rollout restart prometheus` + re-run 4 chaos experiments con datos limpios + Gates 7-9. Ver `docs_sesion/2026-05-25-pruebas-e2e.md §Estado de Gates`.*

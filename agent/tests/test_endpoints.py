@@ -16,7 +16,8 @@ import pytest
 import main
 from main import (
     app, _format_diagnosis_message, _format_escalation_body, _extract_alert_meta,
-    PENDING_ESCALATIONS, PendingEscalation, _cleanup_expired_escalations,
+    PendingEscalation, _escalation_to_dict, _dict_to_escalation,
+    IN_FLIGHT_ALERTS, _INFLIGHT_LOCK,
     _process_alert_with_diagnosis,
     CHAOS_EXPERIMENT_COUNTER, CHAOS_MTTD_HISTOGRAM, CHAOS_MTTR_HISTOGRAM,
 )
@@ -29,6 +30,7 @@ from tests.helpers import (
     mock_http_client_with_retries,
     mock_chroma_client, mock_rag_context, mock_diagnosis_result,
     mock_diagnosis_auto_remediate, mock_diagnosis_escalate,
+    FakeRedis,
 )
 
 
@@ -667,18 +669,25 @@ def _make_pending_escalation(incident_id: str, ttl_minutes: int = 60) -> Pending
     )
 
 
+def _seed_redis(fake_redis: FakeRedis, incident_id: str, ttl_minutes: int = 60) -> None:
+    """Seed a PendingEscalation into FakeRedis as JSON (mirrors the store path in main.py)."""
+    esc = _make_pending_escalation(incident_id, ttl_minutes=ttl_minutes)
+    fake_redis.set_raw(f"escalation:{incident_id}", json.dumps(_escalation_to_dict(esc)))
+
+
 class TestActionCallbackEndpoint:
     """POST /webhook/action — callbacks de botones interactivos de Mattermost."""
 
     def setup_method(self):
-        PENDING_ESCALATIONS.clear()
+        self.fake_redis = FakeRedis()
+        app.state.redis = self.fake_redis
 
     def teardown_method(self):
-        PENDING_ESCALATIONS.clear()
+        app.state.redis = None
 
     def test_approve_executes_commands_and_returns_update(self, api_client):
         """Approve → execute_commands llamado, respuesta con 'update' que limpia botones."""
-        PENDING_ESCALATIONS["abc-123"] = _make_pending_escalation("abc-123")
+        _seed_redis(self.fake_redis, "abc-123")
 
         with patch("main.execute_commands", new_callable=AsyncMock, return_value="[DRY-RUN] kubectl describe") as mock_exec, \
              patch("main.ingest_incident", new_callable=AsyncMock):
@@ -693,11 +702,11 @@ class TestActionCallbackEndpoint:
         assert body["update"]["props"]["attachments"] == []
         assert "arturo" in body["update"]["message"]
         mock_exec.assert_called_once_with(["kubectl describe pod engine-0 -n prod"])
-        assert "abc-123" not in PENDING_ESCALATIONS
+        assert self.fake_redis._store.get("escalation:abc-123") is None
 
     def test_reject_does_not_execute_commands(self, api_client):
         """Reject → execute_commands NO llamado, mensaje de rechazo en update."""
-        PENDING_ESCALATIONS["abc-456"] = _make_pending_escalation("abc-456")
+        _seed_redis(self.fake_redis, "abc-456")
 
         with patch("main.execute_commands", new_callable=AsyncMock) as mock_exec, \
              patch("main.ingest_incident", new_callable=AsyncMock):
@@ -709,11 +718,10 @@ class TestActionCallbackEndpoint:
         assert r.status_code == 200
         body = r.json()
         assert "update" in body
-        # El mensaje ahora incluye el contexto completo + decisión en mayúsculas al final
         assert "RECHAZADA" in body["update"]["message"]
         assert "arturo" in body["update"]["message"]
         mock_exec.assert_not_called()
-        assert "abc-456" not in PENDING_ESCALATIONS
+        assert self.fake_redis._store.get("escalation:abc-456") is None
 
     def test_unknown_incident_id_returns_ephemeral_text(self, api_client):
         """incident_id no encontrado → ephemeral_text + update que limpia los botones."""
@@ -723,13 +731,12 @@ class TestActionCallbackEndpoint:
         assert r.status_code == 200
         body = r.json()
         assert "ephemeral_text" in body
-        # Ahora también devuelve update para limpiar los botones del mensaje original
         assert "update" in body
         assert body["update"]["props"]["attachments"] == []
 
     def test_expired_escalation_returns_ephemeral_text(self, api_client):
-        """Escalación con TTL expirado → ephemeral_text, execute_commands no llamado."""
-        PENDING_ESCALATIONS["old-xyz"] = _make_pending_escalation("old-xyz", ttl_minutes=-1)
+        """Escalación con TTL expirado (expires_at en el pasado) → ephemeral_text."""
+        _seed_redis(self.fake_redis, "old-xyz", ttl_minutes=-1)
 
         with patch("main.execute_commands", new_callable=AsyncMock) as mock_exec:
             r = api_client.post("/webhook/action", json={
@@ -743,7 +750,7 @@ class TestActionCallbackEndpoint:
 
     def test_approve_persists_outcome_to_chromadb(self, api_client):
         """Approve → ingest_incident llamado con outcome correspondiente."""
-        PENDING_ESCALATIONS["cb-789"] = _make_pending_escalation("cb-789")
+        _seed_redis(self.fake_redis, "cb-789")
 
         with patch("main.execute_commands", new_callable=AsyncMock, return_value="[DRY-RUN] done"), \
              patch("main.ingest_incident", new_callable=AsyncMock) as mock_ingest:
@@ -756,20 +763,20 @@ class TestActionCallbackEndpoint:
         _, kwargs = mock_ingest.call_args
         assert kwargs["metadata"]["outcome"] == "auto_remediate"
 
-    def test_expired_escalation_is_removed_from_pending(self, api_client):
-        """Expired TTL callback removes entry from PENDING_ESCALATIONS (no zombie entries)."""
-        PENDING_ESCALATIONS["expired-abc"] = _make_pending_escalation("expired-abc", ttl_minutes=-1)
+    def test_expired_escalation_is_removed_from_redis(self, api_client):
+        """Expired TTL callback deletes entry from Redis (no zombie entries)."""
+        _seed_redis(self.fake_redis, "expired-abc", ttl_minutes=-1)
 
         with patch("main.execute_commands", new_callable=AsyncMock):
             api_client.post("/webhook/action", json={
                 "context": {"action": "approve", "incident_id": "expired-abc"},
             })
 
-        assert "expired-abc" not in PENDING_ESCALATIONS
+        assert self.fake_redis._store.get("escalation:expired-abc") is None
 
     def test_duplicate_callback_same_incident_is_idempotent(self, api_client):
-        """Second callback for same incident_id → not-found response (entry already popped)."""
-        PENDING_ESCALATIONS["dup-123"] = _make_pending_escalation("dup-123")
+        """Second callback for same incident_id → not-found response (entry already deleted)."""
+        _seed_redis(self.fake_redis, "dup-123")
 
         with patch("main.execute_commands", new_callable=AsyncMock, return_value="[DRY-RUN] done"), \
              patch("main.ingest_incident", new_callable=AsyncMock):
@@ -788,8 +795,7 @@ class TestActionCallbackEndpoint:
         assert "ephemeral_text" in r2.json()
 
     def test_missing_hmac_returns_401_when_secret_set(self, api_client):
-        """When webhook_secret is set, missing hmac_token → 401."""
-        PENDING_ESCALATIONS["hmac-001"] = _make_pending_escalation("hmac-001")
+        """When webhook_secret is set, missing hmac_token → 401 (before Redis lookup)."""
         with patch.object(main.settings, "webhook_secret", "test-secret"):
             r = api_client.post("/webhook/action", json={
                 "context": {"action": "approve", "incident_id": "hmac-001"},
@@ -798,7 +804,6 @@ class TestActionCallbackEndpoint:
 
     def test_invalid_hmac_returns_401_when_secret_set(self, api_client):
         """When webhook_secret is set, wrong hmac_token → 401."""
-        PENDING_ESCALATIONS["hmac-002"] = _make_pending_escalation("hmac-002")
         with patch.object(main.settings, "webhook_secret", "test-secret"):
             r = api_client.post("/webhook/action", json={
                 "context": {"action": "approve", "incident_id": "hmac-002", "hmac_token": "bad-token"},
@@ -807,7 +812,7 @@ class TestActionCallbackEndpoint:
 
     def test_valid_hmac_passes_when_secret_set(self, api_client):
         """When webhook_secret is set, correct hmac_token → request processed normally."""
-        PENDING_ESCALATIONS["hmac-003"] = _make_pending_escalation("hmac-003")
+        _seed_redis(self.fake_redis, "hmac-003")
         token = make_hmac_token("hmac-003", "reject", "test-secret")
         with patch.object(main.settings, "webhook_secret", "test-secret"), \
              patch("main.ingest_incident", new_callable=AsyncMock):
@@ -818,40 +823,39 @@ class TestActionCallbackEndpoint:
 
 
 class TestCleanupExpiredEscalations:
-    """Tests directos de _cleanup_expired_escalations() (ahora async)."""
+    """Escalation cleanup is now delegated to Redis TTL.
 
-    def setup_method(self):
-        PENDING_ESCALATIONS.clear()
+    These tests verify the serialization round-trip (_escalation_to_dict / _dict_to_escalation)
+    that replaced the old in-memory _cleanup_expired_escalations() function.
+    """
 
-    def teardown_method(self):
-        PENDING_ESCALATIONS.clear()
+    def test_escalation_roundtrip_serialization(self):
+        """_escalation_to_dict → _dict_to_escalation produces identical object."""
+        original = _make_pending_escalation("roundtrip-001")
+        d = _escalation_to_dict(original)
+        restored = _dict_to_escalation(d)
 
-    @pytest.mark.asyncio
-    async def test_removes_expired_keeps_valid(self):
-        """Cleanup elimina expiradas y deja válidas intactas."""
-        PENDING_ESCALATIONS["expired"] = _make_pending_escalation("expired", ttl_minutes=-1)
-        PENDING_ESCALATIONS["valid"] = _make_pending_escalation("valid", ttl_minutes=60)
+        assert restored.incident_id == original.incident_id
+        assert restored.safe_commands == original.safe_commands
+        assert restored.expires_at == original.expires_at
+        assert restored.alert_item.labels == original.alert_item.labels
+        assert restored.diagnosis["confidence"] == original.diagnosis["confidence"]
 
-        await _cleanup_expired_escalations()
+    def test_escalation_to_dict_is_json_serializable(self):
+        """_escalation_to_dict output must be JSON-serializable for Redis storage."""
+        esc = _make_pending_escalation("json-check")
+        d = _escalation_to_dict(esc)
+        raw = json.dumps(d)
+        assert isinstance(raw, str)
+        assert "json-check" in raw
 
-        assert "expired" not in PENDING_ESCALATIONS
-        assert "valid" in PENDING_ESCALATIONS
-
-    @pytest.mark.asyncio
-    async def test_empty_dict_is_noop(self):
-        """Cleanup sobre dict vacío no lanza excepciones."""
-        await _cleanup_expired_escalations()
-        assert len(PENDING_ESCALATIONS) == 0
-
-    @pytest.mark.asyncio
-    async def test_all_expired_clears_dict(self):
-        """Todos expirados → dict vacío tras cleanup."""
-        PENDING_ESCALATIONS["e1"] = _make_pending_escalation("e1", ttl_minutes=-5)
-        PENDING_ESCALATIONS["e2"] = _make_pending_escalation("e2", ttl_minutes=-1)
-
-        await _cleanup_expired_escalations()
-
-        assert len(PENDING_ESCALATIONS) == 0
+    def test_dict_to_escalation_handles_expired_expires_at(self):
+        """Expired expires_at deserializes correctly (endpoint checks it explicitly)."""
+        esc = _make_pending_escalation("exp-check", ttl_minutes=-5)
+        d = _escalation_to_dict(esc)
+        restored = _dict_to_escalation(d)
+        from datetime import datetime, timezone
+        assert restored.expires_at < datetime.now(timezone.utc)
 
 
 # ── _extract_alert_meta ───────────────────────────────────────────────────────
@@ -948,13 +952,14 @@ class TestActionCallbackUnknownAction:
     """Unknown action in callback returns 400 (M6)."""
 
     def setup_method(self):
-        PENDING_ESCALATIONS.clear()
+        self.fake_redis = FakeRedis()
+        app.state.redis = self.fake_redis
 
     def teardown_method(self):
-        PENDING_ESCALATIONS.clear()
+        app.state.redis = None
 
     def test_unknown_action_returns_400(self, api_client):
-        PENDING_ESCALATIONS["m6-test"] = _make_pending_escalation("m6-test")
+        _seed_redis(self.fake_redis, "m6-test")
         r = api_client.post("/webhook/action", json={
             "user_name": "arturo",
             "context": {"action": "unknown_typo", "incident_id": "m6-test"},
@@ -963,7 +968,7 @@ class TestActionCallbackUnknownAction:
         assert "unknown_typo" in r.json()["detail"]
 
     def test_empty_action_returns_400(self, api_client):
-        PENDING_ESCALATIONS["m6-empty"] = _make_pending_escalation("m6-empty")
+        _seed_redis(self.fake_redis, "m6-empty")
         r = api_client.post("/webhook/action", json={
             "context": {"action": "", "incident_id": "m6-empty"},
         })
@@ -976,13 +981,14 @@ class TestActionCallbackApproveFailure:
     """execute_commands failure: endpoint returns 200 and logs ERROR in message (M7)."""
 
     def setup_method(self):
-        PENDING_ESCALATIONS.clear()
+        self.fake_redis = FakeRedis()
+        app.state.redis = self.fake_redis
 
     def teardown_method(self):
-        PENDING_ESCALATIONS.clear()
+        app.state.redis = None
 
     def test_execute_failure_returns_200_with_error_in_log(self, api_client):
-        PENDING_ESCALATIONS["m7-test"] = _make_pending_escalation("m7-test")
+        _seed_redis(self.fake_redis, "m7-test")
 
         with patch("main.execute_commands", new_callable=AsyncMock, side_effect=RuntimeError("cmd failed")), \
              patch("main.ingest_incident", new_callable=AsyncMock):
@@ -1020,7 +1026,7 @@ class TestProcessAlertFallbackException:
              patch("main.send_mattermost_alert", new_callable=AsyncMock,
                    side_effect=RuntimeError("mattermost also down")):
             # Should complete without raising — M10 guard logs the fallback failure
-            await _process_alert_with_diagnosis(alert, http_client, chroma_client)
+            await _process_alert_with_diagnosis(alert, http_client, chroma_client, redis_client=None)
 
     @pytest.mark.asyncio
     async def test_fallback_called_when_pipeline_fails(self):
@@ -1035,11 +1041,142 @@ class TestProcessAlertFallbackException:
 
         with patch("main.build_rag_query", side_effect=RuntimeError("pipeline boom")), \
              patch("main.send_mattermost_alert", new_callable=AsyncMock, return_value=True) as mock_send:
-            await _process_alert_with_diagnosis(alert, http_client, None)
+            await _process_alert_with_diagnosis(alert, http_client, None, redis_client=None)
 
         mock_send.assert_called_once()
         fallback_msg = mock_send.call_args[0][0]
         assert "TestAlert" in fallback_msg
+
+
+# ── In-flight dedup ───────────────────────────────────────────────────────────
+
+class TestInFlightDedup:
+    """Duplicate firing alerts for the same (alertname, namespace, pod) are skipped."""
+
+    def setup_method(self):
+        IN_FLIGHT_ALERTS.clear()
+
+    def teardown_method(self):
+        IN_FLIGHT_ALERTS.clear()
+        app.state.redis = None
+
+    def _make_firing_payload(self, alertname: str = "TestAlert", pod: str = "p", ns: str = "ns") -> dict:
+        return {
+            "status": "firing",
+            "receiver": "agent",
+            "alerts": [{
+                "status": "firing",
+                "labels": {"alertname": alertname, "pod": pod, "namespace": ns, "severity": "critical"},
+                "annotations": {"description": "test"},
+                "startsAt": "2026-01-01T00:00:00Z",
+            }],
+        }
+
+    def test_first_alert_is_queued(self, api_client):
+        """First firing alert: background task added, dedup key registered."""
+        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock):
+            r = api_client.post("/webhook/alert", json=self._make_firing_payload())
+        assert r.status_code == 200
+        assert ("TestAlert", "ns", "p") in IN_FLIGHT_ALERTS
+
+    def test_duplicate_alert_is_skipped(self, api_client):
+        """Second identical firing alert while first is in-flight → skipped."""
+        IN_FLIGHT_ALERTS.add(("TestAlert", "ns", "p"))
+        from prometheus_client import REGISTRY as REG
+        before = REG.get_sample_value("aiops_dedup_skipped_total", {"alertname": "TestAlert"}) or 0.0
+
+        r = api_client.post("/webhook/alert", json=self._make_firing_payload())
+
+        assert r.status_code == 200
+        after = REG.get_sample_value("aiops_dedup_skipped_total", {"alertname": "TestAlert"}) or 0.0
+        assert after == before + 1
+
+    def test_different_pod_same_alertname_is_not_deduped(self, api_client):
+        """Different pod → distinct dedup key → both processed."""
+        IN_FLIGHT_ALERTS.add(("TestAlert", "ns", "pod-A"))
+        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock):
+            r = api_client.post("/webhook/alert", json=self._make_firing_payload(pod="pod-B"))
+        assert r.status_code == 200
+        assert ("TestAlert", "ns", "pod-B") in IN_FLIGHT_ALERTS
+
+    @pytest.mark.asyncio
+    async def test_dedup_key_cleared_after_processing(self):
+        """After _process_alert_with_diagnosis completes, dedup key is removed."""
+        alert = AlertItem(
+            status="firing",
+            labels={"alertname": "ClearTest", "pod": "p1", "namespace": "prod", "severity": "critical"},
+            annotations={"description": "test"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+        IN_FLIGHT_ALERTS.add(("ClearTest", "prod", "p1"))
+        http_client = AsyncMock()
+
+        with patch("main.build_rag_query", side_effect=RuntimeError("pipeline boom")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(alert, http_client, None, redis_client=None)
+
+        assert ("ClearTest", "prod", "p1") not in IN_FLIGHT_ALERTS
+
+
+# ── LLM timeout messaging ─────────────────────────────────────────────────────
+
+class TestDiagnosisTimeout:
+    """When LLM times out, Mattermost receives a specific timeout message (not generic)."""
+
+    def _make_alert(self, alertname: str = "HighCPU") -> AlertItem:
+        return AlertItem(
+            status="firing",
+            labels={"alertname": alertname, "pod": "cpu-pod", "namespace": "prod", "severity": "warning"},
+            annotations={"description": "CPU usage is high"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+
+    def test_format_diagnosis_message_timeout_flag(self):
+        """llm_timeout=True produces message with 'LLM timeout' and HTTP_TIMEOUT value."""
+        alert = self._make_alert()
+        msg = _format_diagnosis_message(alert, diagnosis=None, llm_timeout=True)
+        assert "LLM timeout" in msg or "timeout" in msg.lower()
+        assert "CPU usage is high" in msg
+
+    def test_format_diagnosis_message_no_flag_uses_generic(self):
+        """llm_timeout=False (default) uses the generic 'Diagnosis unavailable' fallback."""
+        alert = self._make_alert()
+        msg = _format_diagnosis_message(alert, diagnosis=None, llm_timeout=False)
+        assert "unavailable" in msg or "sin descripcion" in msg.lower() or "CPU usage is high" in msg
+        assert "LLM timeout" not in msg
+
+    @pytest.mark.asyncio
+    async def test_timeout_exception_sets_llm_timeout_flag(self):
+        """httpx.TimeoutException during diagnosis → Mattermost receives timeout-specific message."""
+        import httpx
+        alert = self._make_alert()
+        http_client = AsyncMock()
+
+        with patch("main.build_rag_query", return_value="query"), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value={"runbooks": [], "incidents": [], "query": "q"}), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=httpx.TimeoutException("timed out")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_send:
+            await _process_alert_with_diagnosis(alert, http_client, None, redis_client=None)
+
+        mock_send.assert_called_once()
+        sent_msg = mock_send.call_args[0][0]
+        assert "timeout" in sent_msg.lower() or "LLM" in sent_msg
+
+    @pytest.mark.asyncio
+    async def test_non_timeout_exception_uses_generic_fallback(self):
+        """Non-timeout exception during diagnosis → generic unavailable message (no 'LLM timeout')."""
+        alert = self._make_alert()
+        http_client = AsyncMock()
+
+        with patch("main.build_rag_query", return_value="query"), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value={"runbooks": [], "incidents": [], "query": "q"}), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, side_effect=ValueError("bad response")), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_send:
+            await _process_alert_with_diagnosis(alert, http_client, None, redis_client=None)
+
+        mock_send.assert_called_once()
+        sent_msg = mock_send.call_args[0][0]
+        assert "LLM timeout" not in sent_msg
 
 
 # ── Chaos Engineering Metrics ─────────────────────────────────────────────────

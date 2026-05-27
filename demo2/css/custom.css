@@ -1,0 +1,325 @@
+/* AIOps TFG — tema académico MasOrange/dark */
+
+:root {
+  --orange:       #FF5A00;
+  --orange-light: #FF8040;
+  --orange-dim:   rgba(255,90,0,0.15);
+  --dark-bg:      #0d0d1a;
+  --card-bg:      #181828;
+  --card-border:  #2a2a45;
+  --text:         #e8e8f0;
+  --text-muted:   #9898b0;
+  --green:        #4caf82;
+  --red:          #e05555;
+  --blue:         #4f9cf9;
+  --code-bg:      #111122;
+}
+
+/* ── Reveal overrides ── */
+
+.reveal-viewport { background: var(--dark-bg); }
+.reveal          { font-family: 'Segoe UI', 'Inter', system-ui, sans-serif; }
+.reveal .slides  { text-align: left; }
+
+.reveal h1, .reveal h2, .reveal h3, .reveal h4 {
+  color: var(--text);
+  text-transform: none;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.reveal h1 { font-size: 2.0em; }
+.reveal h2 { font-size: 1.55em; border-bottom: 2px solid var(--orange); padding-bottom: 0.15em; margin-bottom: 0.5em; }
+.reveal h3 { font-size: 1.15em; color: var(--orange-light); }
+.reveal p  { color: var(--text); line-height: 1.55; }
+.reveal li { color: var(--text); margin-bottom: 0.35em; }
+.reveal a  { color: var(--orange-light); }
+
+.reveal code {
+  background: var(--code-bg);
+  color: #c8d8f8;
+  padding: 0.05em 0.35em;
+  border-radius: 4px;
+  font-size: 0.82em;
+}
+
+.reveal pre code {
+  background: var(--code-bg);
+  padding: 1em;
+  border-left: 3px solid var(--orange);
+  font-size: 0.62em;
+  line-height: 1.5;
+}
+
+/* slide number */
+.reveal .slide-number { color: var(--text-muted); font-size: 0.45em; }
+
+/* progress bar */
+.reveal .progress { background: var(--card-border); }
+.reveal .progress span { background: var(--orange); }
+
+/* ── Layout helpers ── */
+
+.cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5em; align-items: start; }
+.cols-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.2em; }
+.cols-2-3 { display: grid; grid-template-columns: 2fr 3fr; gap: 1.5em; align-items: start; }
+
+/* ── Card ── */
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 1.1em 1.3em;
+}
+
+.card-orange { border-left: 4px solid var(--orange); }
+.card-green  { border-left: 4px solid var(--green); }
+.card-blue   { border-left: 4px solid var(--blue); }
+.card-red    { border-left: 4px solid var(--red); }
+
+.card h3 { margin-top: 0; font-size: 1em; }
+.card p  { margin: 0; font-size: 0.78em; color: var(--text-muted); }
+.card ul { margin: 0.4em 0 0; padding-left: 1.2em; font-size: 0.78em; }
+
+/* ── Portada ── */
+
+.portada {
+  display: flex !important;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 640px;
+  padding: 2em 3em !important;
+}
+
+.portada .logo-badge {
+  background: var(--orange);
+  color: white;
+  font-size: 0.6em;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 0.3em 0.8em;
+  border-radius: 4px;
+  margin-bottom: 0.8em;
+  display: inline-block;
+}
+
+.portada h1 {
+  font-size: 2.4em !important;
+  line-height: 1.15;
+  margin: 0.1em 0 0.3em;
+}
+
+.portada .subtitle {
+  font-size: 1em;
+  color: var(--text-muted);
+  margin: 0 0 2em;
+  max-width: 26em;
+}
+
+.portada .meta {
+  display: flex;
+  gap: 2em;
+  font-size: 0.72em;
+  color: var(--text-muted);
+  border-top: 1px solid var(--card-border);
+  padding-top: 0.9em;
+  width: 100%;
+}
+
+.portada .meta strong { color: var(--text); }
+
+/* ── Highlight / pill ── */
+
+.pill {
+  display: inline-block;
+  background: var(--orange-dim);
+  color: var(--orange-light);
+  border: 1px solid var(--orange);
+  border-radius: 4px;
+  padding: 0.1em 0.5em;
+  font-size: 0.72em;
+  font-weight: 600;
+}
+
+.stat-big {
+  font-size: 2.2em;
+  font-weight: 700;
+  color: var(--orange);
+  display: block;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 0.7em;
+  color: var(--text-muted);
+}
+
+/* ── Flow diagram (arquitectura) ── */
+
+.flow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  font-size: 0.72em;
+}
+
+.flow-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  width: 100%;
+  justify-content: center;
+}
+
+.flow-box {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0.45em 0.9em;
+  text-align: center;
+  min-width: 9em;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.flow-box.highlight { border-color: var(--orange); color: var(--orange-light); }
+.flow-box.green     { border-color: var(--green);  color: var(--green); }
+.flow-box.red       { border-color: var(--red);    color: var(--red); }
+.flow-box.blue      { border-color: var(--blue);   color: var(--blue); }
+
+.flow-box small { display: block; color: var(--text-muted); font-weight: 400; font-size: 0.85em; margin-top: 0.1em; }
+
+.flow-arrow {
+  color: var(--text-muted);
+  font-size: 1.3em;
+  flex-shrink: 0;
+}
+
+.flow-arrow-down {
+  color: var(--text-muted);
+  font-size: 1.3em;
+  text-align: center;
+  width: 100%;
+  line-height: 1;
+  margin: 0.1em 0;
+}
+
+.flow-branch {
+  display: flex;
+  gap: 3em;
+  width: 100%;
+  justify-content: center;
+  margin-top: 0.3em;
+}
+
+.flow-branch-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3em;
+}
+
+.flow-branch-label {
+  font-size: 0.78em;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Table ── */
+
+.reveal table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.72em;
+}
+
+.reveal table th {
+  background: var(--card-bg);
+  color: var(--orange-light);
+  font-weight: 600;
+  padding: 0.5em 0.8em;
+  border: 1px solid var(--card-border);
+  text-align: left;
+}
+
+.reveal table td {
+  padding: 0.4em 0.8em;
+  border: 1px solid var(--card-border);
+  color: var(--text);
+  vertical-align: top;
+}
+
+.reveal table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+
+/* ── Util ── */
+
+.text-orange { color: var(--orange-light) !important; }
+.text-muted  { color: var(--text-muted) !important; }
+.text-green  { color: var(--green) !important; }
+.text-red    { color: var(--red) !important; }
+.text-blue   { color: var(--blue) !important; }
+.text-center { text-align: center !important; }
+.text-small  { font-size: 0.75em !important; }
+
+.mt-0 { margin-top: 0 !important; }
+.mt-1 { margin-top: 0.5em !important; }
+.mb-0 { margin-bottom: 0 !important; }
+
+.tag {
+  display: inline-block;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 0.1em 0.45em;
+  font-size: 0.65em;
+  color: var(--text-muted);
+  margin: 0.1em;
+}
+
+/* ── Phase timeline ── */
+.phase-bar {
+  display: flex;
+  gap: 0.4em;
+  font-size: 0.65em;
+  margin-bottom: 0.8em;
+  flex-wrap: wrap;
+}
+.phase-item {
+  padding: 0.25em 0.7em;
+  border-radius: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  color: var(--text-muted);
+}
+.phase-item.active {
+  background: var(--orange-dim);
+  border-color: var(--orange);
+  color: var(--orange-light);
+  font-weight: 600;
+}
+
+/* ── Section divider slide ── */
+.section-divider {
+  display: flex !important;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 640px;
+  padding: 3em !important;
+}
+.section-divider .num {
+  font-size: 6em;
+  font-weight: 800;
+  color: var(--orange-dim);
+  line-height: 1;
+  margin-bottom: 0.1em;
+}
+.section-divider h2 {
+  border: none !important;
+  font-size: 1.8em !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}

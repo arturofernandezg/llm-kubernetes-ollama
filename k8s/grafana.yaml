@@ -405,7 +405,7 @@ data:
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum by (le, experiment) (rate(aiops_chaos_mttd_seconds_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le, experiment) (aiops_chaos_mttd_seconds_bucket))",
               "legendFormat": "{{experiment}}",
               "refId": "A"
             }
@@ -437,7 +437,7 @@ data:
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum by (le, experiment) (rate(aiops_chaos_mttr_seconds_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le, experiment) (aiops_chaos_mttr_seconds_bucket))",
               "legendFormat": "{{experiment}}",
               "refId": "A"
             }
@@ -464,12 +464,12 @@ data:
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum by (le) (rate(aiops_chaos_mttd_seconds_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le) (aiops_chaos_mttd_seconds_bucket))",
               "legendFormat": "MTTD p95",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.50, sum by (le) (rate(aiops_chaos_mttd_seconds_bucket[5m])))",
+              "expr": "histogram_quantile(0.50, sum by (le) (aiops_chaos_mttd_seconds_bucket))",
               "legendFormat": "MTTD p50",
               "refId": "B"
             }

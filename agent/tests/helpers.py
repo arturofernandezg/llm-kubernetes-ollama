@@ -5,8 +5,46 @@ Importar desde aquí en los test files:
     from tests.helpers import VALID_PARAMS, mock_http_client
 """
 
+import fnmatch
 import json
 from unittest.mock import AsyncMock, MagicMock
+
+
+# ── FakeRedis ─────────────────────────────────────────────────────────────────
+
+class FakeRedis:
+    """In-memory Redis stub for testing.
+
+    All async methods mirror the redis.asyncio interface used by escalation_store.
+    ``set_raw`` is a sync helper to pre-seed data in test setup without awaiting.
+    """
+
+    def __init__(self):
+        self._store: dict[str, str] = {}
+
+    async def setex(self, key: str, ttl: int, value: str) -> None:
+        self._store[key] = value
+
+    async def get(self, key: str) -> str | None:
+        return self._store.get(key)
+
+    async def delete(self, key: str) -> None:
+        self._store.pop(key, None)
+
+    async def scan_iter(self, match: str = "*"):
+        for k in list(self._store.keys()):
+            if fnmatch.fnmatch(k, match):
+                yield k
+
+    async def ping(self) -> bool:
+        return True
+
+    async def aclose(self) -> None:
+        pass
+
+    def set_raw(self, key: str, value: str) -> None:
+        """Synchronous helper for test setup — bypass async for direct data seeding."""
+        self._store[key] = value
 
 
 # ── Datos de test ─────────────────────────────────────────────────────────────
