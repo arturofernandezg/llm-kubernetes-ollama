@@ -22,7 +22,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: agent
-        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:5aaf9f9
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:38d2c25
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
@@ -106,6 +106,8 @@ spec:
           value: "redis-svc"
         - name: REDIS_PORT
           value: "6379"
+        - name: HOME
+          value: "/tmp"
       volumes:
       - name: tmp
         emptyDir: {}

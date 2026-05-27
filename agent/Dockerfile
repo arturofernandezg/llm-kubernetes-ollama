@@ -10,6 +10,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# kubectl para ejecutar comandos de remediación (in-cluster auth via SA token montado)
+# Versión pineada al minor del server GKE (v1.35.x) para evitar skew de API.
+# Cloud Build tiene internet para el ADD; el pod en runtime no lo necesita (API server in-cluster).
+ADD https://dl.k8s.io/release/v1.35.0/bin/linux/amd64/kubectl /usr/local/bin/kubectl
+RUN chmod 0755 /usr/local/bin/kubectl
+
 # Copiar código fuente (todos los módulos Python)
 COPY *.py ./
 COPY runbooks/ ./runbooks/

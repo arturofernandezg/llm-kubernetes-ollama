@@ -13,7 +13,7 @@ python -m pytest tests/ -v
 
 | Archivo | Tests | Tipo | Qué verifica |
 |---|---|---|---|
-| `test_endpoints.py` | 74 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics, formatter, feedback loop, `/webhook/action` (approve/reject/TTL/idempotency/HMAC), fallback isolation |
+| `test_endpoints.py` | ~82 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics, formatter, feedback loop, `/webhook/action` (FakeRedis, approve/reject/HMAC), fallback isolation, `TestInFlightDedup` (×4), `TestDiagnosisTimeout` (×4) |
 | `test_extraction.py` | 11 | Unitario | extract_json: direct, markdown_block, regex con bracket counting, nested JSON, edge cases |
 | `test_tf_generator.py` | 16 | Unitario | safe_name, generate_terraform (template, defaults, labels) |
 | `test_validation.py` | 6 | Unitario | validate_params: regiones, instance types, campos null |
@@ -23,7 +23,8 @@ python -m pytest tests/ -v
 | `test_remediation.py` | 96 | Unitario | classify_command (SAFE/MUTATING/BLOCKED/UNKNOWN), validate_commands, decide_action (9 reglas incl. 4.5/4.6), execute_commands (dry-run + real mode mock), process_remediation, _get_safe_commands, zero_current_memory |
 | `test_ingest_runbooks.py` | 3 | Unitario | CLI `ingest_runbooks.run()`: exit 0 sin errores, exit 1 con errores, runbooks_dir correcto (mocks `ingest_all_runbooks`) |
 | `test_utils.py` | 5 | Unitario | `backoff_delay()`: primer intento = base, crecimiento exponencial, cap en max, base custom, edge case max == computed |
-| **Total** | **272** | | Actualizado 2026-05-12 (calidad sesiones #1-#8) |
+| `test_escalation_store.py` | 15 | Unitario | `store_escalation`, `get_escalation`, `delete_escalation`, `count_escalations` con FakeRedis; fail-open con Redis caído; flujo completo store→get→delete |
+| **Total** | **~394** | | Actualizado 2026-05-27 (FASE 2: Redis persistence + dedup + timeout) — pendiente `pytest` de verificación |
 
 **Nota**: los tests estaban originalmente en un único `test_main.py` (40 tests).
 Se refactorizaron y ampliaron progresivamente al añadir módulos:
@@ -42,11 +43,11 @@ Se refactorizaron y ampliaron progresivamente al añadir módulos:
 
 ### Ficheros de soporte
 
-- `helpers.py` — Constantes compartidas (`VALID_PARAMS`, `VALID_JSON_STR`) y factorías de mocks:
+- `helpers.py` — Constantes compartidas (`VALID_PARAMS`, `VALID_JSON_STR`), factorías de mocks y `FakeRedis` (stub in-memory de `redis.asyncio` para tests de `escalation_store` y `test_endpoints`):
   `mock_http_client()`, `mock_ollama_unreachable()`, `mock_ollama_model_not_loaded()`,
   `mock_http_client_with_retries(fail_count)`, `mock_diagnosis_auto_remediate()`,
-  `mock_diagnosis_escalate()`
-- `conftest.py` — Fixture `api_client` (TestClient con `asyncio.sleep` parcheado para evitar delays reales en tests de retry)
+  `mock_diagnosis_escalate()`, `FakeRedis`
+- `conftest.py` — Fixture `api_client` (TestClient con `asyncio.sleep` parcheado); `app.state.redis = None` (tests individuales configuran FakeRedis cuando necesitan)
 
 ## Cómo funciona el mocking
 

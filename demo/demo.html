@@ -159,8 +159,8 @@ td:first-child,th:first-child{text-align:left}
         </section>
 <section class="slide">
           <h2>Validación E2E con chaos engineering</h2>
-          <table><tr><th>Experimento</th><th>for:</th><th>MTTD pipeline</th><th>MTTR pipeline</th><th>conf.</th><th>outcome</th><th>T_detect</th></tr><tr><td>OOMKilled</td><td>0m</td><td>5.1 s</td><td>211.6 s</td><td>0.95</td><td><span class='pill warn'>escalate</span></td><td>39 s</td></tr><tr><td>CrashLoopBackOff</td><td>5m</td><td>5.0 s</td><td>214.0 s</td><td>0.95</td><td><span class='pill warn'>escalate</span></td><td>195 s</td></tr><tr><td>ImagePullBackOff</td><td>1m</td><td>5.1 s</td><td>273.5 s</td><td>0.85</td><td><span class='pill warn'>escalate</span></td><td>171 s</td></tr><tr><td>HighCPU</td><td>5m</td><td>10.0 s</td><td>226.7 s</td><td>0.98</td><td><span class='pill warn'>escalate</span></td><td>609 s</td></tr></table>
-          <p class="note"><b>MTTD pipeline</b> mide firing → webhook. <b>T_detect</b> incluye scheduling, periodo <code>for:</code> y ramp de la métrica. Los 4 experimentos escalan a humano: esperado por los gates de seguridad.</p>
+          <table><tr><th>Experimento</th><th>for:</th><th>MTTD pipeline</th><th>MTTR pipeline</th><th>conf.</th><th>outcome</th><th>T_detect</th></tr><tr><td>OOMKilled</td><td>0m</td><td>5.0 s</td><td>205.4 s</td><td>0.95</td><td><span class='pill warn'>escalate</span></td><td>40 s</td></tr><tr><td>CrashLoopBackOff</td><td>5m</td><td>5.0 s</td><td>205.7 s</td><td>0.95</td><td><span class='pill warn'>escalate</span></td><td>46 s</td></tr><tr><td>ImagePullBackOff</td><td>1m</td><td>5.1 s</td><td>252.1 s</td><td>0.80</td><td><span class='pill warn'>escalate</span></td><td>173 s</td></tr><tr><td>HighCPU</td><td>5m</td><td>10.1 s</td><td>204.5 s</td><td>0.50</td><td><span class='pill warn'>escalate</span></td><td>628 s</td></tr></table>
+          <p class="note"><b>MTTD pipeline</b> mide firing → webhook. <b>T_detect</b> incluye scheduling, periodo <code>for:</code> y ramp de la métrica. OOM/Crashloop/BadImage escalan con alta confianza. HighCPU escala con conf=0.50: el sistema es conservador cuando la certeza es baja.</p>
         </section>
 <section class="slide">
           <h2>Observabilidad del propio sistema</h2>
@@ -191,15 +191,15 @@ td:first-child,th:first-child{text-align:left}
           <div class="cols2">
             <div class="card red"><h3>Latencia del LLM</h3><p>qwen2.5:1.5b en CPU tarda ~205-270 s en algunos diagnósticos. El pipeline detecta rápido, pero el diagnóstico completo depende del modelo.</p></div>
             <div class="card red"><h3>Modelo pequeño</h3><p>Puede tener confianza alta con razonamiento textual imperfecto. Los campos estructurados vienen de la alerta; el texto libre requiere supervisión.</p></div>
-            <div class="card orange"><h3>RAG contaminable</h3><p>Un bug de labels guardó incidentes con pod/namespace incorrecto. Detectado y documentado; falta limpieza/versionado del store histórico.</p></div>
-            <div class="card orange"><h3>Escalaciones en memoria</h3><p>El estado de botones vive en memoria con TTL. Para producción real convendría Redis, Postgres o ChromaDB como backend persistente.</p></div>
+            <div class="card orange"><h3>RAG contaminable</h3><p>Un bug de labels guardó 92 incidentes con pod/namespace incorrecto. <b>Detectado, documentado y limpiado (2026-05-27)</b>. Riesgo residual: sin versionado del store histórico.</p></div>
+            <div class="card green"><h3>Persistencia con Redis</h3><p>Estado de botones persistido en Redis (TTL 60 min, fail-open si Redis cae). Sobrevive reinicios del pod agente. Limitación residual: Redis sin alta disponibilidad (single node).</p></div>
           </div>
         </section>
 <section class="slide">
           <h2>Próximos pasos</h2>
           <div class="cols3">
-            <div class="card green"><h3>Corto plazo</h3><ul><li>Deduplicación in-flight por alerta+pod.</li><li>Limpiar incidentes pre-fix del RAG.</li><li>Mejorar mensajes cuando hay timeout.</li></ul></div>
-            <div class="card blue"><h3>Medio plazo</h3><ul><li>Persistir escalaciones fuera de memoria.</li><li>Calibrar confidence con validaciones deterministas.</li><li>Ampliar dataset a 30-50 alertas.</li></ul></div>
+            <div class="card green"><h3>Completado (Mini-Fase 4)</h3><ul><li>✓ Deduplicación in-flight por alerta+pod.</li><li>✓ RAG limpiado: 92 incidentes con metadata incorrecta borrados.</li><li>✓ Mensajes diferenciados LLM timeout.</li><li>✓ Persistencia de escalaciones con Redis.</li></ul></div>
+            <div class="card blue"><h3>Medio plazo</h3><ul><li>Calibrar confidence con validaciones deterministas.</li><li>Redis HA (alta disponibilidad).</li><li>Ampliar dataset a 30-50 alertas.</li></ul></div>
             <div class="card orange"><h3>Línea futura</h3><ul><li>Modelo mayor o GPU.</li><li>Predicción proactiva desde Prometheus.</li><li>Integración con runbooks corporativos.</li></ul></div>
           </div>
         </section>
@@ -208,7 +208,7 @@ td:first-child,th:first-child{text-align:left}
           <p class="quote">He construido un pipeline AIOps completo sobre Kubernetes: observa, diagnostica con contexto, decide con reglas de seguridad, escala al operador y deja evidencia.</p>
           <div class="statrow">
             <div class="stat"><b>16</b><span>runbooks RAG</span></div>
-            <div class="stat"><b>369</b><span>tests</span></div>
+            <div class="stat"><b>392</b><span>tests</span></div>
             <div class="stat"><b>4</b><span>experimentos chaos</span></div>
             <div class="stat"><b>5-10s</b><span>MTTD pipeline</span></div>
           </div>

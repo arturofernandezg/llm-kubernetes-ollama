@@ -36,7 +36,9 @@ FastAPI Agent (/webhook/alert)
     ├─► 5. Validation Layer (whitelist de comandos, bloqueo de destructivos)
     │
     ├─► 6. Mattermost (ChatOps - notificación con diagnóstico + acciones sugeridas)
-    │       └── Botones: [Aprobar Remediación] [Rechazar] (Fase 3)
+    │       ├── Botones: [Aprobar Remediación] [Rechazar] (Fase 3)
+    │       └── Estado de escalaciones persistido en Redis (TTL 60 min, fail-open)
+    │               — sobrevive reinicios del pod agente (agent/escalation_store.py)
     │
     └─► 7. Kubernetes API Server (auto-patch si risk=low Y confianza alta)
             └── Feedback loop: si el fix funciona, se guarda en colección "incidents"
@@ -79,7 +81,8 @@ del error completo y busca directamente los documentos más similares en la base
 | Agente | Python 3.11, FastAPI, httpx, BackgroundTasks | `agent/` | 1 | 1 |
 | LLM (generación) | Ollama (qwen2.5:1.5b) | Pod K8s | 1 | 1 |
 | LLM (embeddings) | Ollama (nomic-embed-text, 768 dims) | Pod K8s (mismo) | — | 2 |
-| Vector DB | ChromaDB 0.4.24 (StatefulSet, PVC 10Gi) | Pod K8s | 1 | 2 |
+| Vector DB | ChromaDB 0.6.3 (StatefulSet, PVC 10Gi) | Pod K8s | 1 | 2 |
+| Redis | redis:7-alpine — estado de escalaciones (TTL 60 min, fail-open) | Pod K8s (`k8s/redis.yaml`, `redis-svc:6379`) | 1 | Mini-4 |
 | ChatOps | Mattermost (webhook + bot) + PostgreSQL | Pod K8s (`arturo-mattermost`) | 1 | 1 |
 | Prometheus | Standalone (manifiesto propio, sin operador) | Pod K8s (`arturo-monitoring`) | 1 | 1 |
 | kube-state-metrics | v2.13.0 — expone métricas K8s a Prometheus | Pod K8s (`arturo-monitoring`) | 1 | 1 |
@@ -281,8 +284,8 @@ Capa obligatoria entre el LLM y la ejecución:
 | **Clasificador supervisado** (DeBERTa, etc.) | Requiere >5k ejemplos etiquetados. Con <100 incidentes iniciales, embeddings + similitud generalizan mejor. Se reconsiderará en Fase 3+ si el volumen de incidentes lo justifica. |
 | **HDBSCAN clustering offline** | Sobreingeniería con <100 incidentes. Categorías manuales simples (OOMKilled, CrashLoopBackOff, HighCPU) son suficientes y más defendibles. |
 | **Fluentd/Vector para ingesta** | Prometheus + Alertmanager ya capturan los eventos. Añadir otro colector de logs duplica funcionalidad y consume recursos escasos en nodos spot. |
-| **Redis para caché** | Con el volumen actual (<10 alertas/hora estimadas), el overhead de otro pod no se justifica. Caché in-memory en el agente (dict Python con TTL) indexada por fingerprint de alerta (`alertname+namespace+pod`) es suficiente si se necesita — cubre embedding + RAG query. |
-| **Serverless (Cloud Run / Lambda)** | Incompatible con el diseño actual. `PENDING_ESCALATIONS` (botones MM) e `IN_FLIGHT_ROLLBACKS` (rollback evaluator) viven en memoria del proceso. Instancias serverless efímeras perderían ese estado entre invocaciones. Para serverless se requeriría externalizar ambos dicts a Redis/Firestore y migrar `asyncio.create_task` a Cloud Tasks. Post-TFM si se quiere escalar a multi-instancia. |
+| **Redis para caché de embeddings** | Caché de embeddings descartada (volumen bajo, <10 alertas/hora). **Redis sí fue adoptado** para persistir el estado de escalaciones interactivas entre reinicios del pod agente: `agent/escalation_store.py` (store/get/delete async, TTL 60 min via `SET … ex`, fail-open — si Redis no responde, la escalación se envía sin botones). `k8s/redis.yaml`: Deployment `redis:7-alpine` + Service `redis-svc:6379`. Desplegado en Mini-Fase 4 (2026-05-27). |
+| **Serverless (Cloud Run / Lambda)** | Incompatible con el diseño actual. `IN_FLIGHT_ROLLBACKS` (rollback evaluator) vive en memoria del proceso. Instancias serverless efímeras lo perderían entre invocaciones — requeriría externalizar a Redis/Firestore y migrar `asyncio.create_task` a Cloud Tasks. (Nota: `PENDING_ESCALATIONS` ya fue externalizado a Redis en Mini-Fase 4.) Post-TFM si se quiere escalar a multi-instancia. |
 | **Cola de mensajes entre Alertmanager y agente (NATS / Redis Streams)** | El webhook HTTP síncrono actual es *fire-and-forget*: si el agente está ocupado o se reinicia mientras procesa un diagnóstico de 78s, la alerta se pierde. Una cola daría at-least-once delivery y replay. Descartado para TFG (overkill), pero es el salto natural a producción real. NATS es la opción más ligera para K8s in-cluster. |
 | **API Gateway / Ingress externo** | Todo el tráfico actual es interno (Alertmanager + Mattermost callbacks usan ClusterIP FQDN). No hay exposición externa que justifique un Ingress controller hoy. Necesario cuando se exponga el agente a otros equipos o se configure el slash command de Mattermost desde fuera del cluster. |
 | **NetworkX para grafos de dependencia** | La K8s API ya expone ownerReferences. Útil como visualización en la tesis pero no como componente runtime. |

@@ -276,18 +276,20 @@ medidas en el pipeline real.
 
 ---
 
-## Mini-Fase 4 — Production Readiness (código S1-S6 listo, E2E pendiente)
+## Mini-Fase 4 — Production Readiness ✅ Completada (2026-05-27)
 
 Objetivo: pasar de "capacidad demostrada" a "evidencia medida" para defensa de TFG.
 
 | Sesión | Objetivo | Estado |
 |---|---|---|
-| #1 — Chaos Engineering #1 | OOMKilled + CrashLoopBackOff, harness reproducible | ✅ Infraestructura lista (2026-05-18) |
-| #2 — Chaos Engineering #2 | Deploy defectuoso + nodo saturado | ✅ Infraestructura lista (2026-05-19) |
-| #3 — Dashboard Chaos | Grafana "AIOps — Chaos" con MTTD/MTTR | ✅ Infraestructura lista (2026-05-18) — screenshot pendiente (requiere cluster) |
+| #1 — Chaos Engineering #1 | OOMKilled + CrashLoopBackOff, harness reproducible | ✅ Completada (2026-05-18) |
+| #2 — Chaos Engineering #2 | Deploy defectuoso + nodo saturado | ✅ Completada (2026-05-19) |
+| #3 — Dashboard Chaos | Grafana "AIOps — Chaos" con MTTD/MTTR | ✅ Completada (2026-05-18) — screenshot pendiente |
 | #4 — Slash command MM | `/aiops status`, `/aiops incidents`, `/aiops help` | ✅ Completada (2026-05-19) |
 | #5 — Rollback automático | Rollback si remediación no resuelve en N min | ✅ Completada (2026-05-19) |
-| #6 — Hardening pre-prod | smoke.sh, backup ChromaDB, flip `DRY_RUN=false` (acuerdo tutor) | ⏳ En ejecución (2026-05-19) |
+| #6 — Hardening pre-prod | smoke.sh, backup ChromaDB, flip `DRY_RUN=false` (acuerdo tutor) | ✅ Completada (2026-05-25) |
+| Pruebas E2E | Gates 0-9 en cluster real | ✅ Gates 0-7,9 completados (2026-05-27). Gate 8 (screenshot) pendiente. |
+| FASE 2 código | Redis persistence, dedup in-flight, timeout messages | ✅ Código implementado (2026-05-27). Deploy pendiente próxima sesión. |
 
 - [x] **Sesión #1** (2026-05-18): manifests `k8s/chaos/`, script `scripts/chaos.sh`, métricas `aiops_chaos_*`, doc `docs/12-chaos-engineering.md`.
 - [x] **Sesión #2** (2026-05-19): `k8s/chaos/chaos-bad-image.yaml` + `chaos-cpu-stress.yaml`, regla `KubePodImagePullBackOff` en `k8s/prometheus.yaml`, 2 casos nuevos en `scripts/chaos.sh`, 279 tests.
@@ -302,22 +304,19 @@ Objetivo: pasar de "capacidad demostrada" a "evidencia medida" para defensa de T
 
 *Fuente única de verdad. Todas las tareas pendientes por orden de prioridad.*
 
-### 1. Sesión de pruebas E2E Mini-Fase 4 (bloqueante)
+### 1. Deploy FASE 2 + cierre demo (próxima sesión)
 
-Ejecutar en secuencia en el cluster. Contexto completo: `docs_sesion/2026-05-19-hardening-06.md`.
+- [ ] **pytest** (~394 tests): `cd agent && pytest tests/ -v 2>&1 | tail -60`
+- [ ] **crane mirror Redis**: `crane copy --platform linux/amd64 redis:7-alpine europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/redis:7-alpine`
+- [ ] **Cloud Build**: `gcloud builds submit --config cloudbuild.yaml --substitutions=COMMIT_SHA=$(git rev-parse --short HEAD)`
+- [ ] **Repin imagen** en `k8s/deployment-agent.yaml` con nuevo SHA
+- [ ] **Apply K8s**: `kubectl apply -f k8s/redis.yaml -n arturo-llm-test && kubectl apply -f k8s/networkpolicy.yaml -n arturo-llm-test && kubectl apply -f k8s/deployment-agent.yaml -n arturo-llm-test`
+- [ ] **Verificar Redis**: `kubectl exec -n arturo-llm-test deploy/redis -- redis-cli ping`
+- [ ] **Smoke test**: `bash scripts/smoke.sh` → PASSED
+- [ ] **Actualizar `demo/demo.html`** slide 9 con números chaos 2026-05-27 verificados
+- [ ] **Gate 8 — Screenshot Grafana**: `kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring` → capturar dashboard "AIOps — Chaos"
 
-- [ ] **Gate 0 — pytest** (bloqueante): `pytest agent/tests/ -v --tb=short` — ~310 tests esperados en verde.
-- [ ] **Gate 1 — Cloud Build**: `gcloud builds submit --config cloudbuild.yaml --substitutions=COMMIT_SHA=$(git rev-parse --short HEAD)`
-- [ ] **Gate 2 — Deploy + rollout**: `kubectl apply -f k8s/deployment-agent.yaml -n arturo-llm-test && kubectl rollout status deployment/agent -n arturo-llm-test --timeout=180s` — imagen `:3fde9f8` desplegada.
-- [ ] **Gate 3 — Logs limpios**: `kubectl logs -n arturo-llm-test deploy/agent --tail=30` — startup OK, `REMEDIATION_ROLLBACK_ENABLED=true` visible.
-- [ ] **Gate 4 — Smoke test**: `bash scripts/smoke.sh` — debe terminar `=== SMOKE TEST PASSED ===` con exit 0.
-- [ ] **Gate 5 — Métricas rollback**: `kubectl exec -n arturo-llm-test deploy/agent -- curl -s localhost:8000/metrics | grep aiops_remediation_rollback_total`
-- [ ] **Gate 6 — Chaos experiments** (uno a uno, NO en paralelo): `bash scripts/chaos.sh oom`, `bash scripts/chaos.sh crashloop`, `bash scripts/chaos.sh bad-image`, `bash scripts/chaos.sh cpu`, `bash scripts/chaos.sh cleanup`. Anotar `T_pod_fail` y MTTD/MTTR por experimento.
-- [ ] **Gate 7 — Rellenar tabla MTTD/MTTR** en `docs/12-chaos-engineering.md` líneas 103-106 con valores reales.
-- [ ] **Gate 8 — Screenshots Grafana**: `kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring` → capturar `docs/img/grafana-chaos.png` y `docs/img/grafana-overview.png`.
-- [ ] **Gate 9 — Backup ChromaDB**: `kubectl exec -n arturo-llm-test chromadb-0 -- tar czf /tmp/chromadb-backup.tar.gz -C /chroma chroma && kubectl cp -n arturo-llm-test chromadb-0:/tmp/chromadb-backup.tar.gz ./chromadb-backup-$(date +%Y%m%d).tar.gz`
-
-**Cierre tras pasar todos los gates**: actualizar S6 → ✅ en roadmap, `09-estado-actual-tutor.md`, `CLAUDE.md`, `12-chaos-engineering.md`.
+~~**Gates completados (2026-05-26/27)**: 0-7, 9. Números chaos verificados en `docs/12-chaos-engineering.md`.~~
 
 ### 2. Tutor-gates (aprobados ✅ 2026-05-23 — código implementado 2026-05-25)
 
