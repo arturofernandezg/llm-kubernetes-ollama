@@ -71,7 +71,7 @@ Cada alerta pasa por las 9 reglas en este orden:
 - Mattermost en cluster con PostgreSQL propio
 - Escalaciones: mensaje con botones **✅ Aprobar / ❌ Rechazar** en Mattermost
 - Callback HMAC-SHA256 (`WEBHOOK_SECRET`) → POST `/webhook/action` → ejecuta o cancela
-- PENDING_ESCALATIONS dict en memoria del agente (TTL 60 min)
+- Escalaciones persistidas en **Redis** (`escalation_store.py`) — sobreviven reinicios del pod; fail-open si Redis no responde (pendiente deploy imagen nueva)
 - Retry exponential backoff si Mattermost no responde
 
 ### 5. Observabilidad completa
@@ -81,7 +81,7 @@ Cada alerta pasa por las 9 reglas en este orden:
 - **kube-state-metrics** — mirror a Artifact Registry (registry.k8s.io inaccesible sin Cloud NAT)
 
 ### 6. Tests
-- **369 tests** en 11 ficheros, todos pasando (<1s)
+- **~394 tests** en 12 ficheros (pendiente ejecución — nuevos tests en `test_escalation_store.py`, `TestInFlightDedup`, `TestDiagnosisTimeout`)
 - Mocking completo: no necesitan cluster ni LLM
 - CI/CD: Cloud Build ejecuta todos antes de construir imagen ✅ verificado 2026-05-25
 
