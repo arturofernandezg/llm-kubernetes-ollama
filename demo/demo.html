@@ -66,7 +66,7 @@ td:first-child,th:first-child{text-align:left}
           <h1>AIOps Infrastructure Agent</h1>
           <p class="subtitle">Diagnóstico y remediación asistida de incidencias en Kubernetes</p>
           <p class="quote">Una demo de prácticas orientada a empresa: detectar una alerta real, entenderla con contexto, decidir con seguridad y dejar evidencia medible.</p>
-          <div class="meta"><span>Arturo Fernández</span><span>2026-05-26</span><span>GKE · Prometheus · Ollama · ChromaDB · Mattermost</span></div>
+          <div class="meta"><span>Arturo Fernández</span><span>2026-05-26</span><span>GKE · Prometheus · Ollama · ChromaDB · Redis · Mattermost</span></div>
         </section>
 <section class="slide">
           <h2>El problema</h2>
@@ -99,6 +99,8 @@ td:first-child,th:first-child{text-align:left}
             <div class="card blue"><h3>Retrieval-first</h3><p>ChromaDB busca por similitud semántica en 16 runbooks e incidentes previos. Mejor encaje que un clasificador supervisado con pocos datos.</p></div>
             <div class="card green"><h3>Fail-open</h3><p>Si falla ChromaDB u Ollama, la alerta no se pierde: se notifica degradada. Perder una alerta es peor que perder contexto.</p></div>
             <div class="card red"><h3>Validation layer</h3><p>El LLM nunca ejecuta directamente. Whitelist/blacklist, reglas de riesgo, límites de memoria, bloqueo de acciones destructivas y escalado humano.</p></div>
+            <div class="card blue"><h3>Estado persistente (Redis)</h3><p>Las escalaciones con botones se persisten en Redis (<code>redis-svc</code>, TTL 60 min, fail-open). Sobreviven reinicios del pod agente.</p></div>
+            <div class="card orange"><h3>Ejecución con privilegio mínimo</h3><p>Al aprobar, los comandos se ejecutan vía <code>kubectl</code> in-cluster autenticado con el ServiceAccount. Role namespace-scoped: solo los verbos necesarios, sin ClusterRole.</p></div>
           </div>
         </section>
 <section class="slide">
@@ -109,7 +111,7 @@ td:first-child,th:first-child{text-align:left}
             <div class="card"><h3>Fase 2 · RAG</h3><p>ChromaDB, embeddings, ingesta de 16 runbooks y diagnóstico contextual con salida JSON estructurada.</p></div>
             <div class="card"><h3>Fase 3 · remediación segura</h3><p>Motor de decisión, ChatOps, botones Aprobar/Rechazar, HMAC, ejecución kubectl y feedback loop.</p></div>
             <div class="card"><h3>Mini-Fase 4 · readiness</h3><p>Rollback automático, slash command <code>/aiops</code>, chaos engineering, dashboards, hardening y pruebas E2E.</p></div>
-            <div class="card"><h3>Estado actual</h3><p>Demo end-to-end lista. Lo que queda es mejorar fiabilidad del modelo, deduplicación in-flight y limpieza del store histórico.</p></div>
+            <div class="card"><h3>Estado actual</h3><p>Demo end-to-end verificada en cluster. Lo que queda: calibrar la confianza del modelo, dar alta disponibilidad a Redis y ampliar el dataset de evaluación.</p></div>
           </div>
         </section>
 <section class="slide">
@@ -136,11 +138,11 @@ td:first-child,th:first-child{text-align:left}
           <div class="statrow">
             <div class="stat"><b>9</b><span>reglas de decisión</span></div>
             <div class="stat"><b>HMAC</b><span>callbacks Mattermost</span></div>
-            <div class="stat"><b>TTL</b><span>escalaciones pendientes</span></div>
+            <div class="stat"><b>Redis</b><span>escalaciones persistentes</span></div>
             <div class="stat"><b>Rollback</b><span>captura pre-patch</span></div>
           </div>
           <div class="cols2">
-            <div class="card green"><h3>Lo permitido</h3><ul><li>Comandos de diagnóstico seguros: <code>get</code>, <code>describe</code>, <code>logs</code>, <code>top</code>.</li><li>Remediación solo si riesgo bajo y confianza alta.</li><li>Persistencia del resultado para auditoría y aprendizaje.</li></ul></div>
+            <div class="card green"><h3>Lo permitido</h3><ul><li>Comandos de diagnóstico seguros: <code>get</code>, <code>describe</code>, <code>logs</code>, <code>top</code>.</li><li>Remediación solo si riesgo bajo y confianza alta.</li><li>Persistencia del resultado para auditoría y aprendizaje.</li><li>Al aprobar, los comandos se ejecutan vía kubectl in-cluster con RBAC mínimo.</li></ul></div>
             <div class="card red"><h3>Lo bloqueado o escalado</h3><ul><li>Comandos destructivos o desconocidos.</li><li>Reinicios/cambios estructurales sin condiciones seguras.</li><li>Aumentos de memoria excesivos.</li><li>Riesgo alto o baja confianza.</li></ul></div>
           </div>
         </section>
@@ -192,7 +194,7 @@ td:first-child,th:first-child{text-align:left}
             <div class="card red"><h3>Latencia del LLM</h3><p>qwen2.5:1.5b en CPU tarda ~205-270 s en algunos diagnósticos. El pipeline detecta rápido, pero el diagnóstico completo depende del modelo.</p></div>
             <div class="card red"><h3>Modelo pequeño</h3><p>Puede tener confianza alta con razonamiento textual imperfecto. Los campos estructurados vienen de la alerta; el texto libre requiere supervisión.</p></div>
             <div class="card orange"><h3>RAG contaminable</h3><p>Un bug de labels guardó 92 incidentes con pod/namespace incorrecto. <b>Detectado, documentado y limpiado (2026-05-27)</b>. Riesgo residual: sin versionado del store histórico.</p></div>
-            <div class="card green"><h3>Persistencia con Redis</h3><p>Estado de botones persistido en Redis (TTL 60 min, fail-open si Redis cae). Sobrevive reinicios del pod agente. Limitación residual: Redis sin alta disponibilidad (single node).</p></div>
+            <div class="card orange"><h3>Remediación acotada</h3><p>El lazo aprobar→ejecutar funciona, pero <code>kubectl top</code> necesita metrics-server (no instalado) y la remediación es namespace-scoped: alertas en <code>arturo-chaos</code> quedan fuera del scope del ServiceAccount de <code>arturo-llm-test</code>.</p></div>
           </div>
         </section>
 <section class="slide">

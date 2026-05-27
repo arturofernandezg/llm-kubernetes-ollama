@@ -1,6 +1,300 @@
-<!doctype html><html lang='es'><head><meta charset='utf-8'><title>AIOps Infrastructure Agent — Guion</title><style>
-    body{margin:0;background:#0b1017;color:#edf2f7;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.6;padding:5vh 8vw}
-    h1{color:#ff8a3d} h2{border-bottom:1px solid #293747;padding-bottom:.25em;margin-top:1.4em}
+<!doctype html><html lang='es'><head><meta charset='utf-8'><title>AIOps — Guion de Estudio</title><style>
+    body{margin:0;background:#0b1017;color:#edf2f7;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.7;padding:5vh 8vw}
+    h1{color:#ff8a3d;margin-bottom:.2em} h2{border-bottom:1px solid #293747;padding-bottom:.25em;margin-top:1.6em;color:#edf2f7}
+    .kicker{color:#ff5a00;font-weight:700;font-size:.8em;letter-spacing:.1em;text-transform:uppercase;margin-bottom:.3em}
     .block{background:#151d28;border:1px solid #293747;border-left:4px solid #ff5a00;border-radius:8px;padding:1em 1.2em;margin:.9em 0}
-    .q{color:#ff8a3d;font-weight:700;margin-top:1em}.a{color:#b6c2cf} code{background:#080d13;border:1px solid #293747;border-radius:5px;padding:.04em .3em;color:#ffd8bd}
-    </style></head><body><h1>Guion — AIOps Infrastructure Agent</h1><p>Diagnóstico y remediación asistida de incidencias en Kubernetes · Arturo Fernández · 2026-05-26</p><div class='block'><strong>Fallback si la demo falla:</strong> di que es una incidencia real del directo, cambia a capturas/logs y continúa el flujo. No intentes depurar en silencio delante del tutor.</div><div class='block'><h2>1. Apertura</h2><p>No empieces pidiendo perdón por ser tu primera demo. Di el objetivo: enseñar un sistema AIOps real en Kubernetes, construido durante las prácticas, y explicar decisiones como lo haría un equipo de plataforma.</p></div><div class='block'><h2>2. Problema</h2><p>Enmarca la necesidad: alertas, runbooks y decisión operacional están separados. La demo intenta unirlos sin dar permisos ciegos a un LLM.</p></div><div class='block'><h2>3. Arquitectura</h2><p>Recorre el flujo de izquierda a derecha. Repite tres ideas: todo in-cluster, fail-open y validation layer obligatoria.</p></div><div class='block'><h2>4. Demo en vivo</h2><p>Antes de romper nada, enseña estado estable: pods Running, Prometheus targets UP, dashboard. Luego inyecta un fallo controlado. Si se retrasa, usa capturas/logs como evidencia.</p></div><div class='block'><h2>5. Seguridad</h2><p>Explica que 4/4 escalate no es fracaso. Es la capa de seguridad haciendo lo correcto: riesgo alto implica humano en el loop.</p></div><div class='block'><h2>6. Evidencia</h2><p>Usa los datos sin venderlos de más: RAG mejora safety/confianza; chaos valida latencia pipeline; MTTR está dominado por CPU del LLM.</p></div><div class='block'><h2>7. Limitaciones</h2><p>Sé concreto: latencia, modelo pequeño, RAG contaminable, estado en memoria. Tu credibilidad sube si sabes decir dónde están los límites.</p></div><div class='block'><h2>8. Cierre</h2><p>Cierra con lo construido y lo aprendido: plataforma, observabilidad, seguridad operacional y una ruta clara de mejora.</p></div><h2>Preguntas probables</h2><p class='q'>¿Por qué escala a humano si hay remediación automática?</p><p class='a'>Porque los experimentos generan riesgo alto o cambios que pueden reiniciar pods. El motor está diseñado para auto-remediar solo casos de bajo riesgo y alta confianza; lo demás se aprueba en Mattermost.</p><p class='q'>¿Por qué usar un LLM local tan pequeño?</p><p class='a'>Por restricciones de entorno: datos dentro del cluster, sin API externa y sin coste por token. La contrapartida es latencia y menor calidad de razonamiento; por eso hay RAG y validación determinista.</p><p class='q'>¿Qué pasa si ChromaDB u Ollama fallan?</p><p class='a'>Fail-open: la alerta sigue notificándose. Si falla RAG se diagnostica sin contexto; si falla LLM se manda alerta cruda. La prioridad es no perder alertas.</p><p class='q'>¿Esto toca producción real?</p><p class='a'>Es un cluster GKE real del proyecto, no docker-compose, pero el scope es académico y los fallos se inyectan en un namespace aislado para no afectar sistemas productivos.</p><p class='q'>¿Qué demuestra la evaluación?</p><p class='a'>Que RAG mejora la seguridad y la confianza frente a zero-shot. No demuestra perfección estadística porque N=10 es pequeño; sirve como primera validación y base para ampliar dataset.</p><p class='q'>¿Cuál es la mayor deuda técnica?</p><p class='a'>Deduplicar diagnósticos in-flight y limpiar/versionar el store de ChromaDB tras el bug de labels. Ambas son mejoras claras antes de un piloto más serio.</p></body></html>
+    .frase{background:#1a2236;border:2px solid #ff8a3d;border-radius:8px;padding:.7em 1.1em;margin:.8em 0;font-size:1.04em;color:#ffd8bd;font-style:italic;line-height:1.5}
+    .frase::before{content:"💬 Frase clave: ";font-style:normal;font-weight:700;color:#ff8a3d;font-size:.85em;display:block;margin-bottom:.25em}
+    .dato{background:#0d1a0d;border:1px solid #2a5a2a;border-left:4px solid #4caf50;border-radius:6px;padding:.5em 1em;margin:.6em 0;color:#a8d8a8;font-size:.92em}
+    .dato::before{content:"📊 Datos: ";font-weight:700;color:#4caf50}
+    .matiz{background:#1a1520;border:1px solid #4a3060;border-left:4px solid #9c27b0;border-radius:6px;padding:.5em 1em;margin:.6em 0;color:#c9b8e0;font-size:.9em}
+    .matiz::before{content:"⚠️ Si preguntan: ";font-weight:700;color:#ab47bc}
+    .q{color:#ff8a3d;font-weight:700;margin-top:1.2em;font-size:1em} .a{color:#b6c2cf;margin-bottom:.5em}
+    code{background:#080d13;border:1px solid #293747;border-radius:5px;padding:.04em .3em;color:#ffd8bd}
+    table{border-collapse:collapse;width:100%;margin:.8em 0;font-size:.91em}
+    th{background:#1a2030;color:#ff8a3d;padding:.4em .8em;border:1px solid #293747;text-align:left}
+    td{padding:.35em .8em;border:1px solid #293747;vertical-align:top}
+    tr:nth-child(even) td{background:#111827}
+    .cheat{display:grid;grid-template-columns:1fr 1fr;gap:.6em}
+    .cheat-item{background:#0d1520;border:1px solid #293747;border-radius:6px;padding:.5em .9em}
+    .cheat-item b{color:#ff8a3d;display:block;font-size:.85em;margin-bottom:.15em}
+    ul{margin:.4em 0;padding-left:1.4em} li{margin:.2em 0}
+    .group-title{color:#93c5fd;font-size:.9em;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-top:1.4em;margin-bottom:.2em}
+    </style></head><body>
+
+<h1>Guion de Estudio — AIOps Infrastructure Agent</h1>
+<p style="color:#64748b">Diagnóstico y remediación asistida de incidencias en Kubernetes · Arturo Fernández · 2026-05-26<br>
+<em>Narración casi literal · ~2 min por slide · duración total ~20-30 min</em></p>
+
+<div class='block'><strong>🚨 Fallback si la demo en vivo falla:</strong> di que es una incidencia real del directo, cambia a las capturas/logs preparados y continúa el flujo. No intentes depurar en silencio delante del tutor. El sistema está desplegado en cluster real — los logs y screenshots son evidencia válida.</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>📌 Datos que debo saber de memoria</h2>
+<div class='block'>
+<div class='cheat'>
+  <div class='cheat-item'><b>Tests / runbooks / reglas</b>392 tests · 16 runbooks RAG · 6 reglas Prometheus · 9 reglas de decisión</div>
+  <div class='cheat-item'><b>RAG vs zero-shot</b>Confianza: 0.86 vs 0.63 (+37% relativo) · Safety RAG: 100% SAFE · precision@1 60%, precision@3 80%</div>
+  <div class='cheat-item'><b>Chaos engineering (4 experimentos)</b>MTTD pipeline: 5.0–10.1 s · MTTR pipeline: ~205 s (CPU del LLM) · OOM/Crashloop/BadImage conf 0.80–0.95 · HighCPU conf 0.50</div>
+  <div class='cheat-item'><b>LLM / prod</b><code>qwen2.5:1.5b</code> on-cluster · ~78-270 s/diagnóstico · <code>REMEDIATION_DRY_RUN=false</code> (tutor-gate, desde imagen <code>a4421f4</code>)</div>
+  <div class='cheat-item'><b>Stack</b>GKE europe-southwest1-a · FastAPI + Pydantic + httpx · Ollama · ChromaDB 0.6.3 · Redis 7-alpine · Mattermost</div>
+  <div class='cheat-item'><b>Frases ancla</b>"LLM nunca ejecuta directo" · "fail-open" · "namespace-scoped" · "medir antes de afirmar"</div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 1 — Portada</h2>
+<div class='block'>
+<div class='frase'>Un sistema AIOps real construido en prácticas sobre Kubernetes: detecta alertas, las entiende con contexto, decide con seguridad y deja evidencia medible.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"Buenos días. Este proyecto es un agente AIOps que construí durante las prácticas en MasOrange/Telecable. El objetivo era concreto: cuando Kubernetes dispara una alerta, el sistema tiene que entenderla con contexto —qué runbook aplica, qué pasó antes en incidentes similares— y decidir de forma segura qué hacer: auto-remediar si es bajo riesgo, o escalar a un humano si no lo es.</p>
+<p>Lo que voy a enseñar hoy no es un prototipo de notebook. Es un stack completo desplegado en un cluster GKE real, con alertas reales fluyendo, tests, CI/CD y observabilidad. El stack que veis en la portada es exactamente lo que está corriendo ahora mismo en cloud."</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 2 — El problema</h2>
+<div class='block'>
+<div class='frase'>El problema no es la alerta en sí: es que alertas, runbooks y contexto histórico viven separados del momento en que el operador los necesita.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"El punto de partida es una situación real en operaciones: llega una alerta de Kubernetes —un OOM, un CrashLoopBackOff— y el operador tiene que actuar rápido. Pero para actuar bien necesita tres cosas a la vez: saber qué está fallando exactamente, saber qué runbook aplica a ese tipo de fallo, y tener el criterio para decidir qué comando es seguro en ese momento concreto.</p>
+<p>Hoy esas tres cosas viven separadas. Los runbooks están en Confluence o en un repositorio. El histórico de incidentes está en tickets cerrados. La alerta llega por Slack o PagerDuty sin contexto. El operador tiene que sintetizarlo todo bajo presión.</p>
+<p>El sistema que construí une esas tres cosas en el mismo flujo de alerta. Y hay una restricción importante que condicionó todas las decisiones de diseño: el cluster no tiene acceso a internet —no hay Cloud NAT—, los recursos son limitados —CPU spot, sin GPU—, y los datos de las incidencias no pueden salir del entorno. Eso elimina directamente las APIs de LLM externas. Todo tiene que correr in-cluster."</p>
+
+<div class='matiz'>Si preguntan por las restricciones: son reales del entorno del proyecto (GKE sin Cloud NAT, nodos e2-standard-2 spot). No son restricciones académicas artificiales — condicionaron cada decisión de diseño.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 3 — Qué he construido</h2>
+<div class='block'>
+<div class='frase'>Seis componentes, un solo flujo de extremo a extremo verificado en cluster real.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"El flujo es de izquierda a derecha. Prometheus monitoriza el cluster con 6 reglas propias —OOMKilled, CrashLoopBackOff, ImagePullBackOff, HighMemory, HighCPU y TargetDown— y cuando una se dispara, Alertmanager la enruta al agente FastAPI.</p>
+<p>El agente recibe el webhook y lanza el pipeline: primero hace una búsqueda por similitud semántica en ChromaDB, recuperando los runbooks más relevantes y los incidentes previos similares. Con ese contexto, manda el prompt al LLM —Ollama con <code>qwen2.5:1.5b</code> corriendo in-cluster— que devuelve una respuesta JSON estructurada con el diagnóstico, los comandos propuestos, un nivel de confianza y un nivel de riesgo.</p>
+<p>Esa respuesta pasa por una capa de validación con 9 reglas deterministas —que voy a explicar en detalle más adelante— y esas reglas deciden si el sistema auto-remedia, escala a un humano, o simplemente sugiere sin actuar. El resultado llega a Mattermost con contexto y botones, y se persiste en ChromaDB como feedback para mejorar respuestas futuras.</p>
+<p>Funcionalmente: alertas reales procesadas, diagnóstico JSON con confianza y riesgo, decisión de remediación. Operativamente: métricas Prometheus propias, dashboards Grafana, feedback loop y CI/CD con tests antes de publicar imagen."</p>
+
+<div class='dato'>E2E verificado en cluster: KubePodOOMKilled → 78s diagnóstico → confidence=0.90 risk=high → escalate → botones ✅/❌ en Mattermost → mensaje actualizado in-place al aprobar/rechazar.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 4 — Arquitectura: decisiones importantes</h2>
+<div class='block'>
+<div class='frase'>Seis decisiones de diseño deliberadas, cada una con su porqué documentado y su alternativa descartada.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"Este slide es el que más me gusta porque muestra que las decisiones no fueron al azar. Déjame recorrerlas."</p>
+<p><strong>LLM local in-cluster.</strong> Usamos Ollama con <code>qwen2.5:1.5b</code> corriendo en el propio cluster. Tres razones: vendor lock-in cero —cambiar de modelo es cambiar una variable de entorno—, sin costes por token, y los datos de las incidencias no salen del cluster. El trade-off real es la latencia: ~78-270 segundos por diagnóstico en CPU. Lo asumimos porque la detección es rápida —MTTD de pipeline 5-10 segundos— y el cuello de botella está en la inferencia, no en el pipeline en sí.</p>
+<p><strong>Retrieval-first con ChromaDB.</strong> Con solo 16 runbooks, un clasificador supervisado sería sobreajuste con ese tamaño de dataset. La búsqueda por similitud semántica funciona bien para el objetivo: encontrar qué runbook aplica a este tipo de fallo y qué incidentes previos son similares.</p>
+<p><strong>Fail-open en todas las dependencias.</strong> Si falla ChromaDB, el diagnóstico continúa sin contexto. Si falla Ollama, se notifica la alerta cruda. La lógica es simple: perder contexto es aceptable; perder una alerta no.</p>
+<p><strong>Validation layer.</strong> El LLM nunca ejecuta directamente. Su salida siempre pasa por las 9 reglas deterministas antes de tocar la API de Kubernetes. Esto lo explico en detalle en el slide de seguridad.</p>
+<p><strong>Estado persistente con Redis.</strong> Las escalaciones con botones —el UUID del incidente y los comandos a ejecutar si el humano aprueba— se persisten en Redis con TTL de 60 minutos y comportamiento fail-open. Si Redis cae, la escalación continúa sin botones. Esto surgió en Mini-Fase 4: si el pod agente se reinicia entre que el usuario ve el mensaje y pulsa el botón, el estado en memoria se pierde. Redis resuelve eso.</p>
+<p><strong>Ejecución con privilegio mínimo.</strong> Cuando el humano aprueba, los comandos se ejecutan vía <code>kubectl</code> in-cluster usando el ServiceAccount del pod, que tiene un Role namespace-scoped —no un ClusterRole— con solo los verbos necesarios: get, list, patch deployments, logs, events. Sin acceso a otros namespaces, sin verbos destructivos."</p>
+
+<div class='matiz'>Si preguntan por Redis HA: es un nodo único en MVP. El estado sobrevive reinicios del pod agente, que es el caso práctico más frecuente. HA de Redis es la siguiente mejora documentada.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 5 — Fases del proyecto</h2>
+<div class='block'>
+<div class='frase'>Cinco fases construidas una sobre la anterior, todas verificadas en cluster antes de avanzar a la siguiente.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"El proyecto tiene una historia, y me parece importante contarla porque muestra cómo evolucionó la complejidad de forma incremental.</p>
+<p>Fase 0 es el punto de partida que me encontré: un agente que generaba Terraform a partir de texto. Lo conservo como base histórica pero el proyecto pivotó a AIOps sobre Kubernetes.</p>
+<p>Fase 1 construyó la observabilidad: Prometheus, Alertmanager, Grafana, kube-state-metrics, 6 reglas K8s y el webhook al agente FastAPI. Sin esta base de monitorización, no hay nada que diagnosticar.</p>
+<p>Fase 2 añadió el RAG: ChromaDB, embeddings con <code>nomic-embed-text</code>, ingesta de 16 runbooks y el pipeline de diagnóstico con salida JSON estructurada. Sin contexto, el LLM no puede hacer más que zero-shot.</p>
+<p>Fase 3 es la remediación segura: el motor de decisión con 9 reglas, los botones en Mattermost, HMAC en los callbacks y el feedback loop a ChromaDB.</p>
+<p>Mini-Fase 4 es el hardening: rollback automático si la remediación empeora el estado, slash command <code>/aiops</code>, chaos engineering para validar el pipeline entero, y todas las mejoras de robustez que incluyen Redis.</p>
+<p>El estado actual: la demo end-to-end está verificada en cluster. Lo que queda pendiente —y lo digo con honestidad en el próximo slide de limitaciones— es calibrar mejor la confianza del modelo con señales deterministas, dar alta disponibilidad a Redis, y ampliar el dataset de evaluación más allá de 10 alertas."</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 6 — Demo en vivo: lo que voy a enseñar</h2>
+<div class='block'>
+<div class='frase'>Primero enseño el sistema estable. Luego lo rompo de forma controlada. El objetivo es demostrar control y criterio, no magia en directo.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"Antes de inyectar ningún fallo, voy a enseñar el estado estable del sistema: los pods del agente corriendo en <code>arturo-llm-test</code>, los targets de Prometheus en UP —el agente, kube-state-metrics, cAdvisor— y el dashboard de Grafana con los contadores <code>aiops_*</code>.</p>
+<p>Después inyecto un fallo controlado en el namespace <code>arturo-chaos</code> —que está aislado del sistema productivo—. Puede ser un OOMKilled forzado, un CrashLoopBackOff, o un HighCPU. Prometheus detecta la condición, Alertmanager la enruta al webhook, y en unos segundos debería aparecer en Mattermost un mensaje con el diagnóstico y los botones.</p>
+<p>Lo que voy a explicar cuando aparezca el mensaje es por qué el sistema escala a humano en vez de actuar solo. No es un fallo del sistema: es exactamente el comportamiento correcto cuando el riesgo es alto o los comandos implican reiniciar un pod. El tutor puede ver en tiempo real que el motor de decisión está funcionando, que el diagnóstico tiene contexto del runbook correcto, y que los botones de aprobar/rechazar están ahí esperando una decisión humana."</p>
+
+<div class='matiz'>Si la demo falla: los logs reales del cluster están preparados como evidencia. Un MTTD de 5 segundos y un diagnóstico con confidence=0.90 son más convincentes que un demo en directo que falla por latencia.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 7 — Seguridad: por qué no es un LLM con kubectl libre</h2>
+<div class='block'>
+<div class='frase'>No es un LLM con kubectl libre: es kubectl acotado + humano en el loop + validation layer determinista.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"Este es el slide del que más orgulloso estoy, porque refleja la decisión de diseño más importante del proyecto. La pregunta que me hice desde el principio fue: ¿cómo doy al LLM capacidad de actuar sobre el cluster sin crear un riesgo mayor que el problema que quiero resolver?</p>
+<p>La respuesta tiene cuatro capas.</p>
+<p><strong>Primera capa: whitelist estricta de comandos.</strong> El LLM propone comandos, pero solo puede proponer los de una lista predefinida de safe commands: <code>kubectl get</code>, <code>describe</code>, <code>logs</code>, <code>top</code>, <code>rollout history</code>, y variantes de <code>set resources</code>, <code>scale</code> y <code>rollout restart</code> bajo condiciones. Cualquier otra cosa —<code>kubectl delete</code>, <code>drain</code>, <code>cordon</code>, comandos de otros binarios— es rechazada antes de llegar a ninguna regla.</p>
+<p><strong>Segunda capa: reglas deterministas.</strong> La regla 4.5 bloquea todo comando que implique reinicio de pod —scale, rollout restart, set resources— salvo una excepción concreta acordada con el tutor: ajuste de memoria si la confianza es ≥0.90, el riesgo es ≤medium, y el campo es exactamente <code>resources.limits.memory</code>. La regla 4.6 bloquea aumentos de memoria que superen el doble del valor actual. La regla 5 fuerza el escalado humano cuando el riesgo es alto, independientemente de la confianza.</p>
+<p><strong>Tercera capa: humano en el loop.</strong> Para comandos que implican cambios estructurales, el agente no actúa —escala a Mattermost con botones ✅ Aprobar / ❌ Rechazar. El callback está firmado con HMAC-SHA256: la firma cubre el UUID del incidente y la acción específica, así que no se puede fabricar un callback falso ni reutilizar la firma de 'rechazar' para aprobar.</p>
+<p><strong>Cuarta capa: ejecución con privilegio mínimo.</strong> Cuando el humano aprueba, <code>kubectl</code> se ejecuta in-cluster usando el ServiceAccount del pod, con un Role namespace-scoped. Sin ClusterRole, sin acceso a otros namespaces, sin verbos destructivos. El rollback automático captura el valor pre-patch y evalúa el estado del pod a los 5 minutos: si empeoró, revierte.</p>
+<p>Y todo esto está bajo <code>REMEDIATION_DRY_RUN=false</code> desde la imagen <code>a4421f4</code> —modo producción real, no simulación."</p>
+
+<div class='dato'>Estado actual verificado: regla 4.5 bloquea reinicio de pod · regla 4.6 bloquea memoria &gt;2× · HMAC-SHA256 en callbacks · kubectl in-cluster autenticado · DRY_RUN=false en cluster.</div>
+<div class='matiz'>Si preguntan por qué HMAC y no mTLS o JWT: mTLS requiere que Mattermost soporte certificados en outgoing webhooks (no los soporta en la versión self-hosted). JWT añadiría una autoridad emisora sin reducir el riesgo. HMAC es el estándar de la industria para webhooks: GitHub, Stripe, Alertmanager lo usan.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 8 — Evaluación offline: RAG vs zero-shot</h2>
+<div class='block'>
+<div class='frase'>RAG sube la confianza un 37% relativo y obtiene el 100% de comandos seguros. Zero-shot alucina un kubectl delete que la validation layer bloquea.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"Antes de hacer los experimentos de chaos engineering con el sistema completo, quería validar si el RAG realmente aportaba algo. Para eso construí un dataset offline de 10 alertas —OOMKilled, CrashLoopBackOff, ImagePullBackOff— y comparé el LLM con y sin contexto RAG en cuatro dimensiones: recuperación de runbooks, calidad de comandos, safety y confianza.</p>
+<p>Los números: RAG sube la confianza media de 0.63 a 0.86 —un 37% relativo—. Safety con RAG es 100% de comandos seguros. Sin RAG, el modelo alucina y propone un <code>kubectl delete</code> que, dicho sea de paso, la validation layer bloquea antes de ejecutar. Eso es exactamente para lo que está ahí.</p>
+<p>La recuperación de runbooks es del 60% en el primer resultado y del 80% en los tres primeros. Eso es razonable para 16 runbooks: el modelo de embeddings —<code>nomic-embed-text</code>— captura bien la similitud semántica entre descripciones de fallos.</p>
+<p>Una honestidad importante: N=10 es pequeño. Esto es una primera validación, no una evaluación estadística definitiva. El objetivo era tener una baseline medible antes de hacer chaos en cluster, y los números son lo suficientemente claros como para justificar mantener el RAG frente a zero-shot puro."</p>
+
+<div class='dato'>precision@1=60% · precision@3=80% · confianza RAG 0.86 vs 0.63 · safety RAG 100% · scripts en <code>agent/evaluation/</code></div>
+<div class='matiz'>Si preguntan por N=10: es la primera validación. Para un piloto real necesitaría al menos 30-50 alertas diversas. El dataset y los scripts están construidos para ampliarlo sin reescribir nada.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 9 — Validación E2E con chaos engineering</h2>
+<div class='block'>
+<div class='frase'>MTTD de pipeline entre 5 y 10 segundos para los cuatro tipos de fallo. MTTR dominado por la CPU del LLM, no por el pipeline en sí.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"Para validar el pipeline completo en condiciones reales diseñé 4 experimentos de chaos engineering en el namespace <code>arturo-chaos</code>: OOMKilled, CrashLoopBackOff, ImagePullBackOff y HighCPU. Cada experimento mide dos tiempos distintos que es importante no confundir.</p>
+<p>El MTTD de pipeline es el tiempo desde que Prometheus dispara hasta que el webhook llega al agente. Eso es lo que el sistema controla directamente: enrutamiento, networking, FastAPI. Ese número está entre 5 y 10 segundos para los cuatro experimentos.</p>
+<p>El T_detect incluye además el periodo <code>for:</code> de la regla Prometheus —cuánto tiempo tiene que mantenerse la condición antes de disparar— más el tiempo que tarda la métrica en alcanzar el umbral. Para OOM son 5 segundos adicionales; para HighCPU son 5 minutos más el ramp de CPU. Por eso T_detect varía de 40 segundos a 628 segundos.</p>
+<p>El MTTR de pipeline es de unos 205 segundos en promedio. Ese tiempo está completamente dominado por la inferencia del LLM en CPU —78-270 segundos—. La detección es rápida; el cuello de botella es el modelo.</p>
+<p>Un dato que me parece especialmente interesante es HighCPU con <code>confidence=0.50</code>. El modelo ve la alerta, tiene algo de contexto, pero la confianza es baja porque una CPU alta puede tener muchas causas. Y el sistema responde de forma correcta: escala al humano con <code>confidence=0.50</code> en vez de actuar por su cuenta. Eso no es un fallo —es el sistema siendo conservador cuando la certeza es baja, exactamente como está diseñado."</p>
+
+<div class='dato'>
+  <table>
+    <tr><th>Experimento</th><th>for:</th><th>MTTD pipeline</th><th>MTTR pipeline</th><th>Confianza</th><th>Outcome</th><th>T_detect</th></tr>
+    <tr><td>OOMKilled</td><td>0m</td><td>5.0 s</td><td>205.4 s</td><td>0.95</td><td>escalate</td><td>40 s</td></tr>
+    <tr><td>CrashLoopBackOff</td><td>5m</td><td>5.0 s</td><td>205.7 s</td><td>0.95</td><td>escalate</td><td>46 s</td></tr>
+    <tr><td>ImagePullBackOff</td><td>1m</td><td>5.1 s</td><td>252.1 s</td><td>0.80</td><td>escalate</td><td>173 s</td></tr>
+    <tr><td>HighCPU</td><td>5m</td><td>10.1 s</td><td>204.5 s</td><td>0.50</td><td>escalate</td><td>628 s</td></tr>
+  </table>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 10 — Observabilidad del propio sistema</h2>
+<div class='block'>
+<div class='frase'>Mido la capa IA, no solo el sistema base. Seis contadores propios que reflejan el comportamiento del agente, no métricas genéricas de Kubernetes.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"La mayoría de proyectos exponen métricas de infraestructura: CPU, memoria, pods running. Eso lo da kube-state-metrics gratis. Lo diferencial aquí es que el agente expone sus propias métricas de comportamiento IA: cuántas alertas procesó, cuántos diagnósticos tuvieron éxito, cuántas remediaciones fueron auto, cuántas fueron escalate, cuántas aprobadas por humano, cuántos feedbacks persistidos en ChromaDB y las métricas MTTD/MTTR de los experimentos chaos.</p>
+<p>Esos seis contadores <code>aiops_*</code> son los que aparecen en el dashboard de Grafana junto a la latencia p95 del webhook, el estado de los targets de scrape y las fases de los pods. El dashboard tiene 9 paneles y está construido en JSON dentro del ConfigMap —sin Grafana Operator, sin dependencias externas.</p>
+<p>El logging también es estructurado en JSON: cada request al webhook genera una línea con el alert name, namespace, pod, duración del diagnóstico, acción decidida y resultado. Eso hace que cualquier incidente sea reproducible a partir de los logs sin necesidad de reconstruir el estado.</p>
+<p>Y el feedback loop: cada incidente que el sistema procesa se persiste en ChromaDB con su outcome —escalate, auto, human_approved, human_rejected—. Eso significa que el RAG aprende de las decisiones pasadas. Si el mismo tipo de fallo se repite, el contexto que recupera el LLM incluye cómo se resolvió antes."</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 11 — Lo que aprendí construyéndolo</h2>
+<div class='block'>
+<div class='frase'>Lo más valioso fue aprender a documentar el porqué, no solo el qué, y a diseñar fallos controlados para validar el comportamiento real del sistema.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"En la parte técnica pura: Kubernetes sin operador —manifiestos YAML a mano, RBAC, NetworkPolicy, probes, PodDisruptionBudget, scheduling con nodeSelector y tolerations—. Prometheus y Alertmanager configurados desde cero sin operador Prometheus. FastAPI asíncrono con Pydantic v2, tests con mocking de subprocess, CI/CD con Cloud Build que bloquea el build si los tests fallan.</p>
+<p>Pero la parte que más me llevo es la de ingeniería. Primero: medir antes de afirmar. Antes de hacer el chaos engineering no sabía cuánto tardaba el pipeline. Ahora tengo números reales: 5-10 segundos de MTTD, 205 segundos de MTTR. Si no los hubiera medido, no habría podido decir si el sistema era bueno o malo.</p>
+<p>Segundo: documentar trade-offs, no esconder deuda. Cada decisión que tomé tiene su porqué en los docs. La regla 4.5 es conservadora por razones explícitas. El Redis es single-node por razones explícitas. Cuando el tutor pregunta 'por qué hiciste esto así', hay una respuesta documentada, no una improvisación.</p>
+<p>Tercero: diseñar fallos controlados. El chaos engineering no es sobre hacer que el sistema falle — es sobre validar que el sistema responde como se diseñó cuando el entorno falla.</p>
+<p>Y cuarto: priorizar seguridad operacional sobre automatización vistosa. El sistema podría ser más agresivo en la auto-remediación y quedar más impresionante en una demo. Pero el objetivo no era impresionar: era ser correcto en producción."</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 12 — Limitaciones honestas</h2>
+<div class='block'>
+<div class='frase'>Un sistema que reconoce sus límites con precisión vale más en producción que uno que promete de más.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"Este slide existe porque creo que la honestidad técnica es una señal de madurez de ingeniería, no de debilidad. Tengo cuatro limitaciones reales que quiero nombrar.</p>
+<p><strong>Latencia del LLM.</strong> <code>qwen2.5:1.5b</code> en CPU tarda entre 78 y 270 segundos por diagnóstico. El pipeline detecta la alerta en 5-10 segundos; el cuello de botella es la inferencia. Para un sistema donde MTTD es crítico en segundos y MTTR en minutos, eso es aceptable hoy. En un SLA de producción real necesitaría GPU o un modelo optimizado.</p>
+<p><strong>Modelo pequeño.</strong> La confianza alta no garantiza razonamiento textual perfecto. Los campos estructurados del JSON —el alertname, el namespace, el pod— vienen de la alerta directamente, son deterministas. El campo de texto libre —el razonamiento del diagnóstico— requiere supervisión humana. Por eso el feedback loop existe: para detectar patrones de error antes de que escalen.</p>
+<p><strong>RAG contaminable.</strong> En Mini-Fase 4 detectamos que 92 incidentes en ChromaDB tenían labels incorrectos —el namespace era 'arturo-monitoring' y el pod era 'kube-state-metrics' por un bug en la extracción de metadata. Los detectamos, los documentamos y los limpiamos el 2026-05-27. La deuda residual es que el store no tiene versionado: si se contamina de nuevo, hay que volver a borrar manualmente.</p>
+<p><strong>Remediación acotada.</strong> El lazo aprobar→ejecutar funciona, pero tiene dos límites conocidos: <code>kubectl top</code> necesita el API de metrics-server, que no está instalado en este cluster —esos comandos fallan con Forbidden, no bloquean el resto—. Y la remediación es namespace-scoped: el ServiceAccount de <code>arturo-llm-test</code> no tiene acceso a <code>arturo-chaos</code>, que es donde están los pods de los experimentos. Eso significa que los comandos de diagnóstico funcionan, pero los de remediación mutante afectarían solo al namespace del agente."</p>
+
+<div class='matiz'>Estos límites son todos documentados y tienen rutas de mejora claras. No son sorpresas: son deuda técnica reconocida, que es exactamente lo que la slide anterior dice que aprendí a hacer.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 13 — Próximos pasos</h2>
+<div class='block'>
+<div class='frase'>Mini-Fase 4 completada con cuatro mejoras verificadas. Ruta clara hacia producción real en tres horizontes.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"Mini-Fase 4 cerró cuatro cosas que estaban pendientes: la deduplicación in-flight —si llega la misma alerta dos veces mientras se está procesando, la segunda se descarta en vez de lanzar dos diagnósticos en paralelo—; la limpieza del store de ChromaDB —los 92 incidentes contaminados borrados—; los mensajes diferenciados cuando el LLM agota el tiempo —el operador sabe si el diagnóstico tardó demasiado o si falló por otro motivo—; y la persistencia de escalaciones en Redis, que ya hemos hablado.</p>
+<p>A medio plazo, tres líneas de trabajo: calibrar la confianza con señales deterministas —hoy el modelo puede devolver <code>confidence=0.90</code> con razonamiento textual imperfecto porque los campos estructurados son de la alerta; añadir validaciones cruzadas aumentaría la fiabilidad de ese número—. Alta disponibilidad de Redis —hoy es single-node; con Redis Sentinel o Redis Cluster el estado sobreviviría incluso a la caída del nodo Redis—. Y ampliar el dataset de evaluación a 30-50 alertas para tener estadísticas más robustas.</p>
+<p>En una línea futura más ambiciosa: un modelo más grande con GPU para reducir la latencia de inferencia, predicción proactiva desde métricas de Prometheus antes de que se dispare la alerta, e integración con runbooks corporativos reales de MasOrange."</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>SLIDE 14 — Cierre</h2>
+<div class='block'>
+<div class='frase'>No es solo una demo de IA. Es una pieza de plataforma con seguridad, observabilidad y criterios de operación — construida en prácticas con las mismas restricciones de un entorno real.</div>
+
+<p><strong>Lo que digo:</strong></p>
+<p>"Cierro con lo que creo que diferencia este proyecto de un prototipo de notebook.</p>
+<p>Primero, el stack es real: GKE en europe-southwest1-a, seis componentes corriendo en K8s, alertas reales fluyendo. No es docker-compose local.</p>
+<p>Segundo, las restricciones son reales: sin internet, sin GPU, sin Cloud NAT, nodos spot. Esas restricciones condicionaron todas las decisiones de diseño y por eso el diseño tiene sentido en un contexto empresarial real.</p>
+<p>Tercero, la seguridad es deliberada: RBAC con mínimo privilegio, NetworkPolicy entre componentes, SecurityContext no-root con filesystem de solo lectura, HMAC en los callbacks, 9 reglas deterministas que garantizan que el LLM nunca ejecuta directamente.</p>
+<p>Cuarto, hay evidencia medible: 392 tests, 16 runbooks RAG, 4 experimentos chaos, MTTD de pipeline de 5-10 segundos. No afirmo nada que no esté respaldado por un número real.</p>
+<p>El mensaje que me llevo de este proyecto —y que intenté transmitir en cada decisión— es que automatización sin control no es valor: es riesgo. El valor está en automatizar lo que se puede hacer bien con seguridad, y escalar al humano lo que no."</p>
+
+<div class='dato'>392 tests · 16 runbooks RAG · 6 reglas Prometheus · 9 reglas de decisión · 4 experimentos chaos · MTTD pipeline 5-10 s · DRY_RUN=false en cluster desde 2026-05-25</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>Preguntas probables — Q&amp;A</h2>
+
+<div class='group-title'>LLM: fiabilidad y alucinaciones</div>
+
+<p class='q'>¿Y si el LLM alucina un comando destructivo?</p>
+<p class='a'>El LLM nunca ejecuta directamente. Su salida pasa por una whitelist de safe commands —solo <code>kubectl get/describe/logs/top</code> y variantes acotadas de <code>set resources/scale/rollout</code>— y por 9 reglas deterministas. Un comando alucinado fuera de la whitelist es rechazado antes de tocar la API de Kubernetes. En el experimento offline, zero-shot alucinó un <code>kubectl delete</code> que fue bloqueado exactamente así.</p>
+
+<p class='q'>¿Por qué qwen2.5:1.5b y no GPT-4 o Claude?</p>
+<p class='a'>Tres razones de diseño: vendor lock-in cero —Ollama on-cluster, cambiar de modelo es una variable de entorno—; sin costes de API ni latencia de red, crítico en un cluster sin Cloud NAT; y suficiencia para la tarea —el sistema necesita extracción estructurada de JSON con campos predefinidos, no razonamiento complejo abierto. La demo E2E verificó <code>confidence=0.90</code> en cluster real con ese modelo.</p>
+
+<p class='q'>¿Cómo medirías la calidad del LLM en producción?</p>
+<p class='a'>Feedback loop a ChromaDB: cada incidente persiste con su <code>outcome</code> —escalate, auto, human_approved, human_rejected—. En Prometheus: <code>aiops_remediation_total{action="..."}</code>. Un spike de <code>escalate</code> o <code>human_rejected</code> señala degradación. Con más de 100 incidentes añadiría evaluación offline automática con el dataset ya construido en <code>agent/evaluation/</code>.</p>
+
+<div class='group-title'>RAG: calidad del contexto</div>
+
+<p class='q'>¿Por qué ChromaDB y no Pinecone, pgvector o Weaviate?</p>
+<p class='a'>Restricción operativa principal: el cluster no tiene internet, lo que elimina Pinecone. pgvector requería añadir PostgreSQL al stack. Weaviate es más complejo de operar para 16 runbooks. ChromaDB es un StatefulSet single-binary con PVC, cliente Python trivial, sin configuración adicional. Para el scope del proyecto es la solución más simple que funciona.</p>
+
+<p class='q'>¿Cómo evitas que runbooks obsoletos contaminen las respuestas?</p>
+<p class='a'>Decisión deliberada: curación manual de 16 runbooks como primera línea de defensa. <code>ingest_runbooks.py</code> es idempotente —upsert por <code>doc_id</code>—, actualizar un runbook es re-ejecutar el CLI con el fichero corregido, y los runbooks versionados en git son el source of truth. En producción real añadiría un campo <code>last_reviewed_at</code> con alerta si supera N días sin revisión.</p>
+
+<div class='group-title'>Seguridad</div>
+
+<p class='q'>¿Y si alguien compromete WEBHOOK_SECRET?</p>
+<p class='a'>El secreto vive en un K8s Secret, nunca en código ni en variable literal. Rotación: actualizar el Secret + rolling restart. El HMAC no protege tráfico externo —solo callbacks de Mattermost dentro del cluster—. Blast radius limitado: el atacante necesitaría el UUID del incidente, la acción exacta y estar dentro del TTL de 60 minutos para fabricar un callback válido.</p>
+
+<p class='q'>¿Por qué HMAC y no mTLS o JWT?</p>
+<p class='a'>mTLS requiere que Mattermost soporte certificados en outgoing webhooks —no los soporta en la versión self-hosted—. JWT añadiría infraestructura de autoridad emisora sin reducir el riesgo: el tráfico ya está restringido a VPC + NetworkPolicy K8s. HMAC es el estándar de la industria para webhooks —GitHub, Stripe, Alertmanager lo usan—: simple, auditable, sin dependencias adicionales.</p>
+
+<div class='group-title'>Producción y operaciones</div>
+
+<p class='q'>¿Esto está en producción real de MasOrange/Telecable?</p>
+<p class='a'>El cluster es real —GKE <code>ai-infra-agent</code>, europe-southwest1-a— y el stack completo está desplegado. No es docker-compose local. Sin embargo, el scope es académico: Prometheus monitoriza el propio cluster del proyecto, no infraestructura de producción de MasOrange. Las alertas son generadas por pods de prueba reales. Eso valida la arquitectura end-to-end sin afectar sistemas productivos.</p>
+
+<p class='q'>¿El agente es un single point of failure?</p>
+<p class='a'>El Deployment tiene readiness/liveness probes —Kubernetes reinicia el pod si falla— y PodDisruptionBudget. El estado de escalaciones con botones vive en Redis: un restart del pod agente <strong>no pierde</strong> escalaciones pendientes —verificado en cluster: Redis PONG + pod-restart + botón ✅ sigue funcionando—. La deuda residual: <code>IN_FLIGHT_ROLLBACKS</code> aún en memoria del proceso, aceptable en MVP.</p>
+
+<div class='group-title'>Alternativas y competidores</div>
+
+<p class='q'>¿Por qué no Robusta, KEDA, Argo Rollouts o PagerDuty con runbooks tradicionales?</p>
+<p class='a'>La aportación diferencial es la capa LLM contextual sobre runbooks. Robusta y Argo ejecutan acciones predefinidas —trigger → action determinista—. PagerDuty + runbooks requiere un humano que lea y decida. Este sistema hace algo distinto: explica el diagnóstico, justifica la acción propuesta con contexto recuperado, y persiste el resultado como feedback para mejorar respuestas futuras. KEDA y Robusta son complementarios, no competidores.</p>
+
+<div class='group-title'>Deuda técnica reconocida</div>
+
+<p class='q'>¿Por qué estuvo en DRY_RUN=true tanto tiempo si la Fase 3 está completa?</p>
+<p class='a'>Condición pactada con el tutor: la regla 4.5 bloqueaba todo reinicio de pod hasta confirmar las excepciones. La excepción se implementó el 2026-05-25 —<code>_set_resources_memory_exception</code>: permite <code>set resources</code> sobre memoria si <code>confidence ≥ 0.90</code>, <code>risk ≤ medium</code> y el campo es <code>resources.limits.memory</code>—. Con esa excepción el tutor aprobó <code>REMEDIATION_DRY_RUN=false</code>. Actualmente <code>false</code> desde imagen <code>a4421f4</code> y verificado E2E.</p>
+
+<p class='q'>¿Por qué la regla 4.5 bloquea TODO reinicio, incluso en clusters resilientes?</p>
+<p class='a'>Decisión deliberada: en un cluster académico con recursos limitados y sin SLA definido, preferimos escalate → humano decide sobre auto-actuar → consecuencias imprevistas. Un reinicio en el momento incorrecto —única réplica activa, test en curso— causa más disrupción que esperar 30 segundos a que un humano apruebe. Los defaults conservadores son el safety net frente a valores razonables-pero-riesgosos propuestos por el LLM.</p>
+
+</body></html>
