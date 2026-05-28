@@ -10,7 +10,7 @@
 | Fase 1 (Observabilidad) | Prometheus standalone + Alertmanager, webhook, Mattermost ChatOps | En curso (~95%) |
 | Fase 2 (RAG) | ChromaDB dual-collection, embeddings in-cluster, diagnóstico contextual | **Completa** (2026-04-23) |
 | Fase 3 (Remediación) | Auto-patch K8s API, validation layer, feedback loop cerrado | **Completa** (2026-05-12) |
-| Mini-Fase 4 (Production Readiness) | Chaos engineering, métricas reales, slash command MM, rollback, hardening | En curso (código S1-S6 listo, E2E pendiente) |
+| Mini-Fase 4 (Production Readiness) | Chaos engineering, métricas reales, slash command MM, rollback, hardening | ✅ Completa (2026-05-27) — solo Gate 8 (screenshots Grafana) pendiente |
 
 ---
 
@@ -288,15 +288,15 @@ Objetivo: pasar de "capacidad demostrada" a "evidencia medida" para defensa de T
 | #4 — Slash command MM | `/aiops status`, `/aiops incidents`, `/aiops help` | ✅ Completada (2026-05-19) |
 | #5 — Rollback automático | Rollback si remediación no resuelve en N min | ✅ Completada (2026-05-19) |
 | #6 — Hardening pre-prod | smoke.sh, backup ChromaDB, flip `DRY_RUN=false` (acuerdo tutor) | ✅ Completada (2026-05-25) |
-| Pruebas E2E | Gates 0-9 en cluster real | ✅ Gates 0-7,9 completados (2026-05-27). Gate 8 (screenshot) pendiente. |
-| FASE 2 código | Redis persistence, dedup in-flight, timeout messages | ✅ Código implementado (2026-05-27). Deploy pendiente próxima sesión. |
+| Pruebas E2E | Gates 0-9 en cluster real | ✅ Gates 0-7,9 completados (2026-05-27). Gate 8 (screenshots Grafana) pendiente captura manual. |
+| FASE 2 código | Redis persistence, dedup in-flight, timeout messages | ✅ Implementado y desplegado (2026-05-27, imagen `fd37a5d`). Gates A0-A9 ✅. |
 
 - [x] **Sesión #1** (2026-05-18): manifests `k8s/chaos/`, script `scripts/chaos.sh`, métricas `aiops_chaos_*`, doc `docs/12-chaos-engineering.md`.
 - [x] **Sesión #2** (2026-05-19): `k8s/chaos/chaos-bad-image.yaml` + `chaos-cpu-stress.yaml`, regla `KubePodImagePullBackOff` en `k8s/prometheus.yaml`, 2 casos nuevos en `scripts/chaos.sh`, 279 tests.
 - [x] **Sesión #3** (2026-05-18): Dashboard "AIOps — Chaos" en `k8s/grafana.yaml` (ConfigMap `grafana-dashboard-aiops`). 7 paneles: MTTD/MTTR p95, MTTD p50/p95 global, pie outcome, stat total, ALERTS, tabla histórico.
 - [x] **Sesión #4** (2026-05-19): `POST /webhook/command` — slash command `/aiops` (status/incidents/help). Schema `MattermostCommandPayload`, config `MM_COMMAND_TOKEN` (fail-open), ~15 tests. K8s env en `deployment-agent.yaml`.
 - [x] **Sesión #5** (2026-05-19): Rollback automático. `ExecuteResult` dataclass (frozen) + `execute_commands() → list[ExecuteResult]`. Helpers `capture_pre_patch_value()`, `check_pod_health()`, `revert_patch()`. `IN_FLIGHT_ROLLBACKS` registry + `asyncio.create_task`. Counter `aiops_remediation_rollback_total{outcome}` (6 outcomes). ~310 tests.
-- [ ] **Sesión #6** (2026-05-19): Hardening pre-prod. Artefactos entregados: `scripts/smoke.sh`, pin imagen `:3fde9f8`. Pendiente ejecución: pytest gate + Cloud Build + deploy + chaos experiments (MTTD/MTTR) + screenshot Grafana + backup ChromaDB.
+- [x] **Sesión #6** (2026-05-19→26): Hardening pre-prod. Artefactos: `scripts/smoke.sh`, fixes chaos.sh (C1/B2/Q1), manifests chaos (stress-ng→stress), `k8s/prometheus.yaml` (`metric_relabel_configs`). Gates 0-9 ejecutados (2026-05-27); Gate 8 (screenshots) pendiente captura manual.
 
 ---
 
@@ -304,19 +304,19 @@ Objetivo: pasar de "capacidad demostrada" a "evidencia medida" para defensa de T
 
 *Fuente única de verdad. Todas las tareas pendientes por orden de prioridad.*
 
-### 1. Deploy FASE 2 + cierre demo (próxima sesión)
+### 1. Cierre demo — pendiente (post FASE 2 desplegada)
 
-- [ ] **pytest** (~394 tests): `cd agent && pytest tests/ -v 2>&1 | tail -60`
-- [ ] **crane mirror Redis**: `crane copy --platform linux/amd64 redis:7-alpine europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/redis:7-alpine`
-- [ ] **Cloud Build**: `gcloud builds submit --config cloudbuild.yaml --substitutions=COMMIT_SHA=$(git rev-parse --short HEAD)`
-- [ ] **Repin imagen** en `k8s/deployment-agent.yaml` con nuevo SHA
-- [ ] **Apply K8s**: `kubectl apply -f k8s/redis.yaml -n arturo-llm-test && kubectl apply -f k8s/networkpolicy.yaml -n arturo-llm-test && kubectl apply -f k8s/deployment-agent.yaml -n arturo-llm-test`
-- [ ] **Verificar Redis**: `kubectl exec -n arturo-llm-test deploy/redis -- redis-cli ping`
-- [ ] **Smoke test**: `bash scripts/smoke.sh` → PASSED
+FASE 2 desplegada (2026-05-27, imagen `fd37a5d`, Gates A0-A9 ✅). Quedan solo:
+
+- [x] **pytest** 392 passed ✅
+- [x] **crane mirror Redis** → AR ✅
+- [x] **Cloud Build** → `fd37a5d` ✅
+- [x] **Repin imagen** `k8s/deployment-agent.yaml` → `fd37a5d` ✅
+- [x] **Apply K8s** (redis.yaml, networkpolicy.yaml, deployment-agent.yaml) ✅
+- [x] **Verificar Redis**: `PONG` ✅
+- [x] **Smoke test**: PASSED ✅
 - [ ] **Actualizar `demo/demo.html`** slide 9 con números chaos 2026-05-27 verificados
-- [ ] **Gate 8 — Screenshot Grafana**: `kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring` → capturar dashboard "AIOps — Chaos"
-
-~~**Gates completados (2026-05-26/27)**: 0-7, 9. Números chaos verificados en `docs/12-chaos-engineering.md`.~~
+- [ ] **Gate 8 — Screenshot Grafana**: `kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring` → capturar `docs/img/grafana-chaos.png` + `docs/img/grafana-overview.png`
 
 ### 2. Tutor-gates (aprobados ✅ 2026-05-23 — código implementado 2026-05-25)
 
@@ -335,13 +335,14 @@ Solicitud del tutor (2026-05-26): preparar demo en vivo después de cerrar los c
 ### 4. Cierre Fase 1 — Webhook entrante Mattermost
 
 Pendiente desde 2026-04-22. No bloquea defensa pero cierra la fase formalmente.
+Nota: `MATTERMOST_WEBHOOK_URL` ya está cableado en `config.py:39` y `deployment-agent.yaml:86` — solo falta configurar la URL real en Mattermost.
 
 - [ ] Obtener URL del incoming webhook de Mattermost (UI: Settings → Integrations → Incoming Webhooks).
-- [ ] Setear env `MATTERMOST_WEBHOOK_URL` en `k8s/deployment-agent.yaml`.
+- [ ] Setear `MATTERMOST_WEBHOOK_URL` en el Secret `agent-secrets` o directamente en `deployment-agent.yaml`.
 
-### 4. Screenshots Grafana (para docs y defensa)
+### 5. Screenshots Grafana (para docs y defensa)
 
-El directorio `docs/img/` existe pero está vacío. Capturar post Gate 8.
+El directorio `docs/img/` tiene imágenes de demos anteriores (`1st_demo/`, `old/`). Faltan los dos PNG del estado final:
 
 - [ ] `docs/img/grafana-overview.png` — dashboard "AIOps Agent — Overview".
 - [ ] `docs/img/grafana-chaos.png` — dashboard "AIOps — Chaos".

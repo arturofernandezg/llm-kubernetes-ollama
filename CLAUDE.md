@@ -27,7 +27,7 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 
 **Lee el archivo relevante antes de hacer cambios en esa parte del proyecto.**
 
-## Estado actual (2026-05-23)
+## Estado actual (2026-05-27)
 
 - **Fase 0 (Legado)**: Completa (agente modular + Ollama local + Terraform endpoints + K8s base). Se mantienen los archivos sin borrar.
 - **Fase 1 (Observabilidad)**: En curso (~98%).
@@ -60,7 +60,7 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ `remediation.py` — validation layer + motor de decisión (9 reglas) + executor dual-mode. ~70 tests.
   - ✅ `process_remediation()` integrado en pipeline `main.py`. Counter `aiops_remediation_total`.
   - ✅ RBAC aplicado (`k8s/rbac.yaml`): Role `patch deployments/get pods/limitranges` en `arturo-llm-test`.
-  - ✅ `REMEDIATION_ENABLED=true`, `REMEDIATION_DRY_RUN=true` en `deployment-agent.yaml`.
+  - ✅ `REMEDIATION_ENABLED=true`, `REMEDIATION_DRY_RUN=false` en `deployment-agent.yaml`.
   - ✅ E2E verificado (2026-04-24): KubePodOOMKilled → RAG → LLM (211s, confidence=0.90, risk=high) → **escalate** → Mattermost. Motor activo.
   - ✅ Condición del tutor implementada (2026-04-25):
     - Regla 4.5: bloquea TODO comando MUTATING que implique reinicio de pod (`set resources`, `scale`, `rollout restart`, `patch deployment`...) → `reason_code: pod_restart_blocked`. Bloqueo conservador hasta confirmación del tutor.
@@ -76,22 +76,22 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
   - ✅ Calidad código sesión #8 (2026-05-12): `nodeSelector: guaranteed="true"` + tolerations en `deployment-agent`, `deployment-ollama`, `chromadb`. Workloads críticos fijados a nodos guaranteed. Docs sync cierre Fase 3. Sesiones #1-#8 completadas.
   - ✅ [tutor-gate] Implementado y desplegado (2026-05-25): excepción regla 4.5 (`_set_resources_memory_exception`, conf≥0.9, risk≤medium, field=resources.limits.memory, 10 tests) + `REMEDIATION_DRY_RUN=false` en `k8s/deployment-agent.yaml`. Imagen `a4421f4` en cluster.
   - ✅ Defensa prep (2026-05-15): `defensa.md §3` completada (12 preguntas difíciles + respuestas). Presentación: **Reveal.js** (decisión bloqueada en `defensa.md §6`).
-- **Mini-Fase 4 (Production Readiness)**: En curso — código S1-S6 listo (2026-05-19), sesión de pruebas E2E pendiente.
+- **Mini-Fase 4 (Production Readiness)**: **Completa** (2026-05-27) — solo Gate 8 (screenshots Grafana) pendiente.
   - ✅ Sesión #1 — Chaos Engineering #1: manifests `k8s/chaos/`, script `scripts/chaos.sh`, métricas `aiops_chaos_*` en agente (Counter + Histogram), doc `docs/12-chaos-engineering.md`.
   - ✅ Sesión #2 — Chaos Engineering #2: `k8s/chaos/chaos-bad-image.yaml` + `chaos-cpu-stress.yaml`, regla Prometheus `KubePodImagePullBackOff` (6ª regla en `k8s/prometheus.yaml`), 2 casos nuevos en `scripts/chaos.sh` (`bad-image`, `cpu`), 279 tests.
   - ✅ Sesión #3 — Dashboard Grafana "AIOps — Chaos": key `chaos.json` añadida al ConfigMap `grafana-dashboard-aiops` en `k8s/grafana.yaml`. 7 paneles: MTTD/MTTR p95 por experimento, MTTD p50/p95 global, pie outcome, stat total, ALERTS correlation, tabla histórico.
   - ✅ Sesión #4 — Slash command Mattermost `/aiops` (2026-05-19): `POST /webhook/command`, schema `MattermostCommandPayload`, config `MM_COMMAND_TOKEN` (fail-open + warning startup), helpers `_query_recent_incidents` (recencia desc, clamp 1–20) + `_format_status_response` + `_format_incidents_response`. 294 tests. K8s: `MM_COMMAND_TOKEN` en `deployment-agent.yaml` desde `agent-secrets` (`optional: true`).
   - ✅ Sesión #5 — Rollback automático (2026-05-19): `ExecuteResult` dataclass + refactor `execute_commands() → list[ExecuteResult]` + `results_to_log()`. Helpers `capture_pre_patch_value()` + `check_pod_health()` + `revert_patch()` en `remediation.py`. `IN_FLIGHT_ROLLBACKS` registry + `_schedule_rollback_evaluation()` + `_evaluate_rollback()` en `main.py`. Counter `aiops_remediation_rollback_total{outcome}`. ~310 tests. K8s: `REMEDIATION_ROLLBACK_ENABLED/TIMEOUT/GRACE` en `deployment-agent.yaml`.
-  - ⏳ Sesión #6 — Hardening pre-prod: bugs fijados: `scripts/chaos.sh` (C1 B2: _wait_for_agent_log anclada a T0+head-1, _usage, _iso_to_epoch; Q1: `--since-time=T0-10s` + `_wait_for_chaos_metrics` no-fatal → MTTD/MTTR autoritativos de logs del agente); `k8s/chaos/chaos-oom.yaml` + `chaos-cpu-stress.yaml` (stress-ng→stress, sufijo timeout); `agent/main.py` (WEBHOOK_COUNTER + pre-init labeled counters); `k8s/prometheus.yaml` (metric_relabel_configs: exported_namespace→namespace + exported_pod→pod en kubernetes-endpoints — fix label collision KSM/cAdvisor). `docs/12`: sección hipótesis+criterios de éxito (Principles of Chaos). Pendiente: screenshot Grafana + backup ChromaDB.
-  - ⏳ **Sesión de pruebas + FASE 2 (en curso 2026-05-27)**:
-    - Gates 0-5 ✅. Prometheus fix (`metric_relabel_configs`) aplicado al cluster ✅.
-    - RAG limpieza ✅: 92 incidents contaminados (namespace=arturo-monitoring / pod=kube-state-metrics) borrados. Restantes: 133 incidents limpios + 16 runbooks. Gate 9 (backup post-limpieza): `chromadb-backup-clean-20260527.tar.gz` ✅.
-    - FASE 2 — Mejoras de código implementadas (2026-05-27, pendiente build + deploy):
-      - ✅ **Redis persistence**: `agent/escalation_store.py` (nuevo) — store/get/delete/count async sobre `redis.asyncio`. `PENDING_ESCALATIONS` dict eliminado; estado de escalaciones persiste entre reinicios del pod agente (TTL 60 min via `SET ... ex`). `k8s/redis.yaml` (nuevo) — Deployment `redis:7-alpine` + Service `redis-svc:6379`. `config.py`: `redis_host/redis_port`. `requirements.txt`: `redis==5.2.1`. `k8s/networkpolicy.yaml`: regla `redis-allow-agent-only`. `k8s/deployment-agent.yaml`: env `REDIS_HOST/REDIS_PORT`. Fail-open: si Redis no responde → escalación sin botones.
-      - ✅ **Dedup in-flight**: `IN_FLIGHT_ALERTS: set[tuple[str,str,str]]` + `_INFLIGHT_LOCK`. En `handle_alert_webhook` salta alertas idénticas (alertname, namespace, pod) que ya están procesándose. Counter `aiops_dedup_skipped_total{alertname}`. La key se libera en el `finally` de `_process_alert_with_diagnosis`.
-      - ✅ **Timeout explícito**: `_format_diagnosis_message(llm_timeout=True)` → mensaje Mattermost diferenciado ("⚠️ LLM agotó el tiempo") vs fallo genérico. `httpx.TimeoutException` distinguida en el `except` de diagnóstico.
-    - Tests actualizados: `tests/helpers.py` (FakeRedis), `tests/conftest.py` (app.state.redis=None), `tests/test_endpoints.py` (migrado a FakeRedis, TestInFlightDedup ×4, TestDiagnosisTimeout ×4), `tests/test_escalation_store.py` (nuevo, 15 tests).
-    - ⏳ Pendiente: re-run 4 chaos experiments (oom, crashloop, bad-image, cpu) con is_chaos=true verificado → MTTD/MTTR autoritativos. BLOCK 4 reconciliar docs/12 con números reales. crane mirror redis → Cloud Build → deploy imagen nueva. Ver `docs_sesion/2026-05-25-pruebas-e2e.md`.
+  - ✅ Sesión #6 — Hardening pre-prod (2026-05-26): bugs fijados en `chaos.sh` (C1/B2/Q1), manifests chaos corregidos (stress-ng→stress), `main.py` (WEBHOOK_COUNTER + pre-init labeled counters), `k8s/prometheus.yaml` (`metric_relabel_configs`: fix label collision KSM/cAdvisor — exported_namespace→namespace + exported_pod→pod). `docs/12`: hipótesis+criterios de éxito (Principles of Chaos).
+  - ✅ **Sesión de pruebas + FASE 2 — Completa (2026-05-27)**:
+    - Gates 0-9 ✅ (Gate 8 screenshots Grafana pendiente de captura manual).
+    - Prometheus fix aplicado al cluster ✅. RAG limpieza ✅: 92 incidents contaminados borrados (133 limpios + 16 runbooks). Backup: `chromadb-backup-clean-20260527.tar.gz` ✅.
+    - 4 experimentos chaos re-corridos con MTTD/MTTR verificados (is_chaos=true): OOM (MTTD=5.0s, MTTR=205.4s), CrashLoop (5.0s/205.7s), BadImage (5.1s/252.1s), CPU (10.1s/206.7s). Tabla en `docs/12-chaos-engineering.md` ✅.
+    - FASE 2 desplegada (Gates A0-A9 ✅, imagen `fd37a5d`):
+      - ✅ **Redis persistence**: `agent/escalation_store.py` + `k8s/redis.yaml`. `PENDING_ESCALATIONS` dict eliminado; botones sobreviven restart de pod (TTL 60 min). Fail-open.
+      - ✅ **Dedup in-flight**: `IN_FLIGHT_ALERTS` + counter `aiops_dedup_skipped_total{alertname}`. Alertas idénticas en vuelo se saltan.
+      - ✅ **Timeout explícito**: `_format_diagnosis_message(llm_timeout=True)` → mensaje Mattermost diferenciado ("⚠️ LLM agotó el tiempo").
+    - Tests: 392 passed (FakeRedis, TestInFlightDedup ×4, TestDiagnosisTimeout ×4, test_escalation_store ×15).
 
 ## Stack
 
@@ -111,7 +111,6 @@ agent/rag.py            → Cliente ChromaDB, ingesta, query, embeddings via Oll
 agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON estructurado
 agent/utils.py          → backoff_delay() helper (exponential backoff compartido)
 agent/escalation_store.py → store/get/delete/count async de escalaciones en Redis (fail-open)
-agent/utils.py          → backoff_delay() helper (exponential backoff compartido)
 agent/tests/            → ~394 tests en 12 ficheros (incluye TestChaosMetrics, TestSlashCommandEndpoint, TestRollbackScheduling, TestEvaluateRollback, TestDecideActionTutorRule, TestInFlightDedup, TestDiagnosisTimeout, escalation_store ×15)
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
 k8s/                    → Manifiestos K8s (agent, ollama, chromadb, redis, networkpolicy)
@@ -130,7 +129,7 @@ cloudbuild.yaml         → Pipeline: tests (gate) + build + push
 - **Cluster**: ai-infra-agent (europe-southwest1-a, e2-standard-2 spot + 2 nodos guaranteed con label `guaranteed=true` desde 2026-05-06)
 - **Namespaces**: `arturo-llm-test` (core), `arturo-monitoring` (alertmanager), `arturo-mattermost` (chatops), `arturo-chaos` (chaos experiments)
 - **Registry**: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent
-- **Imagen actual**: `aiops-agent:a4421f4` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
+- **Imagen actual**: `aiops-agent:fd37a5d` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
 - **Ollama models**: qwen2.5:1.5b (generación), nomic-embed-text:latest (embeddings)
 - **NO hay Python local en Windows** — tests se ejecutan en GCloud Shell
 - **Sin Cloud NAT** — pods no tienen internet, modelos se cargan manualmente
