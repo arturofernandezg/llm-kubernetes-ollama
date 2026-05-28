@@ -118,7 +118,7 @@ k8s/redis.yaml          → Deployment redis:7-alpine + Service redis-svc:6379 (
 k8s/prometheus.yaml     → Prometheus + kube-state-metrics + ClusterRoles + 6 reglas + metric_relabel_configs (fix label collision KSM/cAdvisor aplicado 2026-05-26)
 k8s/alertmanager.yaml   → Alertmanager standalone en arturo-monitoring
 k8s/mattermost.yaml     → Mattermost + PostgreSQL en arturo-mattermost
-k8s/rbac.yaml           → Role + RoleBinding para remediación autónoma (arturo-llm-test)
+k8s/rbac.yaml           → Role + RoleBinding para remediación autónoma en arturo-llm-test y arturo-chaos (cross-namespace RoleBinding añadido 2026-05-28)
 k8s/chaos/              → Manifests chaos engineering (arturo-chaos namespace)
 scripts/chaos.sh        → Runner bash: oom | crashloop | bad-image | cpu | status | cleanup
 cloudbuild.yaml         → Pipeline: tests (gate) + build + push

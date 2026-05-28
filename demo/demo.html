@@ -194,7 +194,6 @@ td:first-child,th:first-child{text-align:left}
             <div class="card red"><h3>Latencia del LLM</h3><p>qwen2.5:1.5b en CPU tarda ~205-270 s en algunos diagnósticos. El pipeline detecta rápido, pero el diagnóstico completo depende del modelo.</p></div>
             <div class="card red"><h3>Modelo pequeño</h3><p>Puede tener confianza alta con razonamiento textual imperfecto. Los campos estructurados vienen de la alerta; el texto libre requiere supervisión.</p></div>
             <div class="card orange"><h3>RAG contaminable</h3><p>Un bug de labels guardó 92 incidentes con pod/namespace incorrecto. <b>Detectado, documentado y limpiado (2026-05-27)</b>. Riesgo residual: sin versionado del store histórico.</p></div>
-            <div class="card orange"><h3>Remediación acotada</h3><p>El lazo aprobar→ejecutar funciona, pero <code>kubectl top</code> necesita metrics-server (no instalado) y la remediación es namespace-scoped: alertas en <code>arturo-chaos</code> quedan fuera del scope del ServiceAccount de <code>arturo-llm-test</code>.</p></div>
           </div>
         </section>
 <section class="slide">

@@ -31,7 +31,7 @@
 | `alertmanager.yaml` | Deployment + ConfigMap + Service para Alertmanager | Routing de alertas a webhook del agente |
 | `grafana.yaml` | Deployment stateless + ConfigMaps provisioning + Service + Secret ref | Datasource Prometheus, dashboards "AIOps Agent — Overview" + "AIOps — Chaos", contact point webhook |
 | `job-ingest-runbooks.yaml` | K8s Job `runbooks-ingest` en `arturo-llm-test` | Ingesta idempotente (upsert) de 16 runbooks en ChromaDB |
-| `rbac.yaml` | Role + RoleBinding en `arturo-llm-test` | RBAC para remediación autónoma del agente |
+| `rbac.yaml` | Role + RoleBinding en `arturo-llm-test` y `arturo-chaos` | RBAC para remediación autónoma del agente; RoleBinding cross-namespace permite al SA de `arturo-llm-test` remediar workloads en `arturo-chaos` |
 
 ## Prometheus standalone
 
@@ -269,6 +269,10 @@ crane copy --platform linux/amd64 polinux/stress:latest europe-southwest1-docker
 ```
 
 El agente detecta alertas de este namespace e incrementa `aiops_chaos_*` en `/metrics`. Ver `docs/12-chaos-engineering.md` para tabla de resultados.
+
+**RBAC en arturo-chaos** (añadido 2026-05-28): `k8s/rbac.yaml` incluye un Role + RoleBinding en `arturo-chaos` que otorga al SA `default` de `arturo-llm-test` los mismos verbos de remediación (`get/patch deployments`, `get/list pods/log/events/limitranges`). RoleBinding cross-namespace — el sujeto especifica `namespace: arturo-llm-test` explícitamente.
+
+**metrics-server**: GKE Standard gestiona metrics-server como addon del sistema (APIService `v1beta1.metrics.k8s.io`, `Available=True`). No requiere instalación manual. `kubectl top node` y `kubectl top pod` funcionan en todos los namespaces sin configuración adicional.
 
 ## Grafana — Acceso y dashboard
 

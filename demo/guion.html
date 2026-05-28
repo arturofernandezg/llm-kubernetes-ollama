@@ -210,11 +210,10 @@
 <div class='frase'>Un sistema que reconoce sus límites con precisión vale más en producción que uno que promete de más.</div>
 
 <p><strong>Lo que digo:</strong></p>
-<p>"Este slide existe porque creo que la honestidad técnica es una señal de madurez de ingeniería, no de debilidad. Tengo cuatro limitaciones reales que quiero nombrar.</p>
+<p>"Este slide existe porque creo que la honestidad técnica es una señal de madurez de ingeniería, no de debilidad. Tengo tres limitaciones reales que quiero nombrar.</p>
 <p><strong>Latencia del LLM.</strong> <code>qwen2.5:1.5b</code> en CPU tarda entre 78 y 270 segundos por diagnóstico. El pipeline detecta la alerta en 5-10 segundos; el cuello de botella es la inferencia. Para un sistema donde MTTD es crítico en segundos y MTTR en minutos, eso es aceptable hoy. En un SLA de producción real necesitaría GPU o un modelo optimizado.</p>
 <p><strong>Modelo pequeño.</strong> La confianza alta no garantiza razonamiento textual perfecto. Los campos estructurados del JSON —el alertname, el namespace, el pod— vienen de la alerta directamente, son deterministas. El campo de texto libre —el razonamiento del diagnóstico— requiere supervisión humana. Por eso el feedback loop existe: para detectar patrones de error antes de que escalen.</p>
 <p><strong>RAG contaminable.</strong> En Mini-Fase 4 detectamos que 92 incidentes en ChromaDB tenían labels incorrectos —el namespace era 'arturo-monitoring' y el pod era 'kube-state-metrics' por un bug en la extracción de metadata. Los detectamos, los documentamos y los limpiamos el 2026-05-27. La deuda residual es que el store no tiene versionado: si se contamina de nuevo, hay que volver a borrar manualmente.</p>
-<p><strong>Remediación acotada.</strong> El lazo aprobar→ejecutar funciona, pero tiene dos límites conocidos: <code>kubectl top</code> necesita el API de metrics-server, que no está instalado en este cluster —esos comandos fallan con Forbidden, no bloquean el resto—. Y la remediación es namespace-scoped: el ServiceAccount de <code>arturo-llm-test</code> no tiene acceso a <code>arturo-chaos</code>, que es donde están los pods de los experimentos. Eso significa que los comandos de diagnóstico funcionan, pero los de remediación mutante afectarían solo al namespace del agente."</p>
 
 <div class='matiz'>Estos límites son todos documentados y tienen rutas de mejora claras. No son sorpresas: son deuda técnica reconocida, que es exactamente lo que la slide anterior dice que aprendí a hacer.</div>
 </div>
