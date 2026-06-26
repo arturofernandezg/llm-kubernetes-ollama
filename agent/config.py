@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     ollama_model: str = "tinyllama"
 
     # Timeouts (segundos)
-    http_timeout: float = 120.0
+    # 300s alineado con el manifiesto desplegado: el LLM qwen2.5:1.5b tarda ~205-252s;
+    # un default de 120 rompe la reproducibilidad local (timeouts del diagnóstico).
+    http_timeout: float = 300.0
     health_timeout: float = 5.0
 
     # Retry con exponential backoff (llamadas a Ollama)

@@ -1151,6 +1151,7 @@ class TestDiagnosisTimeout:
         import httpx
         alert = self._make_alert()
         http_client = AsyncMock()
+        before = _get_counter("aiops_diagnosis", {"outcome": "llm_timeout"})
 
         with patch("main.build_rag_query", return_value="query"), \
              patch("main.retrieve_context", new_callable=AsyncMock, return_value={"runbooks": [], "incidents": [], "query": "q"}), \
@@ -1161,12 +1162,14 @@ class TestDiagnosisTimeout:
         mock_send.assert_called_once()
         sent_msg = mock_send.call_args[0][0]
         assert "timeout" in sent_msg.lower() or "LLM" in sent_msg
+        assert _get_counter("aiops_diagnosis", {"outcome": "llm_timeout"}) == before + 1
 
     @pytest.mark.asyncio
     async def test_non_timeout_exception_uses_generic_fallback(self):
         """Non-timeout exception during diagnosis → generic unavailable message (no 'LLM timeout')."""
         alert = self._make_alert()
         http_client = AsyncMock()
+        before = _get_counter("aiops_diagnosis", {"outcome": "llm_error"})
 
         with patch("main.build_rag_query", return_value="query"), \
              patch("main.retrieve_context", new_callable=AsyncMock, return_value={"runbooks": [], "incidents": [], "query": "q"}), \
@@ -1177,6 +1180,135 @@ class TestDiagnosisTimeout:
         mock_send.assert_called_once()
         sent_msg = mock_send.call_args[0][0]
         assert "LLM timeout" not in sent_msg
+        assert _get_counter("aiops_diagnosis", {"outcome": "llm_error"}) == before + 1
+
+
+# ── Escalation store observability ────────────────────────────────────────────
+
+class TestEscalationStoreMetric:
+    """aiops_escalation_store_total distingue escalación persistida vs Redis caído (PR-06)."""
+
+    def _make_alert(self) -> AlertItem:
+        return AlertItem(
+            status="firing",
+            labels={"alertname": "HighMem", "pod": "mem-pod", "namespace": "prod", "severity": "warning"},
+            annotations={"description": "Memory usage is high"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+
+    def _escalate_result(self) -> dict:
+        from remediation import RemediationAction
+        return {
+            "action": RemediationAction.ESCALATE,
+            "execution_log": "",
+            "blocked_commands": [],
+            "safe_commands": ["kubectl patch deployment mem-app -n prod ..."],
+        }
+
+    @pytest.mark.asyncio
+    async def test_escalation_stored_increments_stored(self):
+        """Redis disponible y store OK → outcome='stored' + envío con botones."""
+        alert = self._make_alert()
+        before = _get_counter("aiops_escalation_store", {"outcome": "stored"})
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value=self._escalate_result()), \
+             patch("main.store_escalation", new_callable=AsyncMock, return_value=True), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.send_escalation_with_buttons", new_callable=AsyncMock) as mock_buttons, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client(), redis_client=AsyncMock())
+
+        mock_buttons.assert_called_once()
+        assert _get_counter("aiops_escalation_store", {"outcome": "stored"}) == before + 1
+
+    @pytest.mark.asyncio
+    async def test_escalation_redis_down_increments_redis_down(self):
+        """Redis caído (redis_client=None) → outcome='redis_down' + mensaje sin botones."""
+        alert = self._make_alert()
+        before = _get_counter("aiops_escalation_store", {"outcome": "redis_down"})
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value=self._escalate_result()), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.send_escalation_with_buttons", new_callable=AsyncMock) as mock_buttons, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_send:
+            await _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client(), redis_client=None)
+
+        mock_buttons.assert_not_called()
+        mock_send.assert_called_once()
+        assert "Redis caído" in mock_send.call_args[0][0]
+        assert _get_counter("aiops_escalation_store", {"outcome": "redis_down"}) == before + 1
+
+
+# ── ChromaDB lazy reconnect (PR-05) ───────────────────────────────────────────
+
+class TestRagReconnect:
+    """Un cliente ChromaDB stale se reconecta en caliente antes de degradar (PR-05)."""
+
+    def _make_alert(self) -> AlertItem:
+        return AlertItem(
+            status="firing",
+            labels={"alertname": "HighMem", "pod": "mem-pod", "namespace": "prod", "severity": "warning"},
+            annotations={"description": "Memory usage is high"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+
+    @pytest.mark.asyncio
+    async def test_stale_client_reconnects_and_persists(self):
+        """retrieve_context falla con el cliente cacheado → un get_chroma_client() nuevo lo cura;
+        el cliente sano se persiste en app.state y el diagnóstico procede con contexto (no degradado)."""
+        import main
+        alert = self._make_alert()
+        before = _get_counter("aiops_diagnosis", {"outcome": "rag_reconnect"})
+        saved = getattr(main.app.state, "chroma_client", None)
+        sentinel = object()
+        try:
+            with patch("main.retrieve_context", new_callable=AsyncMock,
+                       side_effect=[Exception("stale connection"), mock_rag_context()]), \
+                 patch("main.get_chroma_client", return_value=sentinel) as mock_new, \
+                 patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+                 patch("main.process_remediation", new_callable=AsyncMock, return_value={
+                     "action": "suggest_only", "execution_log": "", "blocked_commands": [], "safe_commands": [],
+                 }) as mock_rem, \
+                 patch("main.ingest_incident", new_callable=AsyncMock), \
+                 patch("main.send_mattermost_alert", new_callable=AsyncMock):
+                await _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client())
+
+            mock_new.assert_called_once()
+            assert main.app.state.chroma_client is sentinel
+            # rag_degraded=False propagado a remediación (retrieval se recuperó)
+            assert mock_rem.call_args.kwargs["rag_degraded"] is False
+            assert _get_counter("aiops_diagnosis", {"outcome": "rag_reconnect"}) == before + 1
+        finally:
+            main.app.state.chroma_client = saved
+
+    @pytest.mark.asyncio
+    async def test_persistent_failure_degrades(self):
+        """Si la reconexión también falla, se cae al comportamiento actual: rag_degraded=True
+        propagado a remediación + counter rag_failed (PR-04 mantiene la red de seguridad)."""
+        import main
+        alert = self._make_alert()
+        before = _get_counter("aiops_diagnosis", {"outcome": "rag_failed"})
+        saved = getattr(main.app.state, "chroma_client", None)
+        try:
+            with patch("main.retrieve_context", new_callable=AsyncMock,
+                       side_effect=Exception("chromadb down")), \
+                 patch("main.get_chroma_client", return_value=object()), \
+                 patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+                 patch("main.process_remediation", new_callable=AsyncMock, return_value={
+                     "action": "suggest_only", "execution_log": "", "blocked_commands": [], "safe_commands": [],
+                 }) as mock_rem, \
+                 patch("main.ingest_incident", new_callable=AsyncMock), \
+                 patch("main.send_mattermost_alert", new_callable=AsyncMock):
+                await _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client())
+
+            assert mock_rem.call_args.kwargs["rag_degraded"] is True
+            assert _get_counter("aiops_diagnosis", {"outcome": "rag_failed"}) == before + 1
+        finally:
+            main.app.state.chroma_client = saved
 
 
 # ── Chaos Engineering Metrics ─────────────────────────────────────────────────

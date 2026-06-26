@@ -58,7 +58,7 @@ EXTRACTION_COUNTER = Counter(
 DIAGNOSIS_COUNTER = Counter(
     "aiops_diagnosis_total",
     "Diagnosis attempts by outcome",
-    ["outcome"],  # "success" | "rag_ok" | "rag_failed" | "llm_failed" | "pipeline_failed"
+    ["outcome"],  # "success" | "rag_ok" | "rag_reconnect" | "rag_failed" | "llm_timeout" | "llm_error" | "pipeline_failed"
 )
 REMEDIATION_COUNTER = Counter(
     "aiops_remediation_total",
@@ -106,6 +106,11 @@ DEDUP_COUNTER = Counter(
     "aiops_dedup_skipped_total",
     "Alert processing skipped due to in-flight duplicate",
     ["alertname"],
+)
+ESCALATION_STORE_COUNTER = Counter(
+    "aiops_escalation_store_total",
+    "Escalation persistence attempts by outcome",
+    ["outcome"],  # "stored" | "redis_down"
 )
 
 
@@ -632,14 +637,28 @@ async def _process_alert_with_diagnosis(
         description = alert.annotations.get("description", "")
         query = build_rag_query(alert.labels, description)
 
-        # RAG retrieval (fail-open: empty context if ChromaDB down)
+        # RAG retrieval (fail-open: empty context if ChromaDB down).
+        # Lazy reconnect: a cached client goes stale if the ChromaDB StatefulSet pod
+        # restarts after the agent started. On failure we discard it, build a fresh
+        # client once, and persist it back so status + future alerts + incident queries
+        # recover without restarting the agent.
+        rag_degraded = False
         try:
             rag_context = await retrieve_context(query, http_client, chroma_client)
             DIAGNOSIS_COUNTER.labels(outcome="rag_ok").inc()
         except Exception as exc:
-            logger.warning("RAG retrieval failed for %s, proceeding without context: %r", alert_name, exc)
-            rag_context = {"runbooks": [], "incidents": [], "query": query}
-            DIAGNOSIS_COUNTER.labels(outcome="rag_failed").inc()
+            logger.warning("RAG retrieval failed for %s, attempting ChromaDB reconnect: %r", alert_name, exc)
+            try:
+                chroma_client = get_chroma_client()
+                rag_context = await retrieve_context(query, http_client, chroma_client)
+                app.state.chroma_client = chroma_client
+                DIAGNOSIS_COUNTER.labels(outcome="rag_reconnect").inc()
+                logger.info("ChromaDB reconnect succeeded for %s", alert_name)
+            except Exception as exc2:
+                logger.warning("RAG reconnect failed for %s, proceeding without context: %r", alert_name, exc2)
+                rag_context = {"runbooks": [], "incidents": [], "query": query}
+                rag_degraded = True
+                DIAGNOSIS_COUNTER.labels(outcome="rag_failed").inc()
 
         # LLM diagnosis (fail-open: None if Ollama down or timeout)
         try:
@@ -652,16 +671,16 @@ async def _process_alert_with_diagnosis(
             logger.warning("Diagnosis timed out for %s (HTTP_TIMEOUT=%ss): %r", alert_name, int(settings.http_timeout), exc)
             diagnosis = None
             _llm_timeout = True
-            DIAGNOSIS_COUNTER.labels(outcome="llm_failed").inc()
+            DIAGNOSIS_COUNTER.labels(outcome="llm_timeout").inc()
         except Exception as exc:
             logger.warning("Diagnosis generation failed for %s: %r", alert_name, exc)
             diagnosis = None
-            DIAGNOSIS_COUNTER.labels(outcome="llm_failed").inc()
+            DIAGNOSIS_COUNTER.labels(outcome="llm_error").inc()
 
         remediation_result = None
         if diagnosis is not None:
             try:
-                remediation_result = await process_remediation(diagnosis)
+                remediation_result = await process_remediation(diagnosis, rag_degraded=rag_degraded)
                 REMEDIATION_COUNTER.labels(action=remediation_result["action"].value).inc()
             except Exception as exc:
                 logger.warning("Remediation processing failed for %s: %r", alert_name, exc)
@@ -721,6 +740,7 @@ async def _process_alert_with_diagnosis(
             if redis_client is not None:
                 stored = await store_escalation(incident_id, _escalation_to_dict(esc), ttl_seconds, redis_client)
             if stored:
+                ESCALATION_STORE_COUNTER.labels(outcome="stored").inc()
                 logger.info(
                     "Stored pending escalation %s for %s (%d commands) in Redis",
                     incident_id, alert_name, len(remediation_result["safe_commands"]),
@@ -734,6 +754,7 @@ async def _process_alert_with_diagnosis(
                 )
             else:
                 # Redis unavailable — send degraded message without buttons
+                ESCALATION_STORE_COUNTER.labels(outcome="redis_down").inc()
                 logger.warning(
                     "Redis unavailable — sending escalation without buttons for %s", alert_name,
                 )
