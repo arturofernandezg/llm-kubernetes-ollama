@@ -65,11 +65,12 @@ data:
 ---
 
 # ── ConfigMap: dashboard AIOps ────────────────────────────────────────────────
-# 4 filas:
+# 5 filas:
 #   1. Pipeline AIOps      — aiops_diagnosis_total, aiops_remediation_total, aiops_feedback_total
 #   2. Latencia Webhook    — p95/p50 de http_request_duration_seconds + req/s
-#   3. Salud del Sistema   — up{} por job + pod phases por namespace
+#   3. Salud del Sistema   — up{} de servicios propios (job=kubernetes-endpoints) + pod phases en arturo-*
 #   4. Debug Interno       — aiops_ollama_retries_total, aiops_extraction_total
+#   5. Cola Redis Streams  — aiops_queue_{enqueued,processed,depth,reclaimed,dead} (F2)
 
 apiVersion: v1
 kind: ConfigMap
@@ -248,12 +249,12 @@ data:
           },
           "targets": [
             {
-              "expr": "up",
-              "legendFormat": "{{job}}",
+              "expr": "up{job=\"kubernetes-endpoints\"}",
+              "legendFormat": "{{service}}",
               "refId": "A"
             }
           ],
-          "title": "Scrape targets",
+          "title": "Scrape targets (servicios propios)",
           "type": "stat"
         },
         {
@@ -338,6 +339,109 @@ data:
           ],
           "title": "Extraction methods / s",
           "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 34},
+          "id": 14,
+          "title": "Cola Redis Streams (F2)",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 35},
+          "id": 15,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "rate(aiops_queue_enqueued_total[5m])",
+              "legendFormat": "enqueued",
+              "refId": "A"
+            },
+            {
+              "expr": "rate(aiops_queue_processed_total[5m])",
+              "legendFormat": "processed {{outcome}}",
+              "refId": "B"
+            }
+          ],
+          "title": "Enqueued vs Processed / s",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 8, "x": 8, "y": 35},
+          "id": 16,
+          "options": {
+            "legend": {"calcs": ["last", "max"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "aiops_queue_depth",
+              "legendFormat": "depth",
+              "refId": "A"
+            }
+          ],
+          "title": "Queue depth (pending/unacked)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "green", "value": null}]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "dead-lettered"},
+                "properties": [
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {"color": "green", "value": null},
+                        {"color": "red", "value": 1}
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {"h": 8, "w": 8, "x": 16, "y": 35},
+          "id": 17,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "expr": "increase(aiops_queue_reclaimed_total[$__range])",
+              "legendFormat": "reclaimed",
+              "refId": "A"
+            },
+            {
+              "expr": "increase(aiops_queue_dead_total[$__range])",
+              "legendFormat": "dead-lettered",
+              "refId": "B"
+            }
+          ],
+          "title": "Durabilidad (rango)",
+          "type": "stat"
         }
       ],
       "refresh": "30s",
@@ -363,7 +467,7 @@ data:
       "timezone": "browser",
       "title": "AIOps Agent — Overview",
       "uid": "aiops-agent-overview",
-      "version": 1
+      "version": 3
     }
   chaos.json: |
     {
