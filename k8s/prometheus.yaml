@@ -216,6 +216,15 @@ data:
             regex: (.+)
             target_label: __metrics_path__
             replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+        metric_relabel_configs:
+          # Cluster compartido: cadvisor (role: node) trae contenedores de TODOS
+          # los namespaces de cada nodo. Conservamos solo los nuestros → la
+          # métrica ajena (brms-gorules, kube-system...) no entra al TSDB.
+          # Nota: el scrape al nodo sigue ocurriendo (no se puede filtrar el SD
+          # por namespace); esto descarta en ingestión, no evita el fetch.
+          - source_labels: [namespace]
+            regex: "arturo-.*"
+            action: keep
 
 ---
 
@@ -234,8 +243,10 @@ data:
         rules:
 
           # 1. OOMKilled — container terminado por el OOM killer del kernel
+          # namespace=~"arturo-.*": acota a nuestra tenancy (cluster compartido →
+          # KSM es cluster-wide y reportaría pods de otros tenants).
           - alert: KubePodOOMKilled
-            expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+            expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled", namespace=~"arturo-.*"} == 1
             for: 0m
             labels:
               severity: critical
@@ -249,7 +260,7 @@ data:
 
           # 2. CrashLoopBackOff — pod reiniciándose repetidamente (>3 en 15m)
           - alert: KubePodCrashLoopBackOff
-            expr: increase(kube_pod_container_status_restarts_total[15m]) > 3
+            expr: increase(kube_pod_container_status_restarts_total{namespace=~"arturo-.*"}[15m]) > 3
             for: 5m
             labels:
               severity: critical
@@ -264,9 +275,9 @@ data:
           # 3. HighMemory — uso >90% del memory limit durante 5m
           - alert: HighMemory
             expr: >
-              container_memory_working_set_bytes{container!=""}
+              container_memory_working_set_bytes{container!="", namespace=~"arturo-.*"}
                 / on(namespace, pod, container)
-              kube_pod_container_resource_limits{resource="memory"}
+              kube_pod_container_resource_limits{resource="memory", namespace=~"arturo-.*"}
               > 0.9
             for: 5m
             labels:
@@ -282,9 +293,9 @@ data:
           # 4. HighCPU — uso >90% del CPU limit durante 5m
           - alert: HighCPU
             expr: >
-              rate(container_cpu_usage_seconds_total{container!=""}[5m])
+              rate(container_cpu_usage_seconds_total{container!="", namespace=~"arturo-.*"}[5m])
                 / on(namespace, pod, container)
-              kube_pod_container_resource_limits{resource="cpu"}
+              kube_pod_container_resource_limits{resource="cpu", namespace=~"arturo-.*"}
               > 0.9
             for: 5m
             labels:
@@ -298,8 +309,12 @@ data:
                 {{ $value | humanizePercentage }} of its limit.
 
           # 5. TargetDown — scrape target caído durante 2m
+          # Acotado a job=kubernetes-endpoints (ya namespace-scoped a arturo-*).
+          # cadvisor se EXCLUYE a propósito: es cluster-wide (role: node) → la
+          # rotación de nodos spot ajenos dispararía falsos critical. La caída de
+          # un pod nuestro se sigue cubriendo vía su endpoint en este job.
           - alert: TargetDown
-            expr: up == 0
+            expr: up{job="kubernetes-endpoints"} == 0
             for: 2m
             labels:
               severity: critical
@@ -312,7 +327,7 @@ data:
 
           # 6. ImagePullBackOff — contenedor no puede pullar imagen (deploy defectuoso)
           - alert: KubePodImagePullBackOff
-            expr: kube_pod_container_status_waiting_reason{reason="ImagePullBackOff"} == 1
+            expr: kube_pod_container_status_waiting_reason{reason="ImagePullBackOff", namespace=~"arturo-.*"} == 1
             for: 1m
             labels:
               severity: critical
@@ -462,6 +477,12 @@ spec:
           # imagePullPolicy: Always para forzar re-pull si se actualiza el mirror en AR.
           image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/kube-state-metrics:v2.13.0
           imagePullPolicy: Always
+          args:
+            # Cluster compartido: KSM solo emite métricas de NUESTROS namespaces.
+            # Corta en el origen los kube_* de workloads ajenos (brms-gorules,
+            # kube-system, cnrm-system...). La ClusterRole sigue siendo de solo
+            # lectura; este flag solo filtra qué se watchea/emite.
+            - --namespaces=arturo-llm-test,arturo-monitoring,arturo-mattermost,arturo-chaos
           ports:
             - containerPort: 8080
               name: http-metrics
