@@ -131,12 +131,6 @@ class PendingEscalation:
     expires_at: datetime
 
 
-# In-flight dedup registry — prevents duplicate LLM calls for the same alert.
-# Key: (alertname, namespace, pod). Cleared in the finally of _process_alert_with_diagnosis.
-IN_FLIGHT_ALERTS: set[tuple[str, str, str]] = set()
-_INFLIGHT_LOCK = asyncio.Lock()
-
-
 # ── Rollback State ────────────────────────────────────────────────────────────
 
 @dataclass
@@ -355,21 +349,21 @@ async def lifespan(app: FastAPI):
         app.state.redis = None
         logger.warning("Redis unavailable at startup — escalation persistence disabled: %s", exc)
 
-    # Redis Streams consumer (F2) — only when the queue is enabled and Redis is up.
+    # Redis Streams consumer (F2) — la cola es el camino único de ingesta.
     app.state.consumer_task = None
     app.state.reclaim_task = None
-    if settings.queue_enabled and app.state.redis is not None:
+    if app.state.redis is not None:
         try:
             await ensure_group(app.state.redis)
             app.state.consumer_task = asyncio.create_task(
                 consume_loop(app.state.redis, _handle_stream_entry)
             )
             app.state.reclaim_task = asyncio.create_task(_periodic_reclaim())
-            logger.info("Alert queue enabled — stream consumer + reclaim started")
+            logger.info("Stream consumer + reclaim started")
         except Exception as exc:
             logger.error("Failed to start stream consumer: %r", exc)
-    elif settings.queue_enabled:
-        logger.warning("QUEUE_ENABLED but Redis unavailable — falling back to background tasks")
+    else:
+        logger.error("Redis unavailable at startup — ingestion queue cannot start (readyz will report 503)")
 
     try:
         r = await app.state.http_client.get(settings.ollama_tags, timeout=10.0)
@@ -472,51 +466,25 @@ async def healthz():
     return {"status": "alive"}
 
 
-@app.get("/readyz", summary="Readiness probe — Redis (cola) o Ollama+modelo (legacy)")
+@app.get("/readyz", summary="Readiness probe — Redis (cola de ingesta)")
 async def readyz():
     """
-    Readiness probe condicional según el modo de ingesta:
+    Readiness probe: la dependencia crítica de ingesta es Redis (el webhook encola
+    ahí). Se chequea solo Redis. Ollama lento/caído NO debe sacar al pod de rotación
+    — la cola está para bufferear esa lentitud; procesar es problema del worker, no
+    del ingress.
 
-    - Cola activa (``queue_enabled``): la dependencia crítica de ingesta es Redis
-      (el webhook encola ahí). Se chequea solo Redis. Ollama lento/caído NO debe
-      sacar al pod de rotación — la cola está para bufferear esa lentitud; procesar
-      es problema del worker, no del ingress.
-    - Legacy (``queue_enabled=False``, default): se chequea Ollama alcanzable +
-      modelo cargado, como hasta ahora.
-
-    Devuelve 503 si la dependencia del modo activo no está sana.
+    Devuelve 503 si Redis no está sano.
     Kubernetes usa este endpoint para decidir si enrutar tráfico al pod.
     """
-    if settings.queue_enabled:
-        redis_client = getattr(app.state, "redis", None)
-        if redis_client is None:
-            raise HTTPException(status_code=503, detail="Redis unavailable (queue mode)")
-        try:
-            await asyncio.wait_for(redis_client.ping(), timeout=settings.health_timeout)
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Redis unreachable: {exc}")
-        return {"status": "ready", "mode": "queue", "redis": "up"}
-
+    redis_client = getattr(app.state, "redis", None)
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="Redis unavailable (queue mode)")
     try:
-        client: httpx.AsyncClient = app.state.http_client
-        r = await client.get(settings.ollama_tags, timeout=settings.health_timeout)
-        r.raise_for_status()
-        available = [m.get("name", "") for m in r.json().get("models", []) if m.get("name")]
-        model_loaded = any(settings.ollama_model in m for m in available)
+        await asyncio.wait_for(redis_client.ping(), timeout=settings.health_timeout)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Ollama unreachable: {exc}")
-
-    if not model_loaded:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Model '{settings.ollama_model}' not loaded. Available: {available}",
-        )
-
-    return {
-        "status": "ready",
-        "model": settings.ollama_model,
-        "model_loaded": model_loaded,
-    }
+        raise HTTPException(status_code=503, detail=f"Redis unreachable: {exc}")
+    return {"status": "ready", "mode": "queue", "redis": "up"}
 
 
 @app.get("/health", include_in_schema=False)
@@ -694,7 +662,6 @@ async def _process_alert_with_diagnosis(
     t_pipeline_start = time.time()
     chaos_outcome = "pipeline_failed"
     _llm_timeout = False
-    dedup_key: tuple[str, str, str] | None = (alert_name, namespace, pod)
     try:
         description = alert.annotations.get("description", "")
         query = build_rag_query(alert.labels, description)
@@ -839,10 +806,6 @@ async def _process_alert_with_diagnosis(
         except Exception as fallback_exc:
             logger.error("Fallback Mattermost send also failed for %s: %s", alert_name, fallback_exc)
     finally:
-        # Remove dedup key so future occurrences of the same alert can be processed
-        if dedup_key is not None:
-            async with _INFLIGHT_LOCK:
-                IN_FLIGHT_ALERTS.discard(dedup_key)
         if is_chaos:
             try:
                 starts_at_epoch = datetime.fromisoformat(alert.startsAt.replace("Z", "+00:00")).timestamp()
@@ -910,44 +873,28 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
         )
 
         if alert.status == "firing":
-            if settings.queue_enabled and app.state.redis is not None:
-                # Camino de cola (F2): encolar en Redis Streams. Fail-closed —
-                # si XADD falla devolvemos 503 y Alertmanager reintenta (no perder alertas).
-                _, _, pod, namespace = _extract_alert_meta(alert)
-                fingerprint = f"{alert_name}:{namespace}:{pod}"
-                try:
-                    entry_id = await enqueue_alert(
-                        app.state.redis, alert.model_dump_json(), fingerprint,
-                    )
-                except Exception as exc:
-                    logger.error("Failed to enqueue alert %s: %r", alert_name, exc)
-                    WEBHOOK_COUNTER.labels(status="error").inc()
-                    raise HTTPException(status_code=503, detail="alert queue unavailable")
-                if entry_id is None:
-                    logger.info(
-                        "Duplicate alert skipped (dedup window)",
-                        extra={"alertname": alert_name, "fingerprint": fingerprint},
-                    )
-                    DEDUP_COUNTER.labels(alertname=alert_name).inc()
-                continue
-
-            # Camino legacy (BackgroundTasks in-process) — default mientras QUEUE_ENABLED=False.
-            # Dedup in-flight: skip if the same (alertname, namespace, pod) is already processing
-            dedup_key = (alert_name, alert.labels.get("namespace", ""), alert.labels.get("pod", ""))
-            async with _INFLIGHT_LOCK:
-                if dedup_key in IN_FLIGHT_ALERTS:
-                    logger.info(
-                        "Duplicate in-flight alert skipped",
-                        extra={"alertname": alert_name, "dedup_key": str(dedup_key)},
-                    )
-                    DEDUP_COUNTER.labels(alertname=alert_name).inc()
-                    continue
-                IN_FLIGHT_ALERTS.add(dedup_key)
-            # Full RAG + diagnosis pipeline for firing alerts
-            background_tasks.add_task(
-                _process_alert_with_diagnosis,
-                alert, app.state.http_client, app.state.chroma_client, app.state.redis,
-            )
+            # Camino único (F2): encolar en Redis Streams. Fail-closed — si Redis no
+            # está o XADD falla, devolvemos 503 y Alertmanager reintenta (no perder alertas).
+            if app.state.redis is None:
+                logger.error("Cannot enqueue alert %s — Redis unavailable", alert_name)
+                WEBHOOK_COUNTER.labels(status="error").inc()
+                raise HTTPException(status_code=503, detail="alert queue unavailable")
+            _, _, pod, namespace = _extract_alert_meta(alert)
+            fingerprint = f"{alert_name}:{namespace}:{pod}"
+            try:
+                entry_id = await enqueue_alert(
+                    app.state.redis, alert.model_dump_json(), fingerprint,
+                )
+            except Exception as exc:
+                logger.error("Failed to enqueue alert %s: %r", alert_name, exc)
+                WEBHOOK_COUNTER.labels(status="error").inc()
+                raise HTTPException(status_code=503, detail="alert queue unavailable")
+            if entry_id is None:
+                logger.info(
+                    "Duplicate alert skipped (dedup window)",
+                    extra={"alertname": alert_name, "fingerprint": fingerprint},
+                )
+                DEDUP_COUNTER.labels(alertname=alert_name).inc()
         else:
             # Resolved alerts: simple notification, no diagnosis needed
             severity, _, pod, namespace = _extract_alert_meta(alert)

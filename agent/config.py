@@ -75,11 +75,10 @@ class Settings(BaseSettings):
     redis_host: str = "redis-svc"
     redis_port: int = 6379
 
-    # Cola Redis Streams (F2) — desacopla la ingesta del LLM lento
+    # Cola Redis Streams (F2) — camino único de ingesta (validada en cluster 2026-06-29)
     # El webhook encola en O(1) (XADD) y un consumidor in-process drena de a una
-    # (Ollama serializa la generación). Default False: convive con el camino
-    # legacy (BackgroundTasks) hasta validar en cluster.
-    queue_enabled: bool = False
+    # (Ollama serializa la generación). Si Redis cae, el webhook devuelve 503
+    # fail-closed (Alertmanager reintenta) — no se pierden alertas.
     queue_stream_key: str = "aiops:alerts"
     queue_group: str = "aiops-workers"
     dedup_window_seconds: int = 300       # TTL de la dedup-key por fingerprint

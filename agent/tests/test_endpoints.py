@@ -18,7 +18,6 @@ import main
 from main import (
     app, _format_diagnosis_message, _format_escalation_body, _extract_alert_meta,
     PendingEscalation, _escalation_to_dict, _dict_to_escalation,
-    IN_FLIGHT_ALERTS, _INFLIGHT_LOCK,
     _process_alert_with_diagnosis,
     CHAOS_EXPERIMENT_COUNTER, CHAOS_MTTD_HISTOGRAM, CHAOS_MTTR_HISTOGRAM,
 )
@@ -27,7 +26,7 @@ from mattermost import make_hmac_token
 from schemas import AlertItem
 from tests.helpers import (
     VALID_PARAMS, VALID_JSON_STR,
-    mock_http_client, mock_ollama_unreachable, mock_ollama_model_not_loaded,
+    mock_http_client, mock_ollama_unreachable,
     mock_http_client_with_retries,
     mock_chroma_client, mock_rag_context, mock_diagnosis_result,
     mock_diagnosis_auto_remediate, mock_diagnosis_escalate,
@@ -53,32 +52,8 @@ class TestHealthzEndpoint:
 
 # ── GET /readyz ───────────────────────────────────────────────────────────────
 
-class TestReadyzEndpoint:
-    """Readiness probe: 200 si Ollama + modelo OK, 503 si no."""
-
-    def test_readyz_200_when_ollama_and_model_ok(self, api_client):
-        with patch.object(app.state, "http_client", mock_http_client("")):
-            r = api_client.get("/readyz")
-        assert r.status_code == 200
-        data = r.json()
-        assert data["status"] == "ready"
-        assert data["model_loaded"] is True
-
-    def test_readyz_503_when_ollama_unreachable(self, api_client):
-        with patch.object(app.state, "http_client", mock_ollama_unreachable()):
-            r = api_client.get("/readyz")
-        assert r.status_code == 503
-        assert "Ollama unreachable" in r.json()["detail"]
-
-    def test_readyz_503_when_model_not_loaded(self, api_client):
-        with patch.object(app.state, "http_client", mock_ollama_model_not_loaded()):
-            r = api_client.get("/readyz")
-        assert r.status_code == 503
-        assert "not loaded" in r.json()["detail"]
-
-
 class TestReadyzQueueMode:
-    """Con la cola activa, /readyz gated por Redis (no Ollama)."""
+    """/readyz gated por Redis (cola = único camino de ingesta; Ollama no cuenta)."""
 
     def teardown_method(self):
         app.state.redis = None
@@ -86,8 +61,7 @@ class TestReadyzQueueMode:
     def test_readyz_200_when_redis_ok_and_ignores_ollama(self, api_client):
         """Redis up → 200 mode=queue; Ollama no se consulta aunque esté caído."""
         app.state.redis = AsyncMock()
-        with patch.object(main.settings, "queue_enabled", True), \
-             patch.object(app.state, "http_client", mock_ollama_unreachable()):
+        with patch.object(app.state, "http_client", mock_ollama_unreachable()):
             r = api_client.get("/readyz")
         assert r.status_code == 200
         data = r.json()
@@ -97,16 +71,14 @@ class TestReadyzQueueMode:
 
     def test_readyz_503_when_redis_none(self, api_client):
         app.state.redis = None
-        with patch.object(main.settings, "queue_enabled", True):
-            r = api_client.get("/readyz")
+        r = api_client.get("/readyz")
         assert r.status_code == 503
         assert "Redis unavailable" in r.json()["detail"]
 
     def test_readyz_503_when_redis_ping_raises(self, api_client):
         app.state.redis = AsyncMock()
         app.state.redis.ping.side_effect = Exception("connection refused")
-        with patch.object(main.settings, "queue_enabled", True):
-            r = api_client.get("/readyz")
+        r = api_client.get("/readyz")
         assert r.status_code == 503
         assert "Redis unreachable" in r.json()["detail"]
 
@@ -122,14 +94,17 @@ class TestHealthEndpoint:
         assert r.status_code == 307
         assert r.headers["location"] == "/readyz"
 
-    def test_health_follows_redirect_when_ollama_ok(self, api_client):
+    def test_health_follows_redirect_when_redis_ok(self, api_client):
         """Con follow_redirects (default), acaba en /readyz y devuelve 200."""
-        with patch.object(app.state, "http_client", mock_http_client("")):
+        app.state.redis = AsyncMock()
+        try:
             r = api_client.get("/health")
+        finally:
+            app.state.redis = None
         assert r.status_code == 200
         data = r.json()
         assert data["status"] == "ready"
-        assert data["model_loaded"] is True
+        assert data["mode"] == "queue"
 
 
 # ── POST /extract ─────────────────────────────────────────────────────────────
@@ -292,6 +267,13 @@ class TestRetryBehavior:
 class TestAlertmanagerWebhook:
     """Tests para la ingesta del payload JSON de Alertmanager garantizando el Data Contract."""
 
+    def setup_method(self):
+        # La cola es el camino único: las alertas firing requieren Redis up para encolar.
+        app.state.redis = AsyncMock()
+
+    def teardown_method(self):
+        app.state.redis = None
+
     def test_webhook_success_single_alert(self, api_client):
         payload = {
             "receiver": "webhook",
@@ -401,21 +383,29 @@ RESOLVED_PAYLOAD = {
 class TestWebhookWithDiagnosis:
     """Tests del webhook con pipeline RAG + diagnosis integrado."""
 
-    def test_webhook_firing_queues_diagnosis_task(self, api_client):
-        """Alerta firing encola _process_alert_with_diagnosis como background task."""
-        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_task:
+    def teardown_method(self):
+        app.state.redis = None
+
+    def test_webhook_firing_enqueues_alert(self, api_client):
+        """Alerta firing → encola en Redis (el consumer corre el pipeline, no el webhook)."""
+        app.state.redis = AsyncMock()
+        with patch("main.enqueue_alert", new_callable=AsyncMock, return_value="1-0") as mock_enq, \
+             patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_task:
             r = api_client.post("/webhook/alert", json=FIRING_PAYLOAD)
         assert r.status_code == 200
         assert r.json()["alerts_processed"] == 1
-        mock_task.assert_called_once()
+        mock_enq.assert_awaited_once()
+        mock_task.assert_not_called()
 
     def test_webhook_resolved_skips_diagnosis(self, api_client):
         """Alerta resolved NO encola diagnosis — va directo a Mattermost como texto simple."""
-        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_diag, \
+        with patch("main.enqueue_alert", new_callable=AsyncMock) as mock_enq, \
+             patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_diag, \
              patch("main.send_mattermost_alert", new_callable=AsyncMock):
             r = api_client.post("/webhook/alert", json=RESOLVED_PAYLOAD)
         assert r.status_code == 200
         mock_diag.assert_not_called()
+        mock_enq.assert_not_called()
 
     def test_process_alert_full_pipeline_success(self, api_client):
         """Pipeline completo: RAG OK + Diagnosis OK → mensaje formateado a Mattermost."""
@@ -1083,86 +1073,12 @@ class TestProcessAlertFallbackException:
         assert "TestAlert" in fallback_msg
 
 
-# ── In-flight dedup ───────────────────────────────────────────────────────────
-
-class TestInFlightDedup:
-    """Duplicate firing alerts for the same (alertname, namespace, pod) are skipped."""
-
-    def setup_method(self):
-        IN_FLIGHT_ALERTS.clear()
-
-    def teardown_method(self):
-        IN_FLIGHT_ALERTS.clear()
-        app.state.redis = None
-
-    def _make_firing_payload(self, alertname: str = "TestAlert", pod: str = "p", ns: str = "ns") -> dict:
-        return {
-            "status": "firing",
-            "receiver": "agent",
-            "alerts": [{
-                "status": "firing",
-                "labels": {"alertname": alertname, "pod": pod, "namespace": ns, "severity": "critical"},
-                "annotations": {"description": "test"},
-                "startsAt": "2026-01-01T00:00:00Z",
-            }],
-        }
-
-    def test_first_alert_is_queued(self, api_client):
-        """First firing alert: background task added, dedup key registered."""
-        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock):
-            r = api_client.post("/webhook/alert", json=self._make_firing_payload())
-        assert r.status_code == 200
-        assert ("TestAlert", "ns", "p") in IN_FLIGHT_ALERTS
-
-    def test_duplicate_alert_is_skipped(self, api_client):
-        """Second identical firing alert while first is in-flight → skipped."""
-        IN_FLIGHT_ALERTS.add(("TestAlert", "ns", "p"))
-        from prometheus_client import REGISTRY as REG
-        before = REG.get_sample_value("aiops_dedup_skipped_total", {"alertname": "TestAlert"}) or 0.0
-
-        r = api_client.post("/webhook/alert", json=self._make_firing_payload())
-
-        assert r.status_code == 200
-        after = REG.get_sample_value("aiops_dedup_skipped_total", {"alertname": "TestAlert"}) or 0.0
-        assert after == before + 1
-
-    def test_different_pod_same_alertname_is_not_deduped(self, api_client):
-        """Different pod → distinct dedup key → both processed."""
-        IN_FLIGHT_ALERTS.add(("TestAlert", "ns", "pod-A"))
-        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock):
-            r = api_client.post("/webhook/alert", json=self._make_firing_payload(pod="pod-B"))
-        assert r.status_code == 200
-        assert ("TestAlert", "ns", "pod-B") in IN_FLIGHT_ALERTS
-
-    @pytest.mark.asyncio
-    async def test_dedup_key_cleared_after_processing(self):
-        """After _process_alert_with_diagnosis completes, dedup key is removed."""
-        alert = AlertItem(
-            status="firing",
-            labels={"alertname": "ClearTest", "pod": "p1", "namespace": "prod", "severity": "critical"},
-            annotations={"description": "test"},
-            startsAt="2026-01-01T00:00:00Z",
-        )
-        IN_FLIGHT_ALERTS.add(("ClearTest", "prod", "p1"))
-        http_client = AsyncMock()
-
-        with patch("main.build_rag_query", side_effect=RuntimeError("pipeline boom")), \
-             patch("main.send_mattermost_alert", new_callable=AsyncMock):
-            await _process_alert_with_diagnosis(alert, http_client, None, redis_client=None)
-
-        assert ("ClearTest", "prod", "p1") not in IN_FLIGHT_ALERTS
-
-
-# ── Redis Streams queue path (F2 · Slice 1) ───────────────────────────────────
+# ── Redis Streams queue path (F2 — camino único de ingesta) ───────────────────
 
 class TestWebhookQueuePath:
-    """Con QUEUE_ENABLED el webhook encola en Redis (fail-closed); off → legacy."""
-
-    def setup_method(self):
-        IN_FLIGHT_ALERTS.clear()
+    """El webhook encola en Redis (fail-closed); si Redis cae → 503."""
 
     def teardown_method(self):
-        IN_FLIGHT_ALERTS.clear()
         app.state.redis = None
 
     def _payload(self, alertname: str = "QueueAlert") -> dict:
@@ -1177,10 +1093,9 @@ class TestWebhookQueuePath:
             }],
         }
 
-    def test_firing_enqueued_when_queue_enabled(self, api_client):
+    def test_firing_enqueued(self, api_client):
         app.state.redis = AsyncMock()
-        with patch.object(main.settings, "queue_enabled", True), \
-             patch("main.enqueue_alert", new_callable=AsyncMock, return_value="1-0") as mock_enq, \
+        with patch("main.enqueue_alert", new_callable=AsyncMock, return_value="1-0") as mock_enq, \
              patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_pipe:
             r = api_client.post("/webhook/alert", json=self._payload())
         assert r.status_code == 200
@@ -1191,38 +1106,25 @@ class TestWebhookQueuePath:
     def test_dedup_returns_none_increments_counter(self, api_client):
         app.state.redis = AsyncMock()
         before = REGISTRY.get_sample_value("aiops_dedup_skipped_total", {"alertname": "QueueAlert"}) or 0.0
-        with patch.object(main.settings, "queue_enabled", True), \
-             patch("main.enqueue_alert", new_callable=AsyncMock, return_value=None):
+        with patch("main.enqueue_alert", new_callable=AsyncMock, return_value=None):
             r = api_client.post("/webhook/alert", json=self._payload())
         assert r.status_code == 200
         after = REGISTRY.get_sample_value("aiops_dedup_skipped_total", {"alertname": "QueueAlert"}) or 0.0
         assert after == before + 1
 
-    def test_redis_down_returns_503_fail_closed(self, api_client):
+    def test_enqueue_failure_returns_503_fail_closed(self, api_client):
         app.state.redis = AsyncMock()
-        with patch.object(main.settings, "queue_enabled", True), \
-             patch("main.enqueue_alert", new_callable=AsyncMock, side_effect=Exception("Redis down")):
+        with patch("main.enqueue_alert", new_callable=AsyncMock, side_effect=Exception("Redis down")):
             r = api_client.post("/webhook/alert", json=self._payload())
         assert r.status_code == 503
 
-    def test_queue_disabled_uses_legacy_path(self, api_client):
-        """Default (flag off): no encola, usa BackgroundTask como siempre."""
-        with patch("main.enqueue_alert", new_callable=AsyncMock) as mock_enq, \
-             patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_pipe:
-            r = api_client.post("/webhook/alert", json=self._payload())
-        assert r.status_code == 200
-        mock_enq.assert_not_called()
-        mock_pipe.assert_called_once()
-
-    def test_queue_enabled_but_redis_none_falls_back_to_legacy(self, api_client):
+    def test_redis_none_returns_503_fail_closed(self, api_client):
+        """Sin Redis no hay fallback legacy: el webhook firing devuelve 503."""
         app.state.redis = None
-        with patch.object(main.settings, "queue_enabled", True), \
-             patch("main.enqueue_alert", new_callable=AsyncMock) as mock_enq, \
-             patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_pipe:
+        with patch("main.enqueue_alert", new_callable=AsyncMock) as mock_enq:
             r = api_client.post("/webhook/alert", json=self._payload())
-        assert r.status_code == 200
+        assert r.status_code == 503
         mock_enq.assert_not_called()
-        mock_pipe.assert_called_once()
 
 
 class TestHandleStreamEntry:
