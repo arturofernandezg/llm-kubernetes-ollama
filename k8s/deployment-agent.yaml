@@ -22,7 +22,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: agent
-        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:c0e6de6
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:5d5d7c7
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000
@@ -54,9 +54,8 @@ spec:
           periodSeconds: 15
           timeoutSeconds: 3
           failureThreshold: 3
-        # Readiness condicional por QUEUE_ENABLED:
-        #   - modo cola → comprueba Redis (dependencia de ingesta; Ollama lento no saca al pod).
-        #   - legacy     → comprueba Ollama + modelo.
+        # Readiness: /readyz comprueba Redis (dependencia de ingesta; la cola es el
+        # camino único — Ollama lento no debe sacar al pod de rotación).
         # Si falla → Kubernetes deja de enrutar tráfico (sin reiniciar).
         readinessProbe:
           httpGet:
@@ -108,8 +107,6 @@ spec:
           value: "redis-svc"
         - name: REDIS_PORT
           value: "6379"
-        - name: QUEUE_ENABLED
-          value: "true"
         - name: HOME
           value: "/tmp"
       volumes:
