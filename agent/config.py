@@ -75,6 +75,22 @@ class Settings(BaseSettings):
     redis_host: str = "redis-svc"
     redis_port: int = 6379
 
+    # Cola Redis Streams (F2) — desacopla la ingesta del LLM lento
+    # El webhook encola en O(1) (XADD) y un consumidor in-process drena de a una
+    # (Ollama serializa la generación). Default False: convive con el camino
+    # legacy (BackgroundTasks) hasta validar en cluster.
+    queue_enabled: bool = False
+    queue_stream_key: str = "aiops:alerts"
+    queue_group: str = "aiops-workers"
+    dedup_window_seconds: int = 300       # TTL de la dedup-key por fingerprint
+    queue_maxlen: int = 1000              # XADD MAXLEN ~ <n> (acota memoria Redis)
+    queue_max_deliveries: int = 3         # dead-letter por delivery-count (Slice 2)
+    queue_reclaim_interval_seconds: int = 60   # cada cuánto corre el reclaim periódico (Slice 2)
+    # Solo se reclaman entradas con idle > esto. DEBE superar el peor caso de
+    # diagnóstico (~252s) para no robar trabajo en curso del consumer → 600s con margen.
+    queue_min_idle_seconds: int = 600
+    queue_dead_letter_key: str = "aiops:alerts:dead"   # stream de cuarentena para poison messages
+
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

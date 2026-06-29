@@ -43,6 +43,9 @@ from remediation import (
 )
 from utils import backoff_delay
 from escalation_store import store_escalation, get_escalation, delete_escalation, count_escalations
+from streams import (
+    enqueue_alert, ensure_group, consume_loop, reclaim_pending, QUEUE_PROCESSED,
+)
 
 # ── Métricas Prometheus ──────────────────────────────────────────────────────
 RETRY_COUNTER = Counter(
@@ -296,6 +299,21 @@ async def _periodic_cleanup() -> None:
         await _cleanup_expired_rollbacks()
 
 
+async def _periodic_reclaim() -> None:
+    """
+    Recupera entradas pendientes del stream (F2 Slice 2): primera iteración
+    inmediata (recuperación de arranque tras un reinicio del pod) y luego cada
+    `queue_reclaim_interval_seconds`. Fail-soft por iteración: un fallo de Redis
+    no mata la tarea, se reintenta al próximo tick.
+    """
+    while True:
+        try:
+            await reclaim_pending(app.state.redis, _handle_stream_entry)
+        except Exception as exc:
+            logger.error("Periodic reclaim failed: %r", exc)
+        await asyncio.sleep(settings.queue_reclaim_interval_seconds)
+
+
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -337,6 +355,22 @@ async def lifespan(app: FastAPI):
         app.state.redis = None
         logger.warning("Redis unavailable at startup — escalation persistence disabled: %s", exc)
 
+    # Redis Streams consumer (F2) — only when the queue is enabled and Redis is up.
+    app.state.consumer_task = None
+    app.state.reclaim_task = None
+    if settings.queue_enabled and app.state.redis is not None:
+        try:
+            await ensure_group(app.state.redis)
+            app.state.consumer_task = asyncio.create_task(
+                consume_loop(app.state.redis, _handle_stream_entry)
+            )
+            app.state.reclaim_task = asyncio.create_task(_periodic_reclaim())
+            logger.info("Alert queue enabled — stream consumer + reclaim started")
+        except Exception as exc:
+            logger.error("Failed to start stream consumer: %r", exc)
+    elif settings.queue_enabled:
+        logger.warning("QUEUE_ENABLED but Redis unavailable — falling back to background tasks")
+
     try:
         r = await app.state.http_client.get(settings.ollama_tags, timeout=10.0)
         r.raise_for_status()
@@ -369,6 +403,8 @@ async def lifespan(app: FastAPI):
         ROLLBACK_COUNTER.labels(outcome=_outcome).inc(0)
     WEBHOOK_COUNTER.labels(status="success").inc(0)
     WEBHOOK_COUNTER.labels(status="error").inc(0)
+    QUEUE_PROCESSED.labels(outcome="success").inc(0)
+    QUEUE_PROCESSED.labels(outcome="error").inc(0)
 
     cleanup_task = asyncio.create_task(_periodic_cleanup())
 
@@ -379,6 +415,14 @@ async def lifespan(app: FastAPI):
         await cleanup_task
     except asyncio.CancelledError:
         pass
+
+    for _task in (app.state.consumer_task, app.state.reclaim_task):
+        if _task is not None:
+            _task.cancel()
+            try:
+                await _task
+            except asyncio.CancelledError:
+                pass
     await app.state.http_client.aclose()
     if app.state.redis is not None:
         await app.state.redis.aclose()
@@ -428,13 +472,31 @@ async def healthz():
     return {"status": "alive"}
 
 
-@app.get("/readyz", summary="Readiness probe — verifica Ollama + modelo disponible")
+@app.get("/readyz", summary="Readiness probe — Redis (cola) o Ollama+modelo (legacy)")
 async def readyz():
     """
-    Readiness probe: verifica que Ollama es alcanzable y el modelo está cargado.
-    Devuelve 503 si Ollama no responde o el modelo no está disponible.
+    Readiness probe condicional según el modo de ingesta:
+
+    - Cola activa (``queue_enabled``): la dependencia crítica de ingesta es Redis
+      (el webhook encola ahí). Se chequea solo Redis. Ollama lento/caído NO debe
+      sacar al pod de rotación — la cola está para bufferear esa lentitud; procesar
+      es problema del worker, no del ingress.
+    - Legacy (``queue_enabled=False``, default): se chequea Ollama alcanzable +
+      modelo cargado, como hasta ahora.
+
+    Devuelve 503 si la dependencia del modo activo no está sana.
     Kubernetes usa este endpoint para decidir si enrutar tráfico al pod.
     """
+    if settings.queue_enabled:
+        redis_client = getattr(app.state, "redis", None)
+        if redis_client is None:
+            raise HTTPException(status_code=503, detail="Redis unavailable (queue mode)")
+        try:
+            await asyncio.wait_for(redis_client.ping(), timeout=settings.health_timeout)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Redis unreachable: {exc}")
+        return {"status": "ready", "mode": "queue", "redis": "up"}
+
     try:
         client: httpx.AsyncClient = app.state.http_client
         r = await client.get(settings.ollama_tags, timeout=settings.health_timeout)
@@ -797,6 +859,25 @@ async def _process_alert_with_diagnosis(
                 logger.warning("Failed to record chaos metrics for %s: %s", alert_name, chaos_exc)
 
 
+async def _handle_stream_entry(entry_id: str, fields: dict) -> None:
+    """
+    Handler del consumidor de la cola (F2): decodifica una entrada del stream y
+    delega en el pipeline existente, sin tocarlo. Lo invoca `consume_loop`.
+
+    Lanza si la decodificación o el pipeline fallan → `consume_loop` no hace XACK
+    y la entrada queda pendiente para reclaim (Slice 2).
+    """
+    alert = AlertItem.model_validate_json(fields["payload"])
+    try:
+        await _process_alert_with_diagnosis(
+            alert, app.state.http_client, app.state.chroma_client, app.state.redis,
+        )
+        QUEUE_PROCESSED.labels(outcome="success").inc()
+    except Exception:
+        QUEUE_PROCESSED.labels(outcome="error").inc()
+        raise
+
+
 @app.post(
     "/webhook/alert",
     summary="Recibe alertas de Prometheus Alertmanager (AIOps Ingestion)",
@@ -829,6 +910,28 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
         )
 
         if alert.status == "firing":
+            if settings.queue_enabled and app.state.redis is not None:
+                # Camino de cola (F2): encolar en Redis Streams. Fail-closed —
+                # si XADD falla devolvemos 503 y Alertmanager reintenta (no perder alertas).
+                _, _, pod, namespace = _extract_alert_meta(alert)
+                fingerprint = f"{alert_name}:{namespace}:{pod}"
+                try:
+                    entry_id = await enqueue_alert(
+                        app.state.redis, alert.model_dump_json(), fingerprint,
+                    )
+                except Exception as exc:
+                    logger.error("Failed to enqueue alert %s: %r", alert_name, exc)
+                    WEBHOOK_COUNTER.labels(status="error").inc()
+                    raise HTTPException(status_code=503, detail="alert queue unavailable")
+                if entry_id is None:
+                    logger.info(
+                        "Duplicate alert skipped (dedup window)",
+                        extra={"alertname": alert_name, "fingerprint": fingerprint},
+                    )
+                    DEDUP_COUNTER.labels(alertname=alert_name).inc()
+                continue
+
+            # Camino legacy (BackgroundTasks in-process) — default mientras QUEUE_ENABLED=False.
             # Dedup in-flight: skip if the same (alertname, namespace, pod) is already processing
             dedup_key = (alert_name, alert.labels.get("namespace", ""), alert.labels.get("pod", ""))
             async with _INFLIGHT_LOCK:

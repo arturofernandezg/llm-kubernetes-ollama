@@ -231,6 +231,30 @@ class TestDecideAction:
         validations = self._validations("kubectl describe pod p -n ns")
         assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
 
+    # ── PR-04: rag_degraded nunca auto-remedia (sin grounding RAG) ──────────────
+
+    def test_rag_degraded_downgrades_auto_remediate_to_escalate(self, monkeypatch):
+        """Mismo caso que test_auto_remediate_all_conditions_met, pero rag_degraded=True → ESCALATE."""
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        diagnosis = mock_diagnosis_auto_remediate()
+        validations = self._validations(
+            "kubectl describe pod engine-pod -n prod",
+            "kubectl annotate deployment engine aiops-checked=true -n prod",
+        )
+        assert decide_action(diagnosis, validations, rag_degraded=True) == RemediationAction.ESCALATE
+        # Sin degradación (default) sigue auto-remediando
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+    def test_rag_degraded_leaves_suggest_only_untouched(self, monkeypatch):
+        """El guard solo intercepta AUTO_REMEDIATE; baja confianza sigue SUGGEST_ONLY (no escala)."""
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        diagnosis = {**mock_diagnosis_auto_remediate(), "confidence": 0.5}
+        validations = self._validations("kubectl describe pod p -n ns")
+        assert decide_action(diagnosis, validations, rag_degraded=True) == RemediationAction.SUGGEST_ONLY
+
 
 # ── TestExecuteResult ─────────────────────────────────────────────────────────
 
@@ -462,6 +486,17 @@ class TestProcessRemediation:
         result = await process_remediation(diagnosis)
         assert result["action"] == RemediationAction.SUGGEST_ONLY
         assert result["execution_attempted"] is False
+
+    @pytest.mark.asyncio
+    async def test_rag_degraded_forces_escalate_with_approvable_commands(self, monkeypatch):
+        """PR-04: un caso auto-remediable, con RAG degradado, escala con comandos aprobables (botones)."""
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        result = await process_remediation(mock_diagnosis_auto_remediate(), rag_degraded=True)
+        assert result["action"] == RemediationAction.ESCALATE
+        assert result["execution_attempted"] is False        # no se ejecutó nada
+        assert len(result["safe_commands"]) > 0               # hay comandos que el operador puede aprobar
 
 
 # ── TestParseMemoryToBytes ────────────────────────────────────────────────────

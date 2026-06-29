@@ -298,6 +298,8 @@ Endpoint `GET /metrics` expuesto via `prometheus-fastapi-instrumentator`:
 **Contadores custom**:
 - `aiops_ollama_retries_total{outcome}` — resultado del retry ("success" / "exhausted")
 - `aiops_extraction_total{method}` — método de extracción usado ("direct" / "markdown_block" / "regex_search" / "failed")
+- `aiops_diagnosis_total{outcome}` — etapas del pipeline de diagnóstico (`rag_ok` / `rag_reconnect` / `rag_failed` / `success` / `llm_timeout` / `llm_error` / `pipeline_failed`). `rag_reconnect` = ChromaDB caché stale recuperado en caliente (PR-05); `llm_timeout` vs `llm_error` diferenciados (PR-06)
+- `aiops_escalation_store_total{outcome}` — persistencia de escalaciones en Redis (`stored` = con botones / `redis_down` = degradado sin botones). Incrementa de forma visible durante el chaos de Redis (PR-06)
 
 - `aiops_remediation_rollback_total{outcome}` — resultado del rollback post-patch (`scheduled` / `skipped_no_snapshot` / `healthy` / `reverted` / `revert_failed` / `evaluation_error`)
 

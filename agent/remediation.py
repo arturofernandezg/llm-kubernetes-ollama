@@ -265,8 +265,13 @@ def _set_resources_memory_exception(reason_code: str, diagnosis: dict) -> bool:
 def decide_action(
     diagnosis: dict,
     command_validations: list[dict],
+    rag_degraded: bool = False,
 ) -> RemediationAction:
     """Decide qué acción tomar basándose en el diagnóstico y la validación de comandos.
+
+    Args:
+        rag_degraded: True si el retrieval RAG falló (ChromaDB inalcanzable) y el LLM
+                      corrió zero-shot, sin grounding. En ese caso nunca se auto-remedia.
 
     Reglas evaluadas en orden (primera que aplica gana):
     1. remediation_enabled == False → SUGGEST_ONLY
@@ -277,6 +282,7 @@ def decide_action(
     4.6 (tutor) proposed_action en memory.limits: new > 2× current → ESCALATE
     5. risk > remediation_auto_max_risk → ESCALATE
     6. confidence < remediation_auto_confidence → SUGGEST_ONLY
+    7.5 (PR-04) rag_degraded → ESCALATE (no auto-remediar sin grounding RAG)
     7. Todo OK → AUTO_REMEDIATE
     """
     if not settings.remediation_enabled:
@@ -362,6 +368,17 @@ def decide_action(
     confidence = diagnosis.get("confidence", 0.0)
     if confidence < settings.remediation_auto_confidence:
         return RemediationAction.SUGGEST_ONLY
+
+    # Rule 7.5 (PR-04) — never auto-remediate without RAG grounding.
+    # A degraded RAG (ChromaDB unreachable) means the LLM ran zero-shot, where safety
+    # drops sharply (docs/10: 25% vs 100%) and the small model stays overconfident
+    # (backlog E5). Downgrade to ESCALATE so a human approves instead of acting blind.
+    if rag_degraded:
+        logger.warning(
+            "Remediation downgraded to escalate: RAG degraded, no grounding",
+            extra={"reason_code": "rag_degraded"},
+        )
+        return RemediationAction.ESCALATE
 
     return RemediationAction.AUTO_REMEDIATE
 
@@ -743,12 +760,14 @@ def build_remediation_result(
 
 # ── Entry point principal ─────────────────────────────────────────────────────
 
-async def process_remediation(diagnosis: dict) -> dict:
+async def process_remediation(diagnosis: dict, rag_degraded: bool = False) -> dict:
     """Pipeline completo: validate → decide → snapshot → execute → resultado.
 
     Args:
         diagnosis: dict con keys diagnosis, commands, confidence, risk, explanation...
                    (output de generate_diagnosis() en diagnosis.py)
+        rag_degraded: True si el retrieval RAG falló; fuerza ESCALATE en vez de
+                      AUTO_REMEDIATE (PR-04, sin grounding no se auto-actúa).
 
     Returns:
         build_remediation_result() dict, extended with:
@@ -762,7 +781,7 @@ async def process_remediation(diagnosis: dict) -> dict:
             extra={"total": len(raw_commands), "valid": len(commands)},
         )
     validations = validate_commands(commands)
-    action = decide_action(diagnosis, validations)
+    action = decide_action(diagnosis, validations, rag_degraded)
 
     execute_results: list[ExecuteResult] = []
     pre_patch_snapshot: PrePatchSnapshot | None = None

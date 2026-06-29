@@ -5,6 +5,7 @@ Cubre: GET /healthz, GET /readyz, GET /health, POST /extract, GET /metrics.
 Todos los tests usan mocks de Ollama (no requieren cluster ni LLM).
 """
 
+import asyncio
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -74,6 +75,40 @@ class TestReadyzEndpoint:
             r = api_client.get("/readyz")
         assert r.status_code == 503
         assert "not loaded" in r.json()["detail"]
+
+
+class TestReadyzQueueMode:
+    """Con la cola activa, /readyz gated por Redis (no Ollama)."""
+
+    def teardown_method(self):
+        app.state.redis = None
+
+    def test_readyz_200_when_redis_ok_and_ignores_ollama(self, api_client):
+        """Redis up → 200 mode=queue; Ollama no se consulta aunque esté caído."""
+        app.state.redis = AsyncMock()
+        with patch.object(main.settings, "queue_enabled", True), \
+             patch.object(app.state, "http_client", mock_ollama_unreachable()):
+            r = api_client.get("/readyz")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "ready"
+        assert data["mode"] == "queue"
+        app.state.redis.ping.assert_awaited_once()
+
+    def test_readyz_503_when_redis_none(self, api_client):
+        app.state.redis = None
+        with patch.object(main.settings, "queue_enabled", True):
+            r = api_client.get("/readyz")
+        assert r.status_code == 503
+        assert "Redis unavailable" in r.json()["detail"]
+
+    def test_readyz_503_when_redis_ping_raises(self, api_client):
+        app.state.redis = AsyncMock()
+        app.state.redis.ping.side_effect = Exception("connection refused")
+        with patch.object(main.settings, "queue_enabled", True):
+            r = api_client.get("/readyz")
+        assert r.status_code == 503
+        assert "Redis unreachable" in r.json()["detail"]
 
 
 # ── GET /health ───────────────────────────────────────────────────────────────
@@ -1116,6 +1151,133 @@ class TestInFlightDedup:
             await _process_alert_with_diagnosis(alert, http_client, None, redis_client=None)
 
         assert ("ClearTest", "prod", "p1") not in IN_FLIGHT_ALERTS
+
+
+# ── Redis Streams queue path (F2 · Slice 1) ───────────────────────────────────
+
+class TestWebhookQueuePath:
+    """Con QUEUE_ENABLED el webhook encola en Redis (fail-closed); off → legacy."""
+
+    def setup_method(self):
+        IN_FLIGHT_ALERTS.clear()
+
+    def teardown_method(self):
+        IN_FLIGHT_ALERTS.clear()
+        app.state.redis = None
+
+    def _payload(self, alertname: str = "QueueAlert") -> dict:
+        return {
+            "status": "firing",
+            "receiver": "agent",
+            "alerts": [{
+                "status": "firing",
+                "labels": {"alertname": alertname, "pod": "p", "namespace": "ns", "severity": "critical"},
+                "annotations": {"description": "test"},
+                "startsAt": "2026-01-01T00:00:00Z",
+            }],
+        }
+
+    def test_firing_enqueued_when_queue_enabled(self, api_client):
+        app.state.redis = AsyncMock()
+        with patch.object(main.settings, "queue_enabled", True), \
+             patch("main.enqueue_alert", new_callable=AsyncMock, return_value="1-0") as mock_enq, \
+             patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_pipe:
+            r = api_client.post("/webhook/alert", json=self._payload())
+        assert r.status_code == 200
+        assert r.json()["alerts_processed"] == 1
+        mock_enq.assert_awaited_once()
+        mock_pipe.assert_not_called()  # camino de cola, no BackgroundTask
+
+    def test_dedup_returns_none_increments_counter(self, api_client):
+        app.state.redis = AsyncMock()
+        before = REGISTRY.get_sample_value("aiops_dedup_skipped_total", {"alertname": "QueueAlert"}) or 0.0
+        with patch.object(main.settings, "queue_enabled", True), \
+             patch("main.enqueue_alert", new_callable=AsyncMock, return_value=None):
+            r = api_client.post("/webhook/alert", json=self._payload())
+        assert r.status_code == 200
+        after = REGISTRY.get_sample_value("aiops_dedup_skipped_total", {"alertname": "QueueAlert"}) or 0.0
+        assert after == before + 1
+
+    def test_redis_down_returns_503_fail_closed(self, api_client):
+        app.state.redis = AsyncMock()
+        with patch.object(main.settings, "queue_enabled", True), \
+             patch("main.enqueue_alert", new_callable=AsyncMock, side_effect=Exception("Redis down")):
+            r = api_client.post("/webhook/alert", json=self._payload())
+        assert r.status_code == 503
+
+    def test_queue_disabled_uses_legacy_path(self, api_client):
+        """Default (flag off): no encola, usa BackgroundTask como siempre."""
+        with patch("main.enqueue_alert", new_callable=AsyncMock) as mock_enq, \
+             patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_pipe:
+            r = api_client.post("/webhook/alert", json=self._payload())
+        assert r.status_code == 200
+        mock_enq.assert_not_called()
+        mock_pipe.assert_called_once()
+
+    def test_queue_enabled_but_redis_none_falls_back_to_legacy(self, api_client):
+        app.state.redis = None
+        with patch.object(main.settings, "queue_enabled", True), \
+             patch("main.enqueue_alert", new_callable=AsyncMock) as mock_enq, \
+             patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_pipe:
+            r = api_client.post("/webhook/alert", json=self._payload())
+        assert r.status_code == 200
+        mock_enq.assert_not_called()
+        mock_pipe.assert_called_once()
+
+
+class TestHandleStreamEntry:
+    """El handler decodifica la entrada y delega en el pipeline existente."""
+
+    def _fields(self, alertname: str = "StreamAlert") -> dict:
+        alert = AlertItem(
+            status="firing",
+            labels={"alertname": alertname, "pod": "p", "namespace": "ns", "severity": "critical"},
+            annotations={"description": "test"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+        return {"payload": alert.model_dump_json()}
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_pipeline_and_counts_success(self):
+        before = REGISTRY.get_sample_value("aiops_queue_processed_total", {"outcome": "success"}) or 0.0
+        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock) as mock_pipe:
+            await main._handle_stream_entry("1-0", self._fields())
+        mock_pipe.assert_awaited_once()
+        assert mock_pipe.call_args.args[0].labels["alertname"] == "StreamAlert"
+        after = REGISTRY.get_sample_value("aiops_queue_processed_total", {"outcome": "success"}) or 0.0
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_pipeline_error_propagates_and_counts_error(self):
+        before = REGISTRY.get_sample_value("aiops_queue_processed_total", {"outcome": "error"}) or 0.0
+        with patch("main._process_alert_with_diagnosis", new_callable=AsyncMock, side_effect=Exception("boom")):
+            with pytest.raises(Exception, match="boom"):
+                await main._handle_stream_entry("1-0", self._fields())
+        after = REGISTRY.get_sample_value("aiops_queue_processed_total", {"outcome": "error"}) or 0.0
+        assert after == before + 1
+
+
+class TestPeriodicReclaim:
+    """La tarea periódica delega en reclaim_pending con el handler del stream."""
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_reclaim_pending(self):
+        main.app.state.redis = AsyncMock()
+        # reclaim_pending real haría una iteración y dormiría; cortamos en el sleep.
+        with patch("main.reclaim_pending", new_callable=AsyncMock) as mock_reclaim, \
+             patch("main.asyncio.sleep", new_callable=AsyncMock, side_effect=asyncio.CancelledError()):
+            with pytest.raises(asyncio.CancelledError):
+                await main._periodic_reclaim()
+        mock_reclaim.assert_awaited_once_with(main.app.state.redis, main._handle_stream_entry)
+
+    @pytest.mark.asyncio
+    async def test_reclaim_error_does_not_kill_task(self):
+        main.app.state.redis = AsyncMock()
+        with patch("main.reclaim_pending", new_callable=AsyncMock, side_effect=Exception("redis down")), \
+             patch("main.asyncio.sleep", new_callable=AsyncMock, side_effect=asyncio.CancelledError()):
+            # El error de reclaim se traga; la tarea llega al sleep (que aquí corta).
+            with pytest.raises(asyncio.CancelledError):
+                await main._periodic_reclaim()
 
 
 # ── LLM timeout messaging ─────────────────────────────────────────────────────

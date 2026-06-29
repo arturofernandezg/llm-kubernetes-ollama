@@ -13,18 +13,20 @@ python -m pytest tests/ -v
 
 | Archivo | Tests | Tipo | Qué verifica |
 |---|---|---|---|
-| `test_endpoints.py` | ~82 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics, formatter, feedback loop, `/webhook/action` (FakeRedis, approve/reject/HMAC), fallback isolation, `TestInFlightDedup` (×4), `TestDiagnosisTimeout` (×4) |
+| `test_endpoints.py` | 108 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics, formatter, feedback loop, `/webhook/action` (FakeRedis, approve/reject/HMAC), fallback isolation, `TestInFlightDedup` (×4), `TestDiagnosisTimeout` (×4), `TestEscalationStoreMetric` (×2, PR-06), `TestRagReconnect` (×2, PR-05) |
 | `test_extraction.py` | 11 | Unitario | extract_json: direct, markdown_block, regex con bracket counting, nested JSON, edge cases |
 | `test_tf_generator.py` | 16 | Unitario | safe_name, generate_terraform (template, defaults, labels) |
 | `test_validation.py` | 6 | Unitario | validate_params: regiones, instance types, campos null |
 | `test_mattermost.py` | 13 | Unitario | send_mattermost_alert: envío, retry 5xx, no-retry 4xx, ConnectError, excepción inesperada, fail-open; make_hmac_token |
 | `test_rag.py` | 32 | Unitario | build_rag_query, generate_embedding (incl. guard ValueError), retrieve_context, ingest_runbook, load_runbooks_from_dir, ingest_all_runbooks, build_incident_document, ingest_incident (ChromaDB + Ollama mockeados) |
 | `test_diagnosis.py` | 16 | Unitario | build_alert_text, format_context_docs, generate_diagnosis, _clamp (LLM mockeado) |
-| `test_remediation.py` | 96 | Unitario | classify_command (SAFE/MUTATING/BLOCKED/UNKNOWN), validate_commands, decide_action (9 reglas incl. 4.5/4.6), execute_commands (dry-run + real mode mock), process_remediation, _get_safe_commands, zero_current_memory |
+| `test_remediation.py` | 137 | Unitario | classify_command (SAFE/MUTATING/BLOCKED/UNKNOWN), validate_commands, decide_action (9 reglas incl. 4.5/4.6 + 7.5 `rag_degraded`→escalate, PR-04), execute_commands (dry-run + real mode mock), process_remediation, _get_safe_commands, zero_current_memory |
 | `test_ingest_runbooks.py` | 3 | Unitario | CLI `ingest_runbooks.run()`: exit 0 sin errores, exit 1 con errores, runbooks_dir correcto (mocks `ingest_all_runbooks`) |
 | `test_utils.py` | 5 | Unitario | `backoff_delay()`: primer intento = base, crecimiento exponencial, cap en max, base custom, edge case max == computed |
 | `test_escalation_store.py` | 15 | Unitario | `store_escalation`, `get_escalation`, `delete_escalation`, `count_escalations` con FakeRedis; fail-open con Redis caído; flujo completo store→get→delete |
-| **Total** | **~394** | | Actualizado 2026-05-27 (FASE 2: Redis persistence + dedup + timeout) — pendiente `pytest` de verificación |
+| `test_evaluation.py` | 21 | Unitario | Evaluación del retrieval RAG (p@1/p@3, safety vs zero-shot); soporte de `docs/10` |
+| `test_rollback.py` | 11 | Unitario | Rollback post-patch: scheduling, `_evaluate_rollback` (healthy/revert), wiring en `_process_alert_with_diagnosis` |
+| **Total** | **394** | | 394 funciones `def test_` en 13 ficheros. Verificado ✅ 2026-06-26 (F1 quick-wins): suite verde, +7 tests sobre los 387 de 2026-05-27 |
 
 **Nota**: los tests estaban originalmente en un único `test_main.py` (40 tests).
 Se refactorizaron y ampliaron progresivamente al añadir módulos:
@@ -40,6 +42,7 @@ Se refactorizaron y ampliaron progresivamente al añadir módulos:
 - Calidad sesión #4 (2026-05-11): +5 tests en `test_mattermost.py` (truncation guard, structured logging, 4xx no-retry). Fixes MM1-MM9.
 - Calidad sesión #6 (2026-05-11): +3 tests en `test_endpoints.py::TestActionCallbackEndpoint` (HMAC missing/invalid/valid). Fix X5.
 - Calidad sesión #7 (2026-05-12): +2 tests en `test_rag.py` (ValueError guard en `generate_embedding`). +2 tests en `test_endpoints.py` (fallback isolation M10). +5 tests en `test_utils.py` (nuevo fichero, `backoff_delay`). Fixes S2, M10, X2.
+- F1 quick-wins (2026-06-25/26): +3 tests en `test_remediation.py` (PR-04, regla 7.5 `rag_degraded`→escalate). +2 tests en `test_endpoints.py::TestEscalationStoreMetric` (PR-06, `aiops_escalation_store_total`) + 2 extendidos (split `llm_timeout`/`llm_error`). +2 tests en `test_endpoints.py::TestRagReconnect` (PR-05, reconexión lazy ChromaDB). Total +7 → 394.
 
 ### Ficheros de soporte
 

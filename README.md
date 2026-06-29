@@ -39,41 +39,40 @@ Prometheus → Alertmanager → FastAPI /webhook/alert → RAG (ChromaDB + nomic
 ```
 llm-kubernetes-ollama/
 ├── agent/
-│   ├── main.py               # FastAPI app (webhook, métricas, pipeline RAG+LLM)
+│   ├── main.py               # FastAPI app (webhooks, métricas, pipeline, dedup, rollback)
 │   ├── config.py             # Settings (pydantic-settings) + JSON logging
-│   ├── schemas.py            # Modelos Pydantic v2 (AlertmanagerPayload, AlertItem…)
+│   ├── schemas.py            # Modelos Pydantic v2 (AlertmanagerPayload, ProposedAction…)
 │   ├── extraction.py         # 3 estrategias de extracción JSON del LLM
 │   ├── validation.py         # Validación de parámetros GCP
-│   ├── mattermost.py         # Cliente HTTP async Mattermost con retry/backoff
+│   ├── mattermost.py         # Cliente HTTP async Mattermost (retry/backoff, botones HMAC)
 │   ├── rag.py                # Cliente ChromaDB, ingesta runbooks, query semántica
 │   ├── diagnosis.py          # Prompt AIOps contextual, generate_diagnosis(), JSON
-│   ├── remediation.py        # Validation layer, motor de decisión, executor kubectl
+│   ├── remediation.py        # Validation layer, motor de decisión, executor, rollback
+│   ├── escalation_store.py   # Persistencia de escalaciones en Redis (fail-open)
+│   ├── utils.py              # backoff_delay() compartido
 │   ├── tf_generator.py       # Generación Terraform (Fase 0 legacy)
 │   ├── runbooks/             # 16 runbooks YAML semilla (OOMKilled, CrashLoop…)
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── requirements-dev.txt
 │   ├── ingest_runbooks.py    # CLI ingesta runbooks → ChromaDB (async)
-│   └── tests/                # 196 tests en 8 ficheros (no requieren K8s ni Ollama)
+│   ├── Dockerfile · requirements.txt · requirements-dev.txt
+│   └── tests/                # 387 tests en 13 ficheros (no requieren K8s ni Ollama)
 ├── k8s/
-│   ├── deployment-agent.yaml     # Agent: 1 réplica, probes, securityContext
-│   ├── deployment-ollama.yaml    # Ollama: 1 réplica, PVC 20Gi, PDB
-│   ├── deployment-apache.yaml    # Apache: validación de red interna
-│   ├── service-agent.yaml        # ClusterIP :8000 (annotations scrape Prometheus)
-│   ├── service-ollama.yaml       # ClusterIP :11434
-│   ├── service-apache.yaml       # ClusterIP :80
-│   ├── pvc-ollama.yaml           # 20Gi ReadWriteOnce (NUNCA borrar)
-│   ├── pdb-ollama.yaml           # PodDisruptionBudget (minAvailable: 1)
+│   ├── deployment-agent.yaml · deployment-ollama.yaml · deployment-apache.yaml
+│   ├── service-*.yaml · pvc-ollama.yaml · pdb-ollama.yaml
 │   ├── networkpolicy.yaml        # Segmentación de tráfico entre namespaces
-│   ├── prometheus.yaml           # Prometheus + kube-state-metrics + 5 reglas
+│   ├── prometheus.yaml           # Prometheus + kube-state-metrics + 6 reglas
 │   ├── alertmanager.yaml         # Alertmanager → agent-svc:8000/webhook/alert
 │   ├── chromadb.yaml             # ChromaDB StatefulSet + PVC
+│   ├── redis.yaml                # Redis (estado de escalaciones)
 │   ├── mattermost.yaml           # Mattermost + PostgreSQL StatefulSet
-│   ├── grafana.yaml              # Grafana stateless + datasource + dashboard + contact point
+│   ├── grafana.yaml              # Grafana stateless + 2 dashboards (overview + chaos)
 │   ├── job-ingest-runbooks.yaml  # K8s Job — ingesta idempotente de runbooks en ChromaDB
-│   └── rbac.yaml                 # Role + RoleBinding para remediación (patch pods)
-├── docs/                         # Documentación detallada por componente
+│   ├── rbac.yaml                 # Roles para remediación (arturo-llm-test + arturo-chaos)
+│   └── chaos/                    # Manifests chaos engineering (arturo-chaos)
+├── scripts/                      # chaos.sh · smoke.sh · build_demo.py
+├── docs/                         # Documentación detallada por componente (+ defensa.md, img/)
 ├── docs_sesion/                  # Diarios de sesión de desarrollo
+├── demo/                         # Deck de presentación (demo.html + guion.html)
+├── memoria/                      # Memoria del TFM (LaTeX: main.tex, capitulos/, demos/)
 ├── generate_tf.py                # CLI legacy: extrae params + genera .tf
 ├── cloudbuild.yaml               # Pipeline Cloud Build (tests → build → push AR)
 ├── CLAUDE.md                     # Contexto para Claude Code

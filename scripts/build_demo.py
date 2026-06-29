@@ -24,10 +24,10 @@ DATE = "2026-05-26"
 SUBJECT = "Prácticas / TFG · MasOrange / Telecable"
 
 CHAOS_RESULTS = [
-    {"exp": "OOMKilled", "for": "0m", "mttd": "5.1", "mttr": "211.6", "conf": "0.95", "outcome": "escalate", "detect": "39"},
-    {"exp": "CrashLoopBackOff", "for": "5m", "mttd": "5.0", "mttr": "214.0", "conf": "0.95", "outcome": "escalate", "detect": "195"},
-    {"exp": "ImagePullBackOff", "for": "1m", "mttd": "5.1", "mttr": "273.5", "conf": "0.85", "outcome": "escalate", "detect": "171"},
-    {"exp": "HighCPU", "for": "5m", "mttd": "10.0", "mttr": "226.7", "conf": "0.98", "outcome": "escalate", "detect": "609"},
+    {"exp": "OOMKilled", "for": "0m", "mttd": "5.0", "mttr": "205.4", "conf": "0.95", "outcome": "escalate", "detect": "39"},
+    {"exp": "CrashLoopBackOff", "for": "5m", "mttd": "5.0", "mttr": "205.7", "conf": "0.95", "outcome": "escalate", "detect": "195"},
+    {"exp": "ImagePullBackOff", "for": "1m", "mttd": "5.1", "mttr": "252.1", "conf": "0.80", "outcome": "escalate", "detect": "171"},
+    {"exp": "HighCPU", "for": "5m", "mttd": "10.1", "mttr": "206.7", "conf": "0.00", "outcome": "suggest_only", "detect": "609"},
 ]
 
 IMAGES = {

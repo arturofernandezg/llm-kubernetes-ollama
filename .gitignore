@@ -20,10 +20,26 @@ desktop.ini
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv
 .venv/
 *.venv
 venv/
+
+# Backups (no versionar binarios; se guardan fuera del repo)
+*.tar.gz
+
+# Node (lockfiles huérfanos del experimento de presentación)
+package-lock.json
+node_modules/
+
+# LaTeX build artifacts (memoria/)
+*.aux
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
 
 # Mac system files
 .AppleDouble
