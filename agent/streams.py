@@ -20,12 +20,14 @@ Convención de claves:
   - dedup:     "aiops:seen:<fingerprint>"  con TTL settings.dedup_window_seconds
 """
 
+import asyncio
 import logging
 import os
 
 from prometheus_client import Counter, Gauge
 
 from config import settings
+from utils import backoff_delay
 
 logger = logging.getLogger("aiops_agent")
 
@@ -63,18 +65,27 @@ def _seen_key(fingerprint: str) -> str:
     return f"{_SEEN_PREFIX}{fingerprint}"
 
 
-async def ensure_group(redis_client) -> None:
+async def ensure_group(redis_client, start_id: str = "0") -> None:
     """
     Crea el consumer group (con MKSTREAM) de forma idempotente.
 
     `XGROUP CREATE` lanza si el grupo ya existe (error BUSYGROUP); lo ignoramos.
     Cualquier otro error se propaga (problema real de Redis al arrancar).
+
+    `start_id` fija desde dónde entrega el grupo:
+      - "0" (arranque): desde el inicio del stream. La primera vez el stream está
+        vacío → inocuo; tras un restart del pod con Redis intacto el grupo ya
+        existe (BUSYGROUP) y el id se ignora (lo pendiente lo recupera el PEL).
+      - "$" (self-heal en caliente, ver `consume_loop`): solo entregas futuras.
+        Evita que, si el grupo se recrea sobre un stream que SOBREVIVIÓ (p.ej.
+        XGROUP DESTROY), se re-entregue todo el historial retenido (MAXLEN ~) →
+        replay masivo de alertas viejas (no pasa por la dedup-key de enqueue).
     """
     try:
         await redis_client.xgroup_create(
             name=settings.queue_stream_key,
             groupname=settings.queue_group,
-            id="0",
+            id=start_id,
             mkstream=True,
         )
         logger.info(
@@ -144,6 +155,15 @@ async def consume_loop(redis_client, handler) -> None:
     lanza, NO se hace XACK (la entrada queda pendiente; la reclama el Slice 2 vía
     XAUTOCLAIM) y el bucle continúa. `CancelledError` se propaga (parada limpia).
 
+    Self-heal ante fallo de XREADGROUP: si el error es **NOGROUP** (el grupo
+    desapareció — Redis recreado/flusheado bajo un agente vivo, sin PVC) se
+    regenera el grupo con `ensure_group(start_id="$")` (solo entregas futuras:
+    si el stream sobrevivió, NO re-entrega el historial retenido → evita un
+    replay masivo; el gap lo cubre el reenvío periódico de Alertmanager).
+    Cualquier otro error es transitorio (Redis caído). En ambos casos se hace
+    **backoff exponencial** antes de reintentar — nunca `continue` inmediato —
+    para no entrar en un busy-spin que satura la CPU de Redis (HighCPU firing).
+
     Procesamiento secuencial (1 in-flight): rate-limit natural de Ollama.
     """
     consumer = consumer_name()
@@ -151,6 +171,7 @@ async def consume_loop(redis_client, handler) -> None:
         "Stream consumer loop started",
         extra={"stream": settings.queue_stream_key, "group": settings.queue_group, "consumer": consumer},
     )
+    consecutive_failures = 0
     while True:
         try:
             resp = await redis_client.xreadgroup(
@@ -160,8 +181,24 @@ async def consume_loop(redis_client, handler) -> None:
                 count=1,
                 block=5000,
             )
+            consecutive_failures = 0
         except Exception as exc:
-            logger.warning("XREADGROUP failed, retrying: %r", exc)
+            consecutive_failures += 1
+            if "NOGROUP" in str(exc):
+                logger.warning("Consumer group missing (NOGROUP), recreating: %r", exc)
+                try:
+                    await ensure_group(redis_client, start_id="$")
+                except Exception as ge:
+                    logger.error("ensure_group during self-heal failed: %r", ge)
+            else:
+                logger.warning("XREADGROUP failed, backing off: %r", exc)
+            await asyncio.sleep(
+                backoff_delay(
+                    consecutive_failures - 1,
+                    settings.retry_base_delay,
+                    settings.retry_max_delay,
+                )
+            )
             continue
 
         if not resp:

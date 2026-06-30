@@ -40,6 +40,7 @@ from diagnosis import generate_diagnosis
 from remediation import (
     process_remediation, execute_commands, results_to_log, RemediationAction,
     capture_pre_patch_value, check_pod_health, revert_patch, PrePatchSnapshot,
+    _limit_resource,
 )
 from utils import backoff_delay
 from escalation_store import store_escalation, get_escalation, delete_escalation, count_escalations
@@ -247,13 +248,14 @@ async def _evaluate_rollback(incident_id: str) -> None:
             await send_mattermost_alert(msg)
         else:
             result = await revert_patch(ctx.snapshot)
+            resource = _limit_resource(ctx.snapshot.field)
             if result.success:
                 ROLLBACK_COUNTER.labels(outcome="reverted").inc()
                 msg = (
                     f"🔄 **Rollback executed** — `{alert_name}`\n"
                     f"Pod(s) still failing after {settings.remediation_rollback_timeout}s "
                     f"(reason: `{health.reason}`). "
-                    f"Reverted `{ctx.snapshot.deployment}` memory to `{ctx.snapshot.value}`.\n"
+                    f"Reverted `{ctx.snapshot.deployment}` {resource} to `{ctx.snapshot.value}`.\n"
                     f"```\n{results_to_log([result])}\n```"
                 )
             else:

@@ -15,6 +15,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from redis.exceptions import ResponseError
 
 import streams
 from streams import (
@@ -83,6 +84,8 @@ class TestEnsureGroup:
         await ensure_group(r)
         r.xgroup_create.assert_awaited_once()
         assert r.xgroup_create.call_args.kwargs.get("mkstream") is True
+        # Default de arranque: desde el inicio del stream.
+        assert r.xgroup_create.call_args.kwargs["id"] == "0"
 
     @pytest.mark.asyncio
     async def test_busygroup_is_idempotent(self):
@@ -147,6 +150,67 @@ class TestConsumeLoop:
             await consume_loop(r, handler)
 
         handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_nogroup_recreates_group_and_backs_off(self):
+        # El grupo desapareció (Redis recreado bajo un agente vivo) → self-heal:
+        # ensure_group regenera el grupo y hay backoff (no busy-spin).
+        r = AsyncMock()
+        r.xreadgroup.side_effect = [
+            ResponseError("NOGROUP No such key 'aiops:alerts' or consumer group"),
+            asyncio.CancelledError(),
+        ]
+        handler = AsyncMock()
+
+        with patch("streams.asyncio.sleep", AsyncMock()) as sleep_mock:
+            with pytest.raises(asyncio.CancelledError):
+                await consume_loop(r, handler)
+
+        # ensure_group → xgroup_create (MKSTREAM) para regenerar el grupo.
+        r.xgroup_create.assert_awaited_once()
+        # start_id="$": solo entregas futuras → no re-entrega el historial retenido.
+        assert r.xgroup_create.call_args.kwargs["id"] == "$"
+        # Backoff aplicado en vez de continue inmediato (prueba de no-busy-spin).
+        sleep_mock.assert_awaited_once()
+        handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generic_xreadgroup_error_backs_off_without_recreate(self):
+        # Error transitorio de Redis (no NOGROUP) → backoff, sin tocar el grupo.
+        r = AsyncMock()
+        r.xreadgroup.side_effect = [
+            Exception("Error 104 connection reset by peer"),
+            asyncio.CancelledError(),
+        ]
+        handler = AsyncMock()
+
+        with patch("streams.asyncio.sleep", AsyncMock()) as sleep_mock:
+            with pytest.raises(asyncio.CancelledError):
+                await consume_loop(r, handler)
+
+        r.xgroup_create.assert_not_called()
+        sleep_mock.assert_awaited_once()
+        handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failure_counter_resets_after_success(self):
+        # Error → éxito (entrada procesada+XACK) → cancel. El contador se resetea
+        # tras el éxito; el camino normal sigue funcionando.
+        resp = [[streams.settings.queue_stream_key, [("1-0", {"payload": "x"})]]]
+        r = AsyncMock()
+        r.xreadgroup.side_effect = [
+            Exception("transient"),
+            resp,
+            asyncio.CancelledError(),
+        ]
+        handler = AsyncMock()
+
+        with patch("streams.asyncio.sleep", AsyncMock()):
+            with pytest.raises(asyncio.CancelledError):
+                await consume_loop(r, handler)
+
+        handler.assert_awaited_once_with("1-0", {"payload": "x"})
+        r.xack.assert_awaited_once()
 
 
 # ── reclaim_pending ─────────────────────────────────────────────────────────
