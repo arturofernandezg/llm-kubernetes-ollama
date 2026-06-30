@@ -60,9 +60,9 @@ Permisos de admin confirmados por el tutor (2026-04-20).
 Prometheus descubre targets en dos jobs:
 
 1. **`kubernetes-endpoints`**: servicios anotados con `prometheus.io/scrape=true` en namespaces
-   `arturo-llm-test` y `arturo-monitoring`. Actualmente: `agent-svc` (port 8000) y `kube-state-metrics-svc` (port 8080).
+   `arturo-llm-test` y `arturo-monitoring`. Actualmente: `agent-svc` (port 8000) y `kube-state-metrics-svc` (port 8080). Namespace-scoped → aislado de otros tenants por construcción.
 2. **`kubernetes-cadvisor`**: kubelet cAdvisor en todos los nodos vía proxy API
-   (`/api/v1/nodes/<name>/proxy/metrics/cadvisor`).
+   (`/api/v1/nodes/<name>/proxy/metrics/cadvisor`). `role: node` → **cluster-wide**: descubre TODOS los nodos (incl. los que corren workloads de otros tenants). Ver §Tenancy abajo para el corte en ingestión.
 
 Para añadir un nuevo target: añadir las annotations a su Service:
 ```yaml
@@ -80,10 +80,12 @@ annotations:
 | `KubePodCrashLoopBackOff` | `increase(kube_pod_container_status_restarts_total[15m]) > 3` | 5m | critical |
 | `HighMemory` | `container_memory_working_set_bytes / kube_pod_container_resource_limits{resource="memory"} > 0.9` | 5m | warning |
 | `HighCPU` | `rate(container_cpu_usage_seconds_total[5m]) / kube_pod_container_resource_limits{resource="cpu"} > 0.9` | 5m | warning |
-| `TargetDown` | `up == 0` | 2m | critical |
-| `KubePodImagePullBackOff` | `kube_pod_container_status_waiting_reason{reason="ImagePullBackOff"} == 1` | 1m | critical |
+| `TargetDown` | `up{job="kubernetes-endpoints"} == 0` | 2m | critical |
+| `KubePodImagePullBackOff` | `kube_pod_container_status_waiting_reason{reason="ImagePullBackOff", namespace=~"arturo-.*"} == 1` | 1m | critical |
 
 Todas tienen `labels.team: aiops` — Alertmanager las enruta al webhook del agente.
+
+> **Tenancy en cluster compartido (2026-06-29)**: el cluster pasó de mono-usuario a compartido (apareció una compañera con namespace `brms-gorules`). Las 5 reglas basadas en KSM/cAdvisor llevan ahora `namespace=~"arturo-.*"` en el `expr` (OOM, CrashLoop, HighMemory ×2 lados del join, HighCPU ×2, ImagePullBackOff) para alertar **solo sobre lo nuestro**; sin el filtro, un OOM/CrashLoop en cualquier namespace ajeno disparaba mi webhook → cola → LLM → Mattermost (la remediación ya estaba protegida por el RBAC `Role` namespaced, pero el ruido + ciclos de LLM + escalaciones sí ocurrían). `TargetDown` pasa a `up{job="kubernetes-endpoints"} == 0` (excluye cadvisor cluster-wide, cuya rotación de nodos spot ajenos daba `critical` falsos).
 
 ### Namespace label collision KSM/cAdvisor (fix aplicado 2026-05-26)
 
@@ -106,25 +108,34 @@ metric_relabel_configs:
     action: labeldrop
 ```
 
+### Tenancy: dejar de INGERIR métricas ajenas (2026-06-29)
+
+Acotar las reglas al `expr` (arriba) evita **alertar** sobre lo ajeno, pero KSM/cadvisor seguían **ingiriendo** métricas de otros tenants (coste/cardinalidad + ruido en dashboards). Dos fuentes, dos cortes:
+
+- **KSM en el origen**: `--namespaces=arturo-llm-test,arturo-monitoring,arturo-mattermost,arturo-chaos` en el Deployment de `kube-state-metrics` → deja de **generar** `kube_*` de namespaces ajenos. Corte total (ni se fetchean). Residuo inofensivo: métricas cluster-scoped (`kube_namespace_*`, `kube_node_*`, PVs) que el flag no acota — no se usan en reglas.
+- **cadvisor en ingestión**: `metric_relabel_configs` con un `keep` sobre `namespace=~"arturo-.*"` en el job `kubernetes-cadvisor` → descarta `container_*` ajenos antes del TSDB. **Trade-off honesto**: el scrape al nodo (`role: node`) SIGUE ocurriendo (no se puede filtrar el SD por namespace); esto descarta en **ingestión**, no evita el **fetch**. Para "solo lo mío en mi TSDB/dashboards/cardinalidad" es la respuesta completa.
+
+> **Gotcha de verificación**: tras el `rollout restart`, los `count by (namespace)` siguen mostrando namespaces ajenos durante ~5 min (ventana de **staleness** de Prometheus: series pre-restart aún "frescas"). No es fallo — esperar 5 min o probar directo contra el endpoint de KSM (`port-forward` + `grep kube_pod_info`). Confirmar contra la fuente, no contra el instant query inmediato.
+
 ### Verificación
 
 ```bash
 kubectl get pods -n arturo-monitoring
 kubectl port-forward svc/prometheus-svc 9090:9090 -n arturo-monitoring
 # http://localhost:9090/targets  → agent-svc + kube-state-metrics-svc + cadvisor UP
-# http://localhost:9090/rules    → 6 reglas cargadas
+# http://localhost:9090/rules    → 6 reglas cargadas (con filtro namespace=~"arturo-.*")
 ```
 
-## Redis (estado de escalaciones)
+## Redis (estado de escalaciones + cola Streams)
 
-Desplegado en `arturo-llm-test` via `k8s/redis.yaml`. Proporciona persistencia de escalaciones pendientes entre reinicios del pod agente (reemplaza el dict in-memory `PENDING_ESCALATIONS`).
+Desplegado en `arturo-llm-test` via `k8s/redis.yaml`. Dos usos: (1) persistencia de escalaciones pendientes entre reinicios del pod agente (reemplaza el dict in-memory `PENDING_ESCALATIONS`); (2) **cola Redis Streams (F2)** — stream `aiops:alerts` + su PEL + dead-letter `aiops:alerts:dead` + dedup-keys `aiops:seen:*`.
 
 | Propiedad | Valor |
 |---|---|
 | Imagen | `europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/redis:7-alpine` |
 | Service | `redis-svc:6379` (ClusterIP, solo accesible desde el agente) |
-| Recursos | req 32Mi/10m — limits 64Mi/50m |
-| Persistencia | **Sin PVC** — estado efímero (TTL 60 min por key). Sobrevive reinicios del *agente* (objetivo principal), no del pod Redis en sí |
+| Recursos | req 32Mi/**50m** — **limits 128Mi/150m** (mem subida de 64Mi en F2: la cola añade stream + PEL + dead-letter; CPU req 10m→50m y limit 50m→150m como **defensa en profundidad**. Ojo: el bump de CPU NO es el fix del `HighCPU` que apareció — la causa raíz era un busy-spin `NOGROUP` en `consume_loop`, curado en código; el headroom solo cubre picos legítimos de la cola) |
+| Persistencia | **Sin PVC** — estado efímero (escalaciones con TTL 60 min; el stream se acota con `XADD MAXLEN ~ 1000`). Sobrevive reinicios del *agente* (objetivo principal), no del pod Redis en sí. Redis caído en la ingesta → webhook 503 fail-closed + `/readyz` 503 |
 | SecurityContext | `runAsUser: 999`, `allowPrivilegeEscalation: false`, `capabilities: drop ALL` |
 | Probes | `tcpSocket :6379` para liveness y readiness |
 | NetworkPolicy | `redis-allow-agent-only` — solo acepta ingress del pod `app=agent` en puerto 6379 |
@@ -148,11 +159,13 @@ livenessProbe:         # /healthz — sin dependencias, siempre 200
   initialDelaySeconds: 10
   periodSeconds: 15
 
-readinessProbe:        # /readyz — verifica Ollama + modelo
+readinessProbe:        # /readyz — verifica Redis (cola de ingesta, F2)
   path: /readyz        # Si falla → K8s deja de enrutar tráfico
   initialDelaySeconds: 5
   periodSeconds: 10
 ```
+
+> **F2**: `/readyz` chequea **Redis** (no Ollama). El sentido de la cola es bufferear la lentitud/caída de Ollama, así que Ollama lento ya no saca al pod de rotación — el consumidor drena cuando Ollama vuelve. Redis caído → 503 (el pod no puede encolar). El env `QUEUE_ENABLED` se retiró: la cola es incondicional.
 
 ## Probes de Ollama
 
@@ -285,7 +298,7 @@ kubectl -n arturo-monitoring get secret grafana-admin -o jsonpath='{.data.admin-
 
 Abrir `http://localhost:3000`, login `admin` + contraseña del secret. Dashboard en Dashboards → "AIOps Agent — Overview".
 
-**9 paneles**: aiops_* counters (webhook, diagnosis, remediation, feedback), latencia p95 webhook, targets UP, pod phases, retries/extraction.
+**Paneles**: aiops_* counters (webhook, diagnosis, remediation, feedback), latencia p95 webhook, targets UP, pod phases, retries/extraction. **Fila "Cola Redis Streams (F2)"** (2026-06-29, Gate 8 "Paso F"): *Enqueued vs Processed/s* (`rate(aiops_queue_enqueued_total[5m])` + `rate(aiops_queue_processed_total[5m])` by `outcome`), *Queue depth* (`aiops_queue_depth`), *Durabilidad* (stat: `increase(aiops_queue_reclaimed_total[$__range])` + `increase(aiops_queue_dead_total[$__range])`, rojo si dead>0). Panel **"Scrape targets"** acotado a `up{job="kubernetes-endpoints"}` con leyenda `{{service}}` (cluster compartido: solo servicios propios, sin el muro de cadvisor cluster-wide).
 
 ## Carga de modelos (sin Cloud NAT)
 

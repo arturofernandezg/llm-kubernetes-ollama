@@ -1,7 +1,7 @@
 # Roadmap y Estado — AIOps Infrastructure Agent
 
 > **Fuente única de planificación y estado del proyecto.**
-> Última actualización: 2026-06-26.
+> Última actualización: 2026-06-29.
 > Captura cruda por sesión en `docs_sesion/` (skill `/log`); promoción a este doc vía `/promote`.
 
 ---
@@ -28,13 +28,13 @@ Prometheus detecta → Alertmanager → webhook agente
 ```
 
 **Componentes vivos:**
-- **Agente FastAPI** en `arturo-llm-test`, imagen `aiops-agent:fd37a5d`. Endpoints: `/webhook/alert`, `/webhook/action`, `/webhook/command`, `/healthz`, `/readyz`, `/metrics`. `REMEDIATION_DRY_RUN=false`, rollback automático activo. Fijado a nodos `guaranteed=true`.
+- **Agente FastAPI** en `arturo-llm-test`, imagen `aiops-agent:5d5d7c7`. Endpoints: `/webhook/alert`, `/webhook/action`, `/webhook/command`, `/healthz`, `/readyz`, `/metrics`. `REMEDIATION_DRY_RUN=false`, rollback automático activo. Fijado a nodos `guaranteed=true`. `/readyz` gated por **Redis** (la cola es la dependencia de ingesta; Ollama lento no saca al pod de rotación).
+- **Cola Redis Streams (F2)**: el webhook **encola** en `aiops:alerts` (fail-closed: 503 si Redis cae → Alertmanager reintenta) y un consumidor in-process drena 1 a 1 corriendo el pipeline. Durabilidad (replay vía reclaim del PEL), absorción de ráfagas y dedup cluster-wide por fingerprint. Dead-letter a `aiops:alerts:dead` tras >3 entregas. **Camino único** — el legacy (BackgroundTasks + dedup in-memory) fue retirado. Módulo `agent/streams.py`.
 - **Pipeline RAG+LLM**: 16 runbooks en ChromaDB; triple fail-open (ChromaDB / Ollama / ambos).
 - **Motor de remediación**: 9 reglas en cascada, incl. excepción de tutor (regla 4.5 set-resources memoria, conf≥0.9/risk≤medium) y regla 4.6 (memoria >2×). Clasificación regex BLOCKED > SAFE > MUTATING.
 - **ChatOps**: Mattermost + botones HMAC-SHA256; escalaciones persistidas en **Redis** (`escalation_store.py`, fail-open); slash command `/aiops`.
-- **Resiliencia (FASE 2)**: dedup in-flight (`IN_FLIGHT_ALERTS` + `aiops_dedup_skipped_total`), mensaje diferenciado por timeout del LLM.
-- **Observabilidad**: Prometheus + kube-state-metrics + Alertmanager + Grafana (2 dashboards: Overview + Chaos). 6 reglas de alerta. Métricas de diagnóstico granulares: `aiops_diagnosis_total{outcome}` (incl. `rag_reconnect`/`llm_timeout`/`llm_error`) + `aiops_escalation_store_total{stored|redis_down}` (PR-06).
-- **Tests**: 394 funciones en 13 ficheros, mockeados; Cloud Build los corre como gate.
+- **Observabilidad**: Prometheus + kube-state-metrics + Alertmanager + Grafana (2 dashboards: Overview + Chaos; Overview incluye la fila **Cola Redis Streams** con `aiops_queue_*` — Gate 8 "Paso F" hecho). 6 reglas de alerta. Métricas de diagnóstico granulares: `aiops_diagnosis_total{outcome}` (incl. `rag_reconnect`/`llm_timeout`/`llm_error`) + `aiops_escalation_store_total{stored|redis_down}` (PR-06) + cola `aiops_queue_*` (`enqueued`/`processed{outcome}`/`reclaimed`/`dead`/`depth`). **Tenancy en cluster compartido**: reglas + scrape acotados a `arturo-.*` (KSM `--namespaces`, cadvisor `metric_relabel keep`, 6 reglas con filtro de namespace) — dejamos de leer/alertar sobre workloads ajenos.
+- **Tests**: 422 funciones en 14 ficheros, mockeados (cola con `AsyncMock` — `FakeRedis` no soporta streams); Cloud Build los corre como gate.
 
 **Stack:** Python 3.11 · FastAPI · httpx · Pydantic v2 · Ollama (qwen2.5:1.5b + nomic-embed-text) · ChromaDB · Redis · Mattermost+PostgreSQL · Prometheus/Alertmanager/Grafana · GKE · Cloud Build.
 
@@ -57,8 +57,8 @@ arturo-chaos:      manifests chaos (4 experimentos)
 | Fase | Objetivo | Estado |
 |---|---|---|
 | **F0** — Setup de proceso | Unificar docs (07 fuente única, retirar 09) + skills `/start` `/log` `/promote` + este roadmap | ✅ 2026-06-24 |
-| **F1** — Validación en cluster | Entender y validar el sistema desplegado; informe de production-readiness | 🔵 En curso — informe `docs/14` + 4 quick-wins de código hechos (PR-01/04/05/06); falta validación en cluster (matriz E1–E6 + PR-03) |
-| **F2** — Cola Redis Streams | Desacoplar la ingesta de alertas del LLM lento (cuello de botella) | Pendiente |
+| **F1** — Validación en cluster | Entender y validar el sistema desplegado; informe de production-readiness | 🔵 En curso — informe `docs/14` + 4 quick-wins de código hechos (PR-01/04/05/06); PR-02/03/07 cerrados por F2; falta matriz E1–E6 en cluster |
+| **F2** — Cola Redis Streams | Desacoplar la ingesta de alertas del LLM lento (cuello de botella) | ✅ 2026-06-29 — `streams.py`, cola única validada en cluster (replay + dead-letter + readyz Redis); legacy retirado |
 | **F3** — HPA / remediación CPU | Cerrar el hueco HighCPU → cobertura E2E de los 4 modos | Pendiente |
 | **F4** — Bucle de aprendizaje RAG | Gate de calidad en ingesta + retrieval que mejora con el histórico | Pendiente |
 | **F5** — Predicción proactiva | (stretch) Forecast de tendencia → acción preventiva | Backlog |
@@ -71,10 +71,12 @@ arturo-chaos:      manifests chaos (4 experimentos)
 - **Test de concurrencia**: N alertas simultáneas → ver el dedup de FASE 2 en acción.
 - Salida: **informe honesto de production-readiness** (qué aguanta, qué no, qué falta) + guion de demo.
 
-### F2 — Cola Redis Streams (detalle)
-- Reutilizar el Redis ya desplegado (`k8s/redis.yaml`). El webhook encola; worker(s) consumen y corren el pipeline.
-- Desacopla la ingesta del LLM lento (~205-252s): at-least-once + replay si el agente reinicia mid-diagnóstico.
-- Demo: absorber una ráfaga de alertas sin perder ninguna.
+### F2 — Cola Redis Streams (detalle) — ✅ completada 2026-06-29
+- **Hecho**: módulo `agent/streams.py` sobre el Redis ya desplegado. El webhook encola (`enqueue_alert`: dedup SETNX por fingerprint + `XADD MAXLEN ~`, fail-closed) y un consumidor in-process (`consume_loop`, XREADGROUP 1 a 1) corre `_process_alert_with_diagnosis` sin tocarlo. Durabilidad vía `reclaim_pending` (XPENDING idle-filtrado + XCLAIM, fail-soft); dead-letter a `aiops:alerts:dead` con forense tras `queue_max_deliveries` (3). `/readyz` gated por Redis. Métricas `aiops_queue_*`.
+- **Topología in-process (no worker aparte)**: Ollama serializa la generación → la cola no compra paralelismo; su valor es durabilidad + absorber ráfagas + dedup cluster-wide. Con réplicas>1, el consumer group ya da dedup+durabilidad.
+- **Semántica at-least-once** asumida y documentada: un crash tras el LLM antes del XACK reprocesa (posible Mattermost duplicado / remediación repetida); mitigada por dedup-key y dead-letter.
+- **Validado en cluster (Slice 4, 2026-06-29)**: ráfaga de 10 sin pérdida (webhook 200 inmediato), replay tras matar el pod (`reclaimed_total=1`), dead-letter de un poison (`dead_total=1`), `/readyz=503` con Redis a 0.
+- **Legacy retirado**: eliminados el flag `queue_enabled`, `IN_FLIGHT_ALERTS`/`_INFLIGHT_LOCK` y el camino BackgroundTasks del webhook; la cola es el único path (Redis caído → 503, sin degradación síncrona). Imagen `aiops-agent:5d5d7c7`.
 
 ### F3 — HPA / remediación CPU (detalle)
 - Nueva acción de remediación (scale réplicas / ajuste HPA) para presión de CPU.
@@ -95,7 +97,9 @@ arturo-chaos:      manifests chaos (4 experimentos)
 - **Fase 2 (RAG)** — 2026-04-23. `rag.py` + `diagnosis.py`; ChromaDB StatefulSet (imagen 0.6.3); `nomic-embed-text` en Ollama; 16 runbooks ingestados; pipeline `_process_alert_with_diagnosis()` con triple fail-open.
 - **Fase 3 (Remediación + Feedback)** — 2026-05-12. `remediation.py` (validation layer + 9 reglas + executor dual-mode); RBAC least-privilege; botones Mattermost + HMAC-SHA256; feedback loop (incidents en ChromaDB); excepción tutor regla 4.5 + `DRY_RUN=false` (2026-05-25); evaluación inicial (`docs/10`): retrieval p@1=60%/p@3=80%, RAG safety 100% vs zero-shot 25%. Sesiones de calidad #1-#8 (43 findings).
 - **Mini-Fase 4 (Production Readiness)** — 2026-05-27. Chaos engineering (4 experimentos, `scripts/chaos.sh`, métricas `aiops_chaos_*`, dashboard Grafana Chaos); slash command `/aiops`; rollback automático; hardening; **FASE 2** (Redis persistence, dedup in-flight, timeout). Chaos verificado: OOM 5.0/205.4s, CrashLoop 5.0/205.7s, BadImage 5.1/252.1s, CPU 10.1/206.7s. *Pendiente: Gate 8 (screenshots Grafana).*
-- **F1 quick-wins de código (production-readiness)** — 2026-06-25/26. Análisis del pipeline → `docs/14` (matriz E1–E6 + 7 hallazgos como hipótesis a verificar en cluster). 4 quick-wins testeables con mocks: **PR-04** (`remediation.py` regla 7.5: `rag_degraded` baja AUTO_REMEDIATE→ESCALATE — nunca auto-remediar sin grounding RAG), **PR-06** (`main.py`: `aiops_diagnosis_total` separa `llm_timeout`/`llm_error` + nuevo `aiops_escalation_store_total{stored|redis_down}`), **PR-05** (`main.py`: reconexión lazy de ChromaDB en el `except` del retrieval — descarta cliente stale, reintenta una vez, persiste el sano en `app.state`; counter `rag_reconnect`), **PR-01** (`config.py`: default `http_timeout` 120→300). +7 tests. Cambios en código, aún no horneados en imagen.
+- **F1 quick-wins de código (production-readiness)** — 2026-06-25/26. Análisis del pipeline → `docs/14` (matriz E1–E6 + 7 hallazgos como hipótesis a verificar en cluster). 4 quick-wins testeables con mocks: **PR-04** (`remediation.py` regla 7.5: `rag_degraded` baja AUTO_REMEDIATE→ESCALATE — nunca auto-remediar sin grounding RAG), **PR-06** (`main.py`: `aiops_diagnosis_total` separa `llm_timeout`/`llm_error` + nuevo `aiops_escalation_store_total{stored|redis_down}`), **PR-05** (`main.py`: reconexión lazy de ChromaDB en el `except` del retrieval — descarta cliente stale, reintenta una vez, persiste el sano en `app.state`; counter `rag_reconnect`), **PR-01** (`config.py`: default `http_timeout` 120→300). +7 tests.
+- **F2 — Cola Redis Streams** — 2026-06-26/29. Nuevo módulo `agent/streams.py` (enqueue fail-closed + dedup SETNX, consume_loop in-process, reclaim_pending + dead-letter fail-soft). 4 slices: (1) camino de cola tras flag, (2) durabilidad reclaim+dead-letter, (3) `/readyz` Redis-gated + Redis 64→128Mi, (4) validación en cluster. Tras validar, **retirado el legacy** (flag `queue_enabled`, `IN_FLIGHT_ALERTS`, camino BackgroundTasks) → cola = camino único. Métricas `aiops_queue_*`. Cierra PR-07 (pérdida de alerta), PR-03 (dedup cluster-wide) y la decisión de PR-02 (readiness gated por Redis). Imagen `aiops-agent:5d5d7c7`. Suite 394→419 (+`test_streams.py`).
+- **F2 — pulido post-cierre** — 2026-06-29. Tres frentes tras validar/retirar legacy: (1) **`consume_loop` self-healing ante NOGROUP** — el `except` del `XREADGROUP` recrea el grupo con `id="$"` (no `id="0"`, que replayearía todo el historial retenido sin pasar por el dedup) + backoff `backoff_delay`; mata el busy-spin que era la **causa raíz** del HighCPU de Redis (no el bump de CPU, que queda como defensa en profundidad). `ensure_group(start_id="0")` parametrizado. (2) **Paneles Grafana `aiops_queue_*`** (fila Cola en el dashboard Overview: enqueued vs processed, depth, durabilidad reclaimed/dead) — Gate 8 "Paso F". (3) **Tenancy en cluster compartido** (apareció una compañera en el mismo GKE): 6 reglas + scrape acotados a `arturo-.*` (KSM `--namespaces`, cadvisor `metric_relabel keep`, `TargetDown` solo `kubernetes-endpoints`), panel scrape-targets a servicios propios, bump CPU Redis 50m→150m. Suite 419→422 (+3 tests `TestConsumeLoop`).
 
 ---
 
@@ -111,7 +115,10 @@ arturo-chaos:      manifests chaos (4 experimentos)
 | Auto-patch | Fix aplicado pero alerta no cesa | Rollback automático (monitoriza salud del pod, revierte + escala) |
 | ChromaDB | Pod evicted (spot) | StatefulSet + PVC; re-schedule automático |
 | Ollama | Modelo no cargado tras restart | Readiness probe; el agente no procesa hasta Ollama ready |
-| Agente | Reinicio mid-diagnóstico | Webhook HTTP fire-and-forget → **se pierde la alerta** (lo resuelve F2: cola Redis Streams) |
+| Agente | Reinicio mid-diagnóstico | ✅ **Resuelto (F2)**: el webhook encola en Redis Streams; un reinicio deja la entrada en el PEL → `reclaim_pending` la reprocesa (replay validado en cluster). At-least-once: posible reproceso duplicado, mitigado por dedup-key + dead-letter |
+| Cola | Redis caído en la ingesta | Webhook **fail-closed** → 503; Alertmanager reintenta (no se pierde la alerta). `/readyz` da 503 → el pod sale de rotación |
+| Cola | Poison message (payload no decodificable) | Tras `queue_max_deliveries` (3) entregas → dead-letter a `aiops:alerts:dead` con forense; no bloquea la cola |
+| Cola | Redis recreado bajo un agente vivo (sin PVC) → el consumer group desaparece → `XREADGROUP failed: NOGROUP` | `consume_loop` **self-healing**: recrea el grupo con `id="$"` + backoff exponencial (mata el busy-spin que disparaba HighCPU). `$` se salta el gap (entradas durante el hueco), recuperable porque Alertmanager reenvía las firing (`repeat_interval`); evita el replay masivo permanente que daría `id=0` sobre un stream con historia |
 
 ---
 

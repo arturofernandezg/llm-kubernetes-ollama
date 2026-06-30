@@ -13,7 +13,7 @@ python -m pytest tests/ -v
 
 | Archivo | Tests | Tipo | Qué verifica |
 |---|---|---|---|
-| `test_endpoints.py` | 108 | Integración | Health probes, /extract end-to-end, retry con backoff, /webhook/alert, /metrics, formatter, feedback loop, `/webhook/action` (FakeRedis, approve/reject/HMAC), fallback isolation, `TestInFlightDedup` (×4), `TestDiagnosisTimeout` (×4), `TestEscalationStoreMetric` (×2, PR-06), `TestRagReconnect` (×2, PR-05) |
+| `test_endpoints.py` | 112 | Integración | Health probes (`TestReadyzQueueMode` ×3: readyz Redis-gated), /extract end-to-end, retry con backoff, /webhook/alert (encola, fail-closed 503 si Redis None), /metrics, formatter, feedback loop, `/webhook/action` (FakeRedis, approve/reject/HMAC), fallback isolation, `TestWebhookQueuePath` (×4) + `TestHandleStreamEntry` + `TestPeriodicReclaim`, `TestDiagnosisTimeout` (×4), `TestEscalationStoreMetric` (×2, PR-06), `TestRagReconnect` (×2, PR-05) |
 | `test_extraction.py` | 11 | Unitario | extract_json: direct, markdown_block, regex con bracket counting, nested JSON, edge cases |
 | `test_tf_generator.py` | 16 | Unitario | safe_name, generate_terraform (template, defaults, labels) |
 | `test_validation.py` | 6 | Unitario | validate_params: regiones, instance types, campos null |
@@ -26,7 +26,8 @@ python -m pytest tests/ -v
 | `test_escalation_store.py` | 15 | Unitario | `store_escalation`, `get_escalation`, `delete_escalation`, `count_escalations` con FakeRedis; fail-open con Redis caído; flujo completo store→get→delete |
 | `test_evaluation.py` | 21 | Unitario | Evaluación del retrieval RAG (p@1/p@3, safety vs zero-shot); soporte de `docs/10` |
 | `test_rollback.py` | 11 | Unitario | Rollback post-patch: scheduling, `_evaluate_rollback` (healthy/revert), wiring en `_process_alert_with_diagnosis` |
-| **Total** | **394** | | 394 funciones `def test_` en 13 ficheros. Verificado ✅ 2026-06-26 (F1 quick-wins): suite verde, +7 tests sobre los 387 de 2026-05-27 |
+| `test_streams.py` | ~19 | Unitario | Cola Redis Streams (F2, `AsyncMock`): `enqueue_alert` (dedup SETNX, XADD, fail-closed), `ensure_group` (BUSYGROUP idempotente, default `id="0"`), `consume_loop` (XREADGROUP, XACK, handler-fail-sin-ack, CancelledError corta el loop; **`TestConsumeLoop` self-heal NOGROUP**: recrea grupo con `id="$"` + backoff sin busy-spin, error genérico solo backoff, reset del contador tras éxito), `TestReclaimPending` (noop / reprocesa+ack / dead-letter poison / handler-fail / depth gauge) |
+| **Total** | **422** | | 422 funciones `def test_` en 14 ficheros. F2 (cola): +`test_streams.py` y clases de cola en `test_endpoints.py`; retiro del legacy quitó `TestInFlightDedup` + readyz legacy de Ollama; +3 del self-heal NOGROUP |
 
 **Nota**: los tests estaban originalmente en un único `test_main.py` (40 tests).
 Se refactorizaron y ampliaron progresivamente al añadir módulos:
@@ -43,6 +44,8 @@ Se refactorizaron y ampliaron progresivamente al añadir módulos:
 - Calidad sesión #6 (2026-05-11): +3 tests en `test_endpoints.py::TestActionCallbackEndpoint` (HMAC missing/invalid/valid). Fix X5.
 - Calidad sesión #7 (2026-05-12): +2 tests en `test_rag.py` (ValueError guard en `generate_embedding`). +2 tests en `test_endpoints.py` (fallback isolation M10). +5 tests en `test_utils.py` (nuevo fichero, `backoff_delay`). Fixes S2, M10, X2.
 - F1 quick-wins (2026-06-25/26): +3 tests en `test_remediation.py` (PR-04, regla 7.5 `rag_degraded`→escalate). +2 tests en `test_endpoints.py::TestEscalationStoreMetric` (PR-06, `aiops_escalation_store_total`) + 2 extendidos (split `llm_timeout`/`llm_error`). +2 tests en `test_endpoints.py::TestRagReconnect` (PR-05, reconexión lazy ChromaDB). Total +7 → 394.
+- F2 cola Redis Streams (2026-06-26/29): nuevo `test_streams.py` (~16) + clases de cola en `test_endpoints.py` (`TestWebhookQueuePath`, `TestHandleStreamEntry`, `TestPeriodicReclaim`, `TestReadyzQueueMode`). Slices 1-3 llevaron la suite a **427**. El retiro del legacy (2026-06-29) borró `TestInFlightDedup` (×4) y los readyz legacy de Ollama (×3) y colapsó las ramas duplicadas del webhook → neto −8 en `test_endpoints.py` (120→112). **Total 419**. Mocking con `AsyncMock` (no `FakeRedis`: no soporta operaciones de stream).
+- F2 pulido post-cierre (2026-06-29): +3 tests en `test_streams.py::TestConsumeLoop` para el self-heal ante NOGROUP (recrea grupo con `id="$"` + backoff / error genérico solo backoff / reset del contador de fallos tras éxito). **Total 422**.
 
 ### Ficheros de soporte
 

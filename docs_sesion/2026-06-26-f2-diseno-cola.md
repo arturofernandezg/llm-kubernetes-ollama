@@ -1,7 +1,7 @@
 ---
 fecha: 2026-06-26
 slug: f2-diseno-cola
-promoted: false
+promoted: true
 ---
 
 > Sesión arrancada con `/start`; micro-objetivo elegido por Jay: **diseño** de F2 (cola Redis Streams), sin código. Diseñado con ultrathink y plan mode. Deliverable = plan aprobado (`~/.claude/plans/splendid-waddling-whale.md`).

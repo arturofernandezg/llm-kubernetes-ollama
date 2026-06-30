@@ -1,7 +1,7 @@
 ---
 fecha: 2026-06-29
 slug: f2-slice2-durabilidad
-promoted: false
+promoted: true
 ---
 
 > Sesión arrancada con `/start`; Slice 1 verificado por Jay (126 tests del subset streams+endpoints en verde). Micro-objetivo: **Slice 2 de F2** — durabilidad de la cola (reclaim + dead-letter), todo detrás de `QUEUE_ENABLED=False`, testeable con `AsyncMock`. Plan aprobado en `~/.claude/plans/sequential-dazzling-stonebraker.md`.

@@ -19,7 +19,7 @@ Cada parte del proyecto tiene su propio archivo en `docs/`:
 | `docs/03-kubernetes.md` | Cluster GKE, manifiestos, probes, PDB, NetworkPolicy, SecurityContext |
 | `docs/04-cicd-cloudbuild.md` | Cloud Build (tests + build), Artifact Registry, versionado |
 | `docs/05-terraform-generator.md` | CLI generate_tf.py, módulo tf_generator.py, template, uso |
-| `docs/06-testing.md` | Tests por fichero (394 en 13), mocking, errores comunes y soluciones |
+| `docs/06-testing.md` | Tests por fichero (422 en 14), mocking, errores comunes y soluciones |
 | `docs/07-roadmap.md` | **Fuente única**: estado actual + roadmap a entrega + changelog + modos de fallo + backlog |
 | `docs/08-code-quality-playbook.md` | Workflow de sesiones de calidad, 8 dimensiones de scan, prompt prehecho, sesiones tentativas |
 | `docs/10-evaluation.md` | Evaluación del retrieval (p@1/p@3) + RAG safety vs zero-shot |
@@ -48,9 +48,10 @@ Reglas no negociables:
 Fuente única de estado y planificación: **`docs/07-roadmap.md`** (léelo al empezar, o usa `/start`).
 
 - **TFM ya evaluado.** Objetivo actual: **presentación a un chapter** (MasOrange/Telecable), fechas 8 o 14 julio 2026. Foco: production-readiness + features de valor real.
-- Sistema **completo y desplegado** (imagen `aiops-agent:fd37a5d`): Fases 0-3 + Mini-Fase 4 + FASE 2. Pipeline E2E verificado (Prometheus→Alertmanager→agente→RAG+LLM→Mattermost→kubectl con rollback). 394 tests.
-- **En curso**: F1 — validación en cluster + production-readiness (`docs/14`). **4 quick-wins de código hechos** (PR-01 drift timeout, PR-04 escalate sin grounding RAG, PR-05 reconexión lazy ChromaDB, PR-06 observabilidad). *Nota: los cambios de PR-01/04/05/06 viven en código, aún no horneados en imagen nueva.* Pendiente de cluster: matriz E1–E6 + PR-03 (réplicas). Siguiente: cola Redis Streams (F2), HPA/CPU (F3), bucle RAG (F4).
-- Pendiente real (requiere cluster): Gate 8 — screenshots Grafana.
+- Sistema **completo y desplegado** (imagen `aiops-agent:5d5d7c7`): Fases 0-3 + Mini-Fase 4 + FASE 2 (RAG) + **F2 (cola Redis Streams)**. Pipeline E2E verificado (Prometheus→Alertmanager→agente→**cola**→RAG+LLM→Mattermost→kubectl con rollback). 422 tests.
+- **Hecho**: F1 quick-wins de código (PR-01/04/05/06, horneados) + **F2 completa** — cola Redis Streams como camino único de ingesta (`agent/streams.py`), validada en cluster (replay + dead-letter + readyz Redis), legacy retirado. Cierra PR-02/03/07.
+- **En curso / siguiente**: F1 matriz E1–E6 en cluster (`docs/14`); HPA/CPU (F3); bucle RAG (F4). Observabilidad acotada a tenant `arturo-*` (cluster compartido); paneles Grafana `aiops_queue_*` ya hechos (Gate 8 "Paso F").
+- Pendiente real (requiere cluster): Gate 8 — screenshots Grafana con caudal; validar live el self-heal NOGROUP de `consume_loop` (imagen nueva sin commitear).
 
 ## Stack
 
@@ -70,13 +71,15 @@ agent/rag.py            → Cliente ChromaDB, ingesta, query, embeddings via Oll
 agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON estructurado
 agent/utils.py          → backoff_delay() helper (exponential backoff compartido)
 agent/escalation_store.py → store/get/delete/count async de escalaciones en Redis (fail-open)
-agent/tests/            → 394 funciones de test en 13 ficheros (incluye TestChaosMetrics, TestSlashCommandEndpoint, TestRollbackScheduling, TestEvaluateRollback, TestDecideActionTutorRule, TestInFlightDedup, TestDiagnosisTimeout, TestEscalationStoreMetric, TestRagReconnect, escalation_store ×15)
+agent/streams.py        → Cola Redis Streams (F2): enqueue_alert (dedup SETNX + XADD, fail-closed), ensure_group(start_id), consume_loop (XREADGROUP 1-a-1 in-process; self-healing ante NOGROUP → recrea grupo con id=$ + backoff, mata busy-spin), reclaim_pending (XPENDING+XCLAIM+dead-letter, fail-soft), métricas aiops_queue_*
+agent/tests/            → 422 funciones de test en 14 ficheros (incluye TestChaosMetrics, TestSlashCommandEndpoint, TestRollbackScheduling, TestEvaluateRollback, TestDecideActionTutorRule, TestDiagnosisTimeout, TestEscalationStoreMetric, TestRagReconnect, escalation_store ×15, test_streams.py + TestWebhookQueuePath/TestHandleStreamEntry/TestPeriodicReclaim/TestReadyzQueueMode)
 .claude/skills/         → Skills del método de trabajo: start | log | promote (gitignored, locales)
 docs_sesion/            → Bitácora cruda por sesión (skill /log); se promueve a docs canónicos con /promote
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
 k8s/                    → Manifiestos K8s (agent, ollama, chromadb, redis, networkpolicy)
-k8s/redis.yaml          → Deployment redis:7-alpine + Service redis-svc:6379 (estado escalaciones)
-k8s/prometheus.yaml     → Prometheus + kube-state-metrics + ClusterRoles + 6 reglas + metric_relabel_configs (fix label collision KSM/cAdvisor aplicado 2026-05-26)
+k8s/redis.yaml          → Deployment redis:7-alpine + Service redis-svc:6379 (escalaciones + cola Streams F2: stream aiops:alerts + PEL + dead-letter aiops:alerts:dead). limits 128Mi/150m CPU (mem subida de 64Mi por la cola; CPU 50m→150m como defensa en profundidad — la raíz del HighCPU se curó en código, no aquí)
+k8s/prometheus.yaml     → Prometheus + kube-state-metrics + ClusterRoles + 6 reglas + metric_relabel_configs (fix label collision KSM/cAdvisor 2026-05-26). Tenancy cluster compartido: 6 reglas acotadas a arturo-.*; KSM --namespaces=arturo-*; cadvisor metric_relabel keep namespace=~"arturo-.*"; TargetDown solo job=kubernetes-endpoints
+k8s/grafana.yaml        → Grafana stateless + 2 dashboards (Overview con fila Cola aiops_queue_* + Chaos); panel scrape-targets acotado a servicios propios (cluster compartido)
 k8s/alertmanager.yaml   → Alertmanager standalone en arturo-monitoring
 k8s/mattermost.yaml     → Mattermost + PostgreSQL en arturo-mattermost
 k8s/rbac.yaml           → Role + RoleBinding para remediación autónoma en arturo-llm-test y arturo-chaos (cross-namespace RoleBinding añadido 2026-05-28)
@@ -93,7 +96,7 @@ memoria/                → Memoria del TFM en LaTeX (main.tex, capitulos/, demo
 - **Cluster**: ai-infra-agent (europe-southwest1-a, e2-standard-2 spot + 2 nodos guaranteed con label `guaranteed=true` desde 2026-05-06)
 - **Namespaces**: `arturo-llm-test` (core), `arturo-monitoring` (alertmanager), `arturo-mattermost` (chatops), `arturo-chaos` (chaos experiments)
 - **Registry**: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent
-- **Imagen actual**: `aiops-agent:fd37a5d` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
+- **Imagen actual**: `aiops-agent:5d5d7c7` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
 - **Ollama models**: qwen2.5:1.5b (generación), nomic-embed-text:latest (embeddings)
 - Jay trabaja desde **Mac ARM (M4)** con acceso directo a GCP/GKE — git/tests/builds los lanza él a mano
 - **Sin Cloud NAT** — pods no tienen internet, modelos se cargan manualmente

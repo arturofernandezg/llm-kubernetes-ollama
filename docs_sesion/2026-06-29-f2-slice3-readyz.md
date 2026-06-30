@@ -1,7 +1,7 @@
 ---
 fecha: 2026-06-29
 slug: f2-slice3-readyz
-promoted: false
+promoted: true
 ---
 
 > Segunda sesión del 2026-06-29 (tras `f2-slice2-durabilidad`, ya verde: 120 tests subset + 427 suite completa). Arrancada con `/start`; plan aprobado en `~/.claude/plans/smooth-sauteeing-hopper.md`. Micro-objetivo: **Slice 3 de F2 (parcial)** — readyz condicional + bump Redis. `IN_FLIGHT_ALERTS` se difirió a Slice 4 por decisión de planificación.

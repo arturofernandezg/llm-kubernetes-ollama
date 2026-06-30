@@ -40,15 +40,13 @@ Salieron de leer `main.py`, `diagnosis.py`, `escalation_store.py`, `config.py` y
 - **Fix**: default de `config.py` alineado a **300.0** + comentario (los health-checks pasan `timeout` explícito, no afectados). Reproducibilidad local restaurada. Ningún test fijaba 120.
 - **Verificar de paso** (cuando haya cluster): `kubectl get deploy agent -n arturo-llm-test -o yaml | grep -A1 HTTP_TIMEOUT`.
 
-### PR-02 — La readiness probe convierte "Ollama caído" en "agente inalcanzable" 🟠
-- **Evidencia**: `/readyz` chequea Ollama (`main.py:434`). Ollama down → pod `NotReady` → el Service deja de enrutar → Alertmanager no entrega.
-- **Implicación**: el "fail-open de LLM" solo se dispara en una ventana estrecha (Ollama cae tras aceptar el webhook, antes de la llamada). Si cae del todo, las alertas se quedan en Alertmanager (que reintenta con backoff y acaba descartando), no degradan dentro del agente.
-- **Decisión de diseño** (no es un bug): mantener el gating (*fail-safe*, pero silencioso) vs desacoplar readiness de las dependencias (degradar-y-notificar). Interactúa con F2 (con cola, las alertas no se pierden en el outage).
+### PR-02 — La readiness probe convierte "Ollama caído" en "agente inalcanzable" ✅ (resuelto en F2, 2026-06-29)
+- **Evidencia original**: `/readyz` chequeaba Ollama. Ollama down → pod `NotReady` → el Service deja de enrutar → Alertmanager no entrega.
+- **Resuelto**: con la cola, `/readyz` pasa a chequear **Redis** (la dependencia de ingesta), no Ollama. El sentido de la cola es bufferear la lentitud/caída de Ollama, así que Ollama lento ya no saca al pod de rotación — el consumidor drena cuando vuelve. Validado en cluster: Redis a 0 → `/readyz=503`; Ollama lento → el pod sigue en rotación (la cola absorbe). Decisión "degradar-y-notificar" tomada como parte de F2.
 
-### PR-03 — Dedup per-pod, en memoria 🟠
-- **Evidencia**: `IN_FLIGHT_ALERTS` es un `set` en memoria del proceso (`main.py:128`), protegido por `_INFLIGHT_LOCK`.
-- **Implicación**: con 1 réplica funciona; **F3 (HPA) escalaría el agente y rompería el dedup** (cada pod con su set). Un descubrimiento de F1 que condiciona F3.
-- **Verificar**: nº de réplicas actual del deployment `agent`.
+### PR-03 — Dedup per-pod, en memoria ✅ (resuelto en F2, 2026-06-29)
+- **Evidencia original**: `IN_FLIGHT_ALERTS` era un `set` en memoria del proceso, protegido por `_INFLIGHT_LOCK` → con réplicas>1 cada pod tenía su set (rompería con F3/HPA).
+- **Resuelto**: el dedup migró a Redis (`SET aiops:seen:<fingerprint> NX EX <window>` dentro de `enqueue_alert`) → **cluster-wide**, sobrevive réplicas y reinicios. `IN_FLIGHT_ALERTS` retirado. F3 (HPA) ya no rompe el dedup.
 
 ### PR-04 — Outage de ChromaDB no degrada la confianza → riesgo de auto-remediación insegura 🟡
 - **Evidencia**: RAG falla → `rag_failed` → el LLM sigue zero-shot. Pero `docs/10` midió **RAG safety 100% vs zero-shot 25%**. La confianza la pone el LLM solo; nada la capa a la baja en modo degradado.
@@ -65,9 +63,9 @@ Salieron de leer `main.py`, `diagnosis.py`, `escalation_store.py`, `config.py` y
 - **Fix**: (a) las dos ramas de `_process_alert_with_diagnosis` emiten ahora `aiops_diagnosis_total{outcome="llm_timeout"}` (TimeoutException) y `{outcome="llm_error"}` (resto); (b) nuevo counter `aiops_escalation_store_total{outcome="stored"|"redis_down"}` en el bloque de escalación, que incrementa de forma visible durante el chaos de Redis (E3). 2 tests extendidos + 2 nuevos en `test_endpoints.py`.
 - **Fuera de alcance** (quick-win): el "0 pending" engañoso de `/aiops` con Redis caído — cambio aparte en `_format_status_response` si interesa.
 
-### PR-07 — Pérdida de alerta en restart mid-diagnóstico 🔴 (ya documentado)
-- **Evidencia**: el webhook es fire-and-forget vía `BackgroundTasks`; un restart mata el diagnóstico en curso y la alerta se pierde (ya en "Modos de fallo conocidos" de `docs/07`).
-- **No requiere acción nueva**: **es la justificación de F2** (cola Redis Streams). E5 lo demuestra en vivo.
+### PR-07 — Pérdida de alerta en restart mid-diagnóstico ✅ (resuelto en F2, 2026-06-29)
+- **Evidencia original**: el webhook era fire-and-forget vía `BackgroundTasks`; un restart mataba el diagnóstico en curso y la alerta se perdía.
+- **Resuelto**: el webhook encola en Redis Streams (durable). Un reinicio deja la entrada en el PEL del consumer group → `reclaim_pending` la reprocesa (replay). **Validado en cluster** (Slice 4): tras matar el pod mid-burst, `aiops_queue_reclaimed_total=1` y el diagnóstico se completó. Semántica at-least-once (posible reproceso duplicado, mitigado por dedup-key + dead-letter).
 
 ---
 
@@ -81,11 +79,27 @@ Agrupado por cuándo y dónde se resuelve. Los *quick-wins* son **código puro, 
 | **PR-04** | Cuando `rag_failed`/contexto vacío, **forzar `escalate`** (nunca auto-remediar sin grounding RAG): pasar un flag `rag_degraded` a `process_remediation`. Narrativa de demo: "el sistema sabe cuándo vuela a ciegas y se niega a auto-actuar" | M | **Quick-win prioritario** (mejora de seguridad + valor de demo) |
 | **PR-05** | Reconexión lazy: si `retrieve_context` falla con el cliente cacheado, reintentar una vez con `get_chroma_client()` fresco y persistir el sano en `app.state` | S | ✅ Hecho 2026-06-26 (counter `rag_reconnect`) |
 | **PR-06** | (a) Separar `outcome="llm_timeout"` vs `"llm_error"`; (b) gauge `aiops_redis_up` o counter `aiops_escalation_store_total{outcome}` | S | ✅ Hecho 2026-06-25 (counter elegido sobre gauge) |
-| **PR-02** | Decisión de diseño: desacoplar readiness de las dependencias (degradar-y-notificar) vs mantener fail-safe. Recomendación: decidir **junto con F2** (la cola cambia el cálculo) | M | Diseño — decidir en F2 |
-| **PR-03** | Mover el dedup a Redis (`SETNX` + TTL, cluster-wide). Converge con F2: **que la capa Redis de F2 sea dueña del dedup**. Hasta entonces, mantener `agent` a `replicas=1` y documentar el constraint | M | **Plegar en F2** |
-| **PR-07** | Cola Redis Streams (at-least-once + replay) | L | **Es F2** |
+| **PR-02** | Desacoplar readiness de Ollama: `/readyz` chequea Redis (la cola buffereará la lentitud de Ollama) | M | ✅ Hecho en F2 (2026-06-29) |
+| **PR-03** | Mover el dedup a Redis (`SETNX` + TTL, cluster-wide), dueño en la capa de cola de F2 | M | ✅ Hecho en F2 (2026-06-29) |
+| **PR-07** | Cola Redis Streams (at-least-once + replay) | L | ✅ Hecho en F2 (2026-06-29, validado en cluster) |
 
 ### Orden sugerido (despacio y bien)
 1. **Quick-wins de código** sin cluster: PR-04 (seguridad), PR-05 (reconnect), PR-06 (observabilidad), PR-01 (drift de timeout) — **los cuatro ✅ hechos**. Cada uno con sus tests mockeados. Entran a `docs/11`.
 2. **Verificación en cluster** (cuando Jay tenga sesión `kubectl`): ejecutar la matriz §1, rellenar veredictos, confirmar/descartar hipótesis, capturar PR-03 (réplicas).
-3. **F2** absorbe PR-07 y PR-03; la decisión de PR-02 se toma en su diseño.
+3. **F2** ✅ (2026-06-29) absorbió PR-07 (replay) y PR-03 (dedup cluster-wide) y resolvió la decisión de PR-02 (readyz gated por Redis). E5 (restart mid-diagnóstico) queda demostrado en vivo como replay, ya no como pérdida.
+
+---
+
+## 4. Hallazgos operacionales post-F2 (cluster real, 2026-06-29)
+
+Dos hallazgos de production-readiness que salieron **operando** la cola en cluster, no del análisis de código. Material honesto de "qué aguanta y qué falta".
+
+### PR-08 — Durabilidad cuando Redis se recrea bajo un agente vivo ✅ (resuelto en código)
+- **Síntoma observado**: alerta `HighCPU` sobre Redis. Diagnóstico inicial ("consumer educado en BLOCK 5000, el límite de 50m quedó corto") era **incorrecto**: los logs del pod viejo revelaron un **busy-spin** de `XREADGROUP failed: NOGROUP` (cientos de iter/s) tras recrear Redis (bump de recursos sin PVC → pod nuevo → stream + consumer group desaparecidos). El `except` de `consume_loop` hacía `continue` inmediato → giraba para siempre, saturando los 50m → eso disparaba el `HighCPU`. El bump a 150m solo lo parchea (si entra en spin, quema 150m igual).
+- **Fix raíz** (`agent/streams.py`): `consume_loop` **self-healing** — backoff exponencial (`backoff_delay`, contador de fallos consecutivos con reset tras éxito) en vez de `continue`; si el error es `NOGROUP`, `ensure_group(start_id="$")` recrea el grupo antes del backoff. Se elige `id="$"` (no `"0"`): salta el gap de entradas durante el hueco —recuperable porque Alertmanager reenvía las firing— y evita el **replay masivo permanente** que daría `id=0` re-entregando todo el historial retenido (hasta `MAXLEN ~1000`) **sin pasar por el dedup** → 1000 diagnósticos/remediaciones sobre estados ya resueltos.
+- **Lección de production-readiness**: Redis efímero (sin PVC) es aceptable para el estado durable de la cola **solo si** el consumidor se auto-recupera de la pérdida del grupo. El "fail-open" de F2 no estaba completo hasta cerrar este busy-spin. Pendiente de validar en cluster (Jay): `XGROUP DESTROY` sin reiniciar el agente → logs `NOGROUP → recreating` + CPU de Redis NO se dispara + sin replay en Mattermost.
+
+### PR-09 — Observabilidad sin frontera de tenant en cluster compartido ✅ (resuelto en config)
+- **Síntoma observado**: tiles DOWN en el panel "Scrape targets" + `HighCPU` ajeno. Al investigar: el cluster pasó de mono-usuario a **compartido** (compañera con namespace `brms-gorules`) y la observabilidad no tenía frontera. `count by (namespace) (kube_pod_info)` devolvía `arturo-*` + `brms-gorules` + `kube-system` + `cnrm-system` + ... — KSM tiene `ClusterRole` cluster-wide → veía TODO. Un OOM/CrashLoop/ImagePull en cualquier namespace ajeno disparaba **mi** Alertmanager → webhook → cola → LLM → Mattermost. La remediación estaba protegida (RBAC `Role` namespaced a `arturo-llm-test`/`arturo-chaos`), pero el **ruido + ciclos de LLM + escalaciones** sí ocurrían.
+- **Fix** (config, sin código): (a) **alerting** — las 5 reglas KSM/cadvisor con `namespace=~"arturo-.*"` en el `expr`, `TargetDown` solo `job=kubernetes-endpoints`; (b) **ingestión** — KSM `--namespaces=arturo-*` (corte en origen) + cadvisor `metric_relabel keep namespace=~"arturo-.*"` (corte antes del TSDB); (c) **visualización** — panel scrape-targets a `up{job="kubernetes-endpoints"}`. Ver `docs/03` §Tenancy.
+- **Lección de production-readiness**: "tu observabilidad cuando dejas de ser único tenant" es un modo de fallo real. Un `ClusterRole` de lectura + scrape `role: node` te hacen ver (y reaccionar a) workloads ajenos por defecto. Trade-off honesto asumido: cadvisor `role: node` sigue haciendo el HTTP scrape a cada nodo (incl. nodos solo-ajenos); el relabel evita el **almacenamiento**, no el **fetch**.

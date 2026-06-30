@@ -11,8 +11,9 @@ Versión actual: 0.6.0
 
 | Módulo | Responsabilidad | Fase |
 |---|---|---|
-| `main.py` | FastAPI app, endpoints, lifespan, middleware de logging, retry logic, dedup in-flight | 0+ |
-| `config.py` | Pydantic BaseSettings, setup de logging JSON estructurado, `redis_host/redis_port` | 0+ |
+| `main.py` | FastAPI app, endpoints, lifespan (arranca consumer + reclaim de la cola), middleware de logging, retry logic, productor de la cola en el webhook | 0+ |
+| `config.py` | Pydantic BaseSettings, setup de logging JSON estructurado, `redis_host/redis_port`, settings de cola `queue_*` | 0+ |
+| `streams.py` | Cola Redis Streams (F2): `enqueue_alert` (dedup SETNX + `XADD MAXLEN ~`, fail-closed), `ensure_group(start_id)`, `consume_loop` (XREADGROUP 1-a-1 in-process; **self-healing ante NOGROUP**), `reclaim_pending` (XPENDING+XCLAIM+dead-letter, fail-soft), `_ack_and_process`, `consumer_name()`. Métricas `aiops_queue_*` | F2 |
 | `schemas.py` | Modelos Pydantic v2 (alertas, extracción, diagnóstico) | 0+ |
 | `extraction.py` | PROMPT_TEMPLATE, `extract_json()` con 3 estrategias de fallback | 0 (legacy) |
 | `validation.py` | `validate_params()` — validación no-bloqueante contra valores GCP | 0 (legacy) |
@@ -29,8 +30,8 @@ Versión actual: 0.6.0
 | Método | Path | Descripción | Dependencias | Fase |
 |---|---|---|---|---|
 | GET | `/healthz` | Liveness probe. Siempre 200. | Ninguna | 0 |
-| GET | `/readyz` | Readiness probe. 200 si Ollama + modelo OK. | Ollama | 0 |
-| POST | `/webhook/alert` | Ingesta alertas Alertmanager → normaliza → RAG → diagnóstico → Mattermost | Ollama, ChromaDB, Mattermost | 1-3 |
+| GET | `/readyz` | Readiness probe. 200 si **Redis** alcanzable (la cola es la dependencia de ingesta; Ollama lento/caído no saca al pod). 503 si Redis no responde. | Redis | F2 |
+| POST | `/webhook/alert` | Ingesta alertas Alertmanager → **encola en Redis Streams** (firing; fail-closed 503 si Redis cae) o notifica directo (resolved). El consumidor in-process corre el pipeline RAG→diagnóstico→remediación→Mattermost | Redis (ingesta); Ollama/ChromaDB/Mattermost (consumidor) | 1-3, F2 |
 | POST | `/webhook/action` | Callback de botones interactivos Mattermost (Aprobar/Rechazar escalaciones) | ChromaDB, Mattermost | 3 |
 | POST | `/webhook/command` | Slash command `/aiops` (status / incidents / help). Auth: `MM_COMMAND_TOKEN` static token. Responde ephemeral. | Ollama, ChromaDB | Mini-Fase 4 |
 | POST | `/extract` | **(Legado)** Extracción de parámetros desde texto a JSON. | Ollama | 0 |
@@ -38,7 +39,11 @@ Versión actual: 0.6.0
 
 ## Flujo de /webhook/alert (evolución por fases)
 
-**Fase 1 (actual)**: Recibe payload → log estructurado → formatea mensaje → envía a Mattermost (BackgroundTask).
+> **F2 (actual)**: el webhook ya **no** procesa inline. Para cada alerta `firing` **encola** en el stream `aiops:alerts` (`streams.enqueue_alert`: dedup SETNX por fingerprint `alertname:ns:pod` + `XADD MAXLEN ~`) y responde 200 de inmediato (desacople del LLM lento). **Fail-closed**: si Redis no está o el XADD falla → 503 y Alertmanager reintenta (no se pierde la alerta). Las `resolved` siguen como notificación directa a Mattermost (BackgroundTask). Un consumidor in-process (`consume_loop` en el lifespan) drena el stream 1 a 1 e invoca `_handle_stream_entry` → `_process_alert_with_diagnosis` (los pasos de abajo, sin cambios). Durabilidad: `reclaim_pending` reprocesa entradas del PEL tras un reinicio; poison messages (>`queue_max_deliveries`) van a `aiops:alerts:dead`. Ver `docs/07` §F2 y `agent/streams.py`.
+
+> **Self-heal del consumidor ante `NOGROUP`**: si Redis se recrea bajo un agente vivo (Redis sin PVC: un bump de recursos recrea el pod → desaparecen stream + consumer group), el `XREADGROUP` empieza a fallar con `NOGROUP`. El `except` de `consume_loop` **no** hace `continue` inmediato (eso era un busy-spin de cientos de iter/s que saturaba la CPU de Redis y disparaba `HighCPU`). En su lugar: incrementa un contador local de fallos consecutivos (reset a 0 tras un éxito), y si el error es `NOGROUP` recrea el grupo con `ensure_group(start_id="$")` antes de un `asyncio.sleep(backoff_delay(...))` exponencial acotado (mismo helper que `main.py`/`mattermost.py`). Se elige `id="$"` (no `"0"`): `$` se salta el gap de entradas durante el hueco —recuperable porque Alertmanager reenvía las firing (`repeat_interval`)— mientras que `id="0"` re-entregaría TODO el historial retenido (`MAXLEN ~1000`) **sin pasar por `enqueue_alert`** → la dedup-key no lo frenaría → replay masivo de diagnósticos/remediaciones sobre estados ya resueltos. `ensure_group` tiene `start_id="0"` por defecto (arranque del lifespan, stream vacío → inocuo); solo el self-heal usa `"$"`.
+
+**Fase 1 (legacy del pipeline)**: Recibe payload → log estructurado → formatea mensaje → envía a Mattermost (BackgroundTask).
 
 **Fase 2 (planificado)**:
 1. Recibe payload Alertmanager (validado por `AlertmanagerPayload`).
@@ -120,15 +125,16 @@ Si el `incident_id` no existe (desconocido o expirado tras 60 min) → responde 
 
 ## Mejoras Mini-Fase 4 (2026-05-27)
 
-### Dedup in-flight por alerta+pod
+### Dedup cluster-wide en la cola (F2 — reemplaza el dedup in-flight)
 
-`IN_FLIGHT_ALERTS: set[tuple[str,str,str]]` protegido por `_INFLIGHT_LOCK` (asyncio.Lock). En `handle_alert_webhook`, para cada alerta `firing`:
-- Key = `(alertname, namespace, pod)`
-- Si la key ya está en el set → log `"duplicate in-flight, skipping"` + incrementa `aiops_dedup_skipped_total{alertname}` + **no** programa BackgroundTask
-- Si no está → añade key, programa tarea normalmente
-- Al terminar `_process_alert_with_diagnosis` (en `finally`) → `IN_FLIGHT_ALERTS.discard(key)`
+> El dedup in-memory original (`IN_FLIGHT_ALERTS` + `_INFLIGHT_LOCK`) **fue retirado** al hornear F2. El dedup vive ahora en Redis, dentro de `enqueue_alert`, y es cluster-wide (sobrevive réplicas y reinicios).
 
-Garantiza que una misma alerta no lanza dos llamadas LLM simultáneas. La segunda alerta se procesa normalmente una vez termina la primera.
+En `enqueue_alert`, para cada alerta `firing`:
+- Fingerprint = `alertname:namespace:pod`.
+- `SET aiops:seen:<fp> "1" NX EX <dedup_window_seconds>` (default 300s). Si la clave ya existe (reenvío de Alertmanager u otro pod dentro de la ventana) → `enqueue_alert` devuelve `None`, el webhook incrementa `aiops_dedup_skipped_total{alertname}` y **no** encola.
+- Si es nueva → `XADD` al stream y devuelve el id.
+
+Suprime reenvíos de Alertmanager y suaviza los duplicados del replay (at-least-once). Reutiliza el counter `aiops_dedup_skipped_total`.
 
 ### Mensajes claros en timeout LLM
 
@@ -257,8 +263,16 @@ ExtractResponse:
 | `REMEDIATION_ROLLBACK_ENABLED` | `true` | Activa el mecanismo de rollback automático post-patch | Mini-Fase 4 |
 | `REMEDIATION_ROLLBACK_TIMEOUT` | `300` | Segundos de espera antes de evaluar salud del pod tras un patch | Mini-Fase 4 |
 | `REMEDIATION_ROLLBACK_GRACE` | `30` | Segundos de gracia para el rollout antes del health check (reservado, no usado aún en polling) | Mini-Fase 4 |
-| `HTTP_TIMEOUT` | `120.0` | Timeout general del cliente HTTP (segundos) | 0+ |
-| `HEALTH_TIMEOUT` | `5.0` | Timeout para health checks (segundos) | 0+ |
+| `HTTP_TIMEOUT` | `300.0` | Timeout general del cliente HTTP (segundos). Default alineado a producción (PR-01); cubre el peor caso de diagnóstico (~252s) | 0+ |
+| `HEALTH_TIMEOUT` | `5.0` | Timeout para health checks (segundos), incl. el `ping` de Redis en `/readyz` | 0+ |
+| `QUEUE_STREAM_KEY` | `aiops:alerts` | Stream Redis donde encola el webhook | F2 |
+| `QUEUE_GROUP` | `aiops-workers` | Consumer group del stream | F2 |
+| `DEDUP_WINDOW_SECONDS` | `300` | TTL de la dedup-key por fingerprint (`aiops:seen:<fp>`) | F2 |
+| `QUEUE_MAXLEN` | `1000` | `XADD MAXLEN ~` (acota la memoria del stream en Redis) | F2 |
+| `QUEUE_MAX_DELIVERIES` | `3` | Entregas antes de mandar la entrada a dead-letter | F2 |
+| `QUEUE_RECLAIM_INTERVAL_SECONDS` | `60` | Cada cuánto corre el reclaim periódico | F2 |
+| `QUEUE_MIN_IDLE_SECONDS` | `600` | Idle mínimo para reclamar una entrada del PEL (debe superar el peor diagnóstico ~252s para no robar trabajo en curso) | F2 |
+| `QUEUE_DEAD_LETTER_KEY` | `aiops:alerts:dead` | Stream de cuarentena para poison messages | F2 |
 | `RETRY_MAX_ATTEMPTS` | `3` | Intentos máximos de retry hacia Ollama | 0+ |
 | `RETRY_BASE_DELAY` | `1.0` | Delay base (segundos) para backoff exponencial | 0+ |
 | `RETRY_MAX_DELAY` | `10.0` | Delay máximo (segundos) entre reintentos | 0+ |
@@ -302,6 +316,15 @@ Endpoint `GET /metrics` expuesto via `prometheus-fastapi-instrumentator`:
 - `aiops_escalation_store_total{outcome}` — persistencia de escalaciones en Redis (`stored` = con botones / `redis_down` = degradado sin botones). Incrementa de forma visible durante el chaos de Redis (PR-06)
 
 - `aiops_remediation_rollback_total{outcome}` — resultado del rollback post-patch (`scheduled` / `skipped_no_snapshot` / `healthy` / `reverted` / `revert_failed` / `evaluation_error`)
+
+**Contadores de la cola (F2, definidos en `streams.py`)**:
+- `aiops_queue_enqueued_total` — alertas encoladas (`XADD` exitoso); no incrementa en dedup
+- `aiops_queue_processed_total{outcome}` — entradas procesadas por el consumidor (`success` / `error`)
+- `aiops_queue_reclaimed_total` — entradas del PEL reprocesadas por `reclaim_pending` (replay)
+- `aiops_queue_dead_total` — poison messages enviados a `aiops:alerts:dead` (>`queue_max_deliveries`)
+- `aiops_queue_depth` — Gauge: entradas pendientes en el PEL (de `XPENDING` summary), actualizado en cada reclaim
+
+> **Ojo**: los counters de Prometheus son **por-proceso** — tras reiniciar el pod, `aiops_queue_enqueued_total` vuelve a 0 aunque el stream conserve datos. El dato durable vive en Redis (`XLEN`/`XPENDING`), no en el counter.
 
 **Datos reales observados** (2026-03-18, pod con ~40 min de uptime):
 - `/healthz` latencia media: ~1.8ms (puro in-memory, sin dependencias)
