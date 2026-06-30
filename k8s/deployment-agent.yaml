@@ -80,6 +80,8 @@ spec:
           value: "false"
         - name: REMEDIATION_AUTO_CPU_ENABLED
           value: "false"   # escalate-first hasta validar el camino CPU en cluster; flip a "true" tras chaos.sh cpu OK
+        - name: REMEDIATION_AUTO_NAMESPACE_PREFIX
+          value: "arturo-"   # guardrail blast-radius: auto solo en namespaces propios (cluster compartido)
         - name: REMEDIATION_ROLLBACK_ENABLED
           value: "true"
         - name: REMEDIATION_ROLLBACK_TIMEOUT

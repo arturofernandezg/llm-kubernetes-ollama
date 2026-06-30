@@ -31,6 +31,8 @@ from remediation import (
     parse_memory_to_bytes,
     parse_cpu_to_millicores,
     implies_pod_restart,
+    is_structured_remediation,
+    build_set_resources_command,
     _limit_resource,
 )
 from tests.helpers import mock_diagnosis_auto_remediate, mock_diagnosis_escalate, mock_diagnosis_result
@@ -785,8 +787,13 @@ class TestDecideActionTutorRule:
         )
         assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
 
-    def test_set_resources_low_confidence_escalates(self, monkeypatch):
-        """confidence=0.85 < 0.9 → exception not granted → rule 4.5 blocks → ESCALATE."""
+    def test_set_resources_confidence_above_base_floor_auto(self, monkeypatch):
+        """confidence=0.85 ≥ 0.8 base floor → AUTO_REMEDIATE.
+
+        New contract: the structured path no longer requires the old 0.9 exception threshold;
+        the model's diagnostic confidence is gated only by the base rule-6 floor (0.8). The
+        sub-floor case (conf < 0.8 → SUGGEST_ONLY) is covered in TestStructuredAutoRemediation.
+        """
         self._base_monkeypatch(monkeypatch)
         diagnosis = {
             **mock_diagnosis_auto_remediate(),
@@ -796,10 +803,14 @@ class TestDecideActionTutorRule:
         validations = self._validations(
             "kubectl set resources deployment engine --limits=memory=512Mi -n arturo-llm-test"
         )
-        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
 
-    def test_set_resources_high_risk_escalates(self, monkeypatch):
-        """risk=high > medium → exception not granted → rule 4.5 blocks → ESCALATE."""
+    def test_set_resources_high_risk_auto_via_engine_bound(self, monkeypatch):
+        """risk=high but structured (bounded ≤2× + reversible) → rule 5 bypassed → AUTO_REMEDIATE.
+
+        New contract (re-sourcing): the engine's deterministic bound supersedes the model's
+        risk self-rating for an engine-authored set-resources raise. Was ESCALATE pre-re-sourcing.
+        """
         self._base_monkeypatch(monkeypatch)
         diagnosis = {
             **mock_diagnosis_auto_remediate(),
@@ -809,7 +820,7 @@ class TestDecideActionTutorRule:
         validations = self._validations(
             "kubectl set resources deployment engine --limits=memory=512Mi -n arturo-llm-test"
         )
-        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
 
     def test_set_resources_non_memory_field_escalates(self, monkeypatch):
         """field=resources.limits.cpu → exception gated (auto-cpu flag off, default) → rule 4.5 blocks → ESCALATE."""
@@ -1204,6 +1215,211 @@ class TestProcessRemediationSnapshot:
         assert result["pre_patch_snapshot"] is None
 
 
+# ── TestProcessRemediationCpuAuto ─────────────────────────────────────────────
+
+class TestProcessRemediationCpuAuto:
+    """F3 slice 2 — el camino auto-CPU recorrido entero por process_remediation().
+
+    A diferencia de TestDecideActionCpuAuto (que aísla decide_action) y de los tests
+    de captura/revert CPU aislados, esto engancha las piezas de extremo a extremo:
+    validate → decide (gate del flag) → capture (field-aware) → execute → revert
+    (field-aware). Todo en dry-run, determinista, sin cluster ni LLM.
+    """
+
+    def _base_monkeypatch(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+
+    def _cpu_diagnosis(self):
+        return {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "commands": [
+                "kubectl set resources deployment engine --containers=engine --limits=cpu=500m -n prod"
+            ],
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "arturo-llm-test",
+                "container": "engine", "field": "resources.limits.cpu",
+                "current_value": "250m", "new_value": "500m",
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_flag_off_escalates_without_effects(self, monkeypatch):
+        """Flag OFF (default): escalate-first → ESCALATE, sin snapshot ni ejecución."""
+        self._base_monkeypatch(monkeypatch)
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", False)
+        result = await process_remediation(self._cpu_diagnosis())
+        assert result["action"] == RemediationAction.ESCALATE
+        assert result["pre_patch_snapshot"] is None
+        assert result["execute_results"] == []
+        assert result["execution_attempted"] is False
+
+    @pytest.mark.asyncio
+    async def test_flag_on_auto_remediates_with_cpu_snapshot(self, monkeypatch):
+        """Flag ON: AUTO_REMEDIATE → captura CPU field-aware + ejecuta set resources cpu."""
+        self._base_monkeypatch(monkeypatch)
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", True)
+        result = await process_remediation(self._cpu_diagnosis())
+        assert result["action"] == RemediationAction.AUTO_REMEDIATE
+        assert result["pre_patch_snapshot"] is not None
+        assert result["pre_patch_snapshot"].value == "250m"
+        assert result["pre_patch_snapshot"].field == "resources.limits.cpu"
+        assert any(
+            "--limits=cpu=500m" in r.command for r in result["execute_results"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_rollback_from_snapshot_reverts_cpu(self, monkeypatch):
+        """Cierra el lazo: el snapshot capturado revierte CPU (no memory)."""
+        self._base_monkeypatch(monkeypatch)
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", True)
+        result = await process_remediation(self._cpu_diagnosis())
+        rollback = await revert_patch(result["pre_patch_snapshot"])
+        assert "--limits=cpu=250m" in rollback.command
+        assert "memory" not in rollback.command
+
+
+# ── TestStructuredAutoRemediation ─────────────────────────────────────────────
+
+class TestStructuredAutoRemediation:
+    """F3 re-sourcing — the engine-authored auto path that fires on the REAL model output.
+
+    F4 showed the model emits a correct structured proposed_action 5/5 but rarely the
+    executable command (has_set_resources=null 4/5), and rates risk=high / conf≈0.84. The old
+    engine escalated on the model's risk float, so auto never fired E2E. Here the engine
+    synthesizes the bounded set-resources command itself and owns the risk decision; the
+    model's diagnostic confidence is still gated. Deterministic, dry-run, no cluster/LLM.
+    """
+
+    _INVESTIGATIVE = [
+        "kubectl describe deployment engine -n arturo-llm-test",
+        "kubectl top pod -n arturo-llm-test",
+    ]
+
+    def _base_monkeypatch(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+
+    def _memory_diagnosis(self, current="256Mi", new="512Mi", risk="high", confidence=0.84):
+        return {
+            **mock_diagnosis_auto_remediate(),
+            "risk": risk, "confidence": confidence,
+            "commands": list(self._INVESTIGATIVE),  # investigative only — model emits no executable command
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "arturo-llm-test",
+                "container": "engine", "field": "resources.limits.memory",
+                "current_value": current, "new_value": new,
+            },
+        }
+
+    def _cpu_diagnosis(self, current="250m", new="500m", risk="high", confidence=0.84):
+        return {
+            **mock_diagnosis_auto_remediate(),
+            "risk": risk, "confidence": confidence,
+            "commands": list(self._INVESTIGATIVE),
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "arturo-llm-test",
+                "container": "engine", "field": "resources.limits.cpu",
+                "current_value": current, "new_value": new,
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_high_risk_investigative_only_auto_via_engine(self, monkeypatch):
+        """THE headline case: risk=high, conf=0.84, only investigative commands, valid
+        proposed_action → AUTO_REMEDIATE via the engine-synthesized command."""
+        self._base_monkeypatch(monkeypatch)
+        result = await process_remediation(self._memory_diagnosis())
+        assert result["action"] == RemediationAction.AUTO_REMEDIATE
+        # Engine ran its OWN bounded set-resources command, not the model's investigative ones
+        assert any(
+            "kubectl set resources" in r.command and "--limits=memory=512Mi" in r.command
+            for r in result["execute_results"]
+        )
+        assert not any("describe" in r.command or "top" in r.command for r in result["execute_results"])
+        assert result["pre_patch_snapshot"] is not None
+        assert result["pre_patch_snapshot"].value == "256Mi"
+
+    @pytest.mark.asyncio
+    async def test_cpu_high_risk_auto_via_engine_with_flag(self, monkeypatch):
+        """CPU symmetric: flag ON + structured cpu raise + risk=high → AUTO + synth cpu command."""
+        self._base_monkeypatch(monkeypatch)
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", True)
+        result = await process_remediation(self._cpu_diagnosis())
+        assert result["action"] == RemediationAction.AUTO_REMEDIATE
+        assert any("--limits=cpu=500m" in r.command for r in result["execute_results"])
+        assert result["pre_patch_snapshot"].field == "resources.limits.cpu"
+
+    @pytest.mark.asyncio
+    async def test_cpu_flag_off_still_escalates(self, monkeypatch):
+        """CPU without the flag is not structured-eligible → risk gate applies → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", False)
+        result = await process_remediation(self._cpu_diagnosis())
+        assert result["action"] == RemediationAction.ESCALATE
+        assert result["execute_results"] == []
+
+    @pytest.mark.asyncio
+    async def test_lowering_limit_not_structured_escalates(self, monkeypatch):
+        """Guardrail only-raise: new < current is not structured → risk gate applies → ESCALATE
+        (never auto-lower a limit)."""
+        self._base_monkeypatch(monkeypatch)
+        result = await process_remediation(self._memory_diagnosis(current="512Mi", new="256Mi"))
+        assert result["action"] == RemediationAction.ESCALATE
+        assert result["execute_results"] == []
+
+    @pytest.mark.asyncio
+    async def test_foreign_namespace_not_structured_escalates(self, monkeypatch):
+        """Guardrail (Slice 4) blast-radius: a structured-looking raise in a non-tenant
+        namespace is NOT engine-authorable → risk gate applies → ESCALATE (no auto cross-tenant)."""
+        self._base_monkeypatch(monkeypatch)
+        diag = self._memory_diagnosis()
+        diag["proposed_action"]["namespace"] = "kube-system"
+        result = await process_remediation(diag)
+        assert result["action"] == RemediationAction.ESCALATE
+        assert result["execute_results"] == []
+
+    @pytest.mark.asyncio
+    async def test_confidence_below_floor_suggests_only(self, monkeypatch):
+        """Confidence floor still bites: conf=0.7 < 0.8 → SUGGEST_ONLY even when structured.
+
+        Re-sourcing dropped the model's RISK gate, not its diagnostic CONFIDENCE gate.
+        """
+        self._base_monkeypatch(monkeypatch)
+        result = await process_remediation(self._memory_diagnosis(confidence=0.7))
+        assert result["action"] == RemediationAction.SUGGEST_ONLY
+        assert result["execute_results"] == []
+
+    def test_is_structured_remediation_eligibility(self, monkeypatch):
+        """Unit: the eligibility predicate that drives the whole structured path."""
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", False)
+        mem = lambda **kw: {"action": "patch", **{
+            "kind": "Deployment", "name": "engine", "namespace": "arturo-llm-test",
+            "container": "engine", "field": "resources.limits.memory",
+            "current_value": "256Mi", "new_value": "512Mi", **kw}}
+        assert is_structured_remediation({"proposed_action": mem()}) is True
+        # only-raise
+        assert is_structured_remediation({"proposed_action": mem(current_value="512Mi", new_value="256Mi")}) is False
+        # missing target
+        assert is_structured_remediation({"proposed_action": mem(container=None)}) is False
+        # foreign namespace (blast-radius guardrail)
+        assert is_structured_remediation({"proposed_action": mem(namespace="kube-system")}) is False
+        # unparseable
+        assert is_structured_remediation({"proposed_action": mem(new_value="lots")}) is False
+        # no proposed_action
+        assert is_structured_remediation({"proposed_action": None}) is False
+        # cpu gated by flag
+        cpu = mem(field="resources.limits.cpu", current_value="250m", new_value="500m")
+        assert is_structured_remediation({"proposed_action": cpu}) is False
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", True)
+        assert is_structured_remediation({"proposed_action": cpu}) is True
+
+
 # ── TestProcessRemediationNonStringFilter ─────────────────────────────────────
 
 class TestProcessRemediationNonStringFilter:
@@ -1273,7 +1489,7 @@ class TestDecideActionCpu:
 
     def _cpu_action(self, current, new):
         return {
-            "kind": "Deployment", "name": "engine", "namespace": "prod",
+            "kind": "Deployment", "name": "engine", "namespace": "arturo-llm-test",
             "container": "engine", "field": "resources.limits.cpu",
             "current_value": current, "new_value": new,
         }
@@ -1373,7 +1589,7 @@ class TestDecideActionCpuAuto:
 
     def _cpu_action(self, current, new):
         return {
-            "kind": "Deployment", "name": "engine", "namespace": "prod",
+            "kind": "Deployment", "name": "engine", "namespace": "arturo-llm-test",
             "container": "engine", "field": "resources.limits.cpu",
             "current_value": current, "new_value": new,
         }
@@ -1401,8 +1617,12 @@ class TestDecideActionCpuAuto:
         validations = validate_commands([self._CPU_CMD])
         assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
 
-    def test_flag_on_low_confidence_escalates(self, monkeypatch):
-        """flag ON + conf=0.85 (<0.9) → excepción no concedida → rule 4.5 → ESCALATE."""
+    def test_flag_on_confidence_above_base_floor_auto(self, monkeypatch):
+        """flag ON + conf=0.85 ≥ 0.8 base floor → AUTO_REMEDIATE.
+
+        New contract: the structured CPU path drops the old 0.9 exception threshold; confidence
+        is gated only by the base rule-6 floor. Was ESCALATE pre-re-sourcing.
+        """
         self._base_monkeypatch(monkeypatch)
         diagnosis = {
             **mock_diagnosis_auto_remediate(),
@@ -1410,10 +1630,14 @@ class TestDecideActionCpuAuto:
             "proposed_action": self._cpu_action("250m", "500m"),
         }
         validations = validate_commands([self._CPU_CMD])
-        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
 
-    def test_flag_on_high_risk_escalates(self, monkeypatch):
-        """flag ON + risk=high → excepción no concedida (risk>medium) → ESCALATE."""
+    def test_flag_on_high_risk_auto_via_engine_bound(self, monkeypatch):
+        """flag ON + risk=high but structured CPU raise → rule 5 bypassed → AUTO_REMEDIATE.
+
+        The engine's deterministic bound (≤2× + reversible) supersedes the model's risk
+        self-rating. This is the real F4 case (risk=high, conf≈0.84). Was ESCALATE pre-re-sourcing.
+        """
         self._base_monkeypatch(monkeypatch)
         diagnosis = {
             **mock_diagnosis_auto_remediate(),
@@ -1421,7 +1645,7 @@ class TestDecideActionCpuAuto:
             "proposed_action": self._cpu_action("250m", "500m"),
         }
         validations = validate_commands([self._CPU_CMD])
-        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
 
     def test_flag_on_cpu_exceeds_2x_escalates(self, monkeypatch):
         """flag ON + 250m→1000m: pasa la 4.5 pero la 4.6 (cap ≤2×) lo atrapa → ESCALATE. Defensa en profundidad."""

@@ -103,11 +103,9 @@ RISK_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
 
 # Rule 4.5 exception (tutor-approved 2026-05-23): a controlled resource-limit bump via
 # `kubectl set resources` may restart the pod, and that restart is acceptable when the
-# diagnosis is high-confidence and bounded-risk. Never applies to scale/rollout/patch.
-# Memory is always eligible; CPU (F3 slice 2) only when remediation_auto_cpu_enabled is
-# set — escalate-first until the vertical CPU path is validated in cluster.
-_SET_RESOURCES_EXCEPTION_MIN_CONFIDENCE = 0.9
-_SET_RESOURCES_EXCEPTION_MAX_RISK = "medium"
+# remediation is engine-authored and bounded (see is_structured_remediation). Never applies
+# to scale/rollout/patch. The model's risk self-rating is superseded by the deterministic
+# engine bound; the model's diagnostic confidence is still gated by rule 6.
 
 # Razones legibles por clasificación
 _SAFETY_REASONS: dict[CommandSafety, str] = {
@@ -205,6 +203,25 @@ def _limit_resource(field: str) -> str:
     return leaf if leaf in ("cpu", "memory") else "memory"
 
 
+def build_set_resources_command(
+    deployment: str, namespace: str, container: str, field: str, value: str,
+) -> str:
+    """Synthesize a deterministic `kubectl set resources` command for a limit field.
+
+    Shared by revert_patch (rollback to the captured value) and the structured
+    auto-remediation path (apply proposed_action.new_value). Engine-built and bounded —
+    never the LLM's free-text command string, so the executed command is always a
+    well-formed, single-purpose `set resources` on the target container.
+    """
+    resource = _limit_resource(field)
+    return (
+        f"kubectl set resources deployment {deployment} "
+        f"-n {namespace} "
+        f"--containers={container} "
+        f"--limits={resource}={value}"
+    )
+
+
 def implies_pod_restart(command: str) -> tuple[bool, str]:
     """True + reason_code if the command will restart or recreate pods.
 
@@ -280,31 +297,66 @@ def validate_commands(commands: list[str]) -> list[dict]:
     return results
 
 
-def _set_resources_exception(reason_code: str, diagnosis: dict) -> bool:
-    """True if a restart-implying command qualifies for the rule 4.5 exception.
+def is_structured_remediation(diagnosis: dict) -> bool:
+    """True if proposed_action is a bounded, reversible, engine-authorable limit raise.
 
-    Only `kubectl set resources` (reason_code set_resources_triggers_rollout) on a
-    resource limit, with confidence >= 0.9 and risk <= medium. Never scale/rollout/patch.
-    Memory is always eligible (tutor-approved). CPU (F3 slice 2) is eligible only when
-    settings.remediation_auto_cpu_enabled is set; otherwise it stays escalate-first.
+    When True, the engine synthesizes the `kubectl set resources` command itself
+    (build_set_resources_command) and OWNS the danger decision: the model's `risk`
+    self-rating is superseded by a deterministic bound (eligible limit field, only-raise,
+    capped ≤2× by rule 4.6, reversible via snapshot/rollback). The model's diagnostic
+    `confidence` is still honored (rule 6). This is a safety upgrade over executing the
+    model's free-text command, not a relaxation — "the model proposes, the engine disposes".
+
+    Eligibility:
+      - proposed_action has name/namespace/container (actionable target)
+      - namespace is within the tenant allow-list (remediation_auto_namespace_prefix) — no
+        auto-remediation outside our own namespaces on a shared cluster (blast-radius guardrail)
+      - field is a known limit field (memory always; cpu iff remediation_auto_cpu_enabled —
+        gated until cluster-validated)
+      - current_value and new_value present and parseable, current > 0
+      - new > current (only-raise; never auto-lower a limit)
+    The ≤2× cap is NOT checked here — rule 4.6 owns it (with its specific reason/logging).
     """
-    if reason_code != "set_resources_triggers_rollout":
-        return False
     proposed_action = diagnosis.get("proposed_action")
     if not isinstance(proposed_action, dict):
         return False
+    if not all(proposed_action.get(k) for k in ("name", "namespace", "container")):
+        return False
+    prefix = settings.remediation_auto_namespace_prefix
+    if prefix and not str(proposed_action.get("namespace", "")).startswith(prefix):
+        return False  # auto-remediation confined to own-tenant namespaces (shared cluster)
     field = proposed_action.get("field")
-    if field == "resources.limits.memory":
-        pass  # always eligible
-    elif field == "resources.limits.cpu":
-        if not settings.remediation_auto_cpu_enabled:
-            return False  # CPU auto-remediation gated until cluster-validated
-    else:
+    parser = _LIMIT_FIELD_PARSERS.get(field)
+    if parser is None:
         return False
-    if diagnosis.get("confidence", 0.0) < _SET_RESOURCES_EXCEPTION_MIN_CONFIDENCE:
+    if field == "resources.limits.cpu" and not settings.remediation_auto_cpu_enabled:
+        return False  # CPU auto-remediation gated until cluster-validated
+    current_val = proposed_action.get("current_value")
+    new_val = proposed_action.get("new_value")
+    if not current_val or not new_val:
         return False
-    risk = diagnosis.get("risk", "high")
-    return RISK_ORDER.get(risk, 2) <= RISK_ORDER.get(_SET_RESOURCES_EXCEPTION_MAX_RISK, 1)
+    try:
+        current_amount = parser(current_val)
+        new_amount = parser(new_val)
+    except ValueError:
+        return False
+    if current_amount <= 0:
+        return False
+    return new_amount > current_amount
+
+
+def _set_resources_exception(reason_code: str, diagnosis: dict) -> bool:
+    """True if a restart-implying command qualifies for the rule 4.5 exception.
+
+    Granted only for `kubectl set resources` (reason_code set_resources_triggers_rollout)
+    when the diagnosis is a structured, engine-authorable limit raise
+    (is_structured_remediation). Never scale/rollout/patch. The model's risk/confidence are
+    no longer gated here: risk is superseded by the engine bound, confidence stays in rule 6.
+    CPU eligibility is gated by remediation_auto_cpu_enabled inside is_structured_remediation.
+    """
+    if reason_code != "set_resources_triggers_rollout":
+        return False
+    return is_structured_remediation(diagnosis)
 
 
 # ── Motor de decisión ─────────────────────────────────────────────────────────
@@ -418,7 +470,16 @@ def decide_action(
     risk = diagnosis.get("risk", "high")
     max_risk = settings.remediation_auto_max_risk
     if RISK_ORDER.get(risk, 2) > RISK_ORDER.get(max_risk, 0):
-        return RemediationAction.ESCALATE
+        # Rule 5 — escalate on model-rated risk above the auto threshold, EXCEPT for a
+        # structured remediation: there the engine's deterministic bound (eligible field,
+        # only-raise, ≤2×, reversible) supersedes the model's risk self-rating. Confidence
+        # is still gated by rule 6 below.
+        if not is_structured_remediation(diagnosis):
+            return RemediationAction.ESCALATE
+        logger.info(
+            "Rule 5 bypassed: structured remediation, engine bound supersedes model risk",
+            extra={"risk": risk, "field": (diagnosis.get("proposed_action") or {}).get("field")},
+        )
 
     confidence = diagnosis.get("confidence", 0.0)
     if confidence < settings.remediation_auto_confidence:
@@ -748,12 +809,9 @@ async def revert_patch(snapshot: PrePatchSnapshot) -> ExecuteResult:
             exit_code=None, outcome="error",
         )
 
-    resource = _limit_resource(snapshot.field)
-    cmd = (
-        f"kubectl set resources deployment {snapshot.deployment} "
-        f"-n {snapshot.namespace} "
-        f"--containers={snapshot.container} "
-        f"--limits={resource}={snapshot.value}"
+    cmd = build_set_resources_command(
+        snapshot.deployment, snapshot.namespace, snapshot.container,
+        snapshot.field, snapshot.value,
     )
     logger.info(
         "revert_patch: executing rollback command",
@@ -844,11 +902,24 @@ async def process_remediation(diagnosis: dict, rag_degraded: bool = False) -> di
     pre_patch_snapshot: PrePatchSnapshot | None = None
 
     if action == RemediationAction.AUTO_REMEDIATE:
-        safe_cmds = _get_safe_commands(validations)
         proposed_action = diagnosis.get("proposed_action")
-        if isinstance(proposed_action, dict):
+        if is_structured_remediation(diagnosis):
+            # Engine-authored remediation: synthesize the set-resources command from the
+            # structured proposal (deterministic, bounded, reversible) instead of running the
+            # model's free-text commands, which are typically investigative (F4: 4/5 emit no
+            # executable command). The model proposes the diagnosis; the engine disposes.
             pre_patch_snapshot = await capture_pre_patch_value(proposed_action)
-        execute_results = await execute_commands(safe_cmds)
+            command = build_set_resources_command(
+                proposed_action["name"], proposed_action["namespace"],
+                proposed_action["container"], proposed_action["field"],
+                proposed_action["new_value"],
+            )
+            execute_results = await execute_commands([command])
+        else:
+            safe_cmds = _get_safe_commands(validations)
+            if isinstance(proposed_action, dict):
+                pre_patch_snapshot = await capture_pre_patch_value(proposed_action)
+            execute_results = await execute_commands(safe_cmds)
 
     result = build_remediation_result(diagnosis, action, validations, execute_results)
     result["pre_patch_snapshot"] = pre_patch_snapshot
