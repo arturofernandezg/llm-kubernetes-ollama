@@ -32,6 +32,8 @@ class TestDatasetLoads:
         assert (_DATASETS_DIR / "alerts_oom.json").exists()
         assert (_DATASETS_DIR / "alerts_crashloop.json").exists()
         assert (_DATASETS_DIR / "alerts_imagepull.json").exists()
+        assert (_DATASETS_DIR / "alerts_highcpu.json").exists()
+        assert (_DATASETS_DIR / "alerts_highmemory.json").exists()
 
     def test_oom_dataset_count(self):
         with open(_DATASETS_DIR / "alerts_oom.json") as f:
@@ -48,9 +50,19 @@ class TestDatasetLoads:
             data = json.load(f)
         assert len(data) == 2
 
+    def test_highcpu_dataset_count(self):
+        with open(_DATASETS_DIR / "alerts_highcpu.json") as f:
+            data = json.load(f)
+        assert len(data) == 3
+
+    def test_highmemory_dataset_count(self):
+        with open(_DATASETS_DIR / "alerts_highmemory.json") as f:
+            data = json.load(f)
+        assert len(data) == 2
+
     def test_all_payloads_valid_against_schema(self):
         alerts = load_datasets()
-        assert len(alerts) == 10
+        assert len(alerts) == 15  # 5 oom + 3 crashloop + 2 imagepull + 3 highcpu + 2 highmemory
         for entry in alerts:
             payload = AlertmanagerPayload(**entry["payload"])
             assert len(payload.alerts) >= 1

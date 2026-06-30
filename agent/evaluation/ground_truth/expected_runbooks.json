@@ -8,5 +8,10 @@
   "crashloop-002": "crashloopbackoff",
   "crashloop-003": "crashloopbackoff",
   "imagepull-001": "imagepullbackoff",
-  "imagepull-002": "imagepullbackoff"
+  "imagepull-002": "imagepullbackoff",
+  "highcpu-001": "highcpu",
+  "highcpu-002": "highcpu",
+  "highcpu-003": "highcpu",
+  "highmemory-001": "highmemory",
+  "highmemory-002": "highmemory"
 }

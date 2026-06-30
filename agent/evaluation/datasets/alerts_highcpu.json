@@ -1,0 +1,107 @@
+[
+  {
+    "id": "highcpu-001",
+    "context_note": "enriched: description carries the current CPU limit (mirrors the post-fix Prometheus annotation). Model should propose a sane <=2x bump.",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "HighCPU",
+            "pod": "agent-656cd84f7c-nggtm",
+            "namespace": "arturo-llm-test",
+            "severity": "warning",
+            "container": "agent"
+          },
+          "annotations": {
+            "description": "Container agent in pod agent-656cd84f7c-nggtm (ns arturo-llm-test) CPU at 95% of its limit (current resources.limits.cpu: 300m)",
+            "summary": "Container agent high CPU usage"
+          },
+          "startsAt": "2026-06-30T09:00:00Z",
+          "endsAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "groupLabels": {
+        "alertname": "HighCPU"
+      },
+      "commonLabels": {
+        "alertname": "HighCPU",
+        "severity": "warning"
+      },
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "highcpu"
+  },
+  {
+    "id": "highcpu-002",
+    "context_note": "enriched: description carries the current CPU limit (250m).",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "HighCPU",
+            "pod": "chaos-cpu-target-7c9d8f5b4-k2xqp",
+            "namespace": "arturo-chaos",
+            "severity": "warning",
+            "container": "stress"
+          },
+          "annotations": {
+            "description": "Container stress in pod chaos-cpu-target-7c9d8f5b4-k2xqp is CPU-throttled at its limit (current resources.limits.cpu: 250m) in namespace arturo-chaos",
+            "summary": "Container CPU-throttled at limit 250m"
+          },
+          "startsAt": "2026-06-30T09:30:00Z",
+          "endsAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "groupLabels": {
+        "alertname": "HighCPU"
+      },
+      "commonLabels": {
+        "alertname": "HighCPU",
+        "severity": "warning"
+      },
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "highcpu"
+  },
+  {
+    "id": "highcpu-003",
+    "context_note": "ADVERSARIAL: description has NO current CPU limit. The model MUST omit proposed_action (not fabricate current_value). Verifies the anti-hallucination prompt hardening.",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "HighCPU",
+            "pod": "worker-5f7c9d8b4-pp2mn",
+            "namespace": "arturo-llm-test",
+            "severity": "warning",
+            "container": "worker"
+          },
+          "annotations": {
+            "description": "Container worker in pod worker-5f7c9d8b4-pp2mn has sustained high CPU usage in namespace arturo-llm-test",
+            "summary": "Sustained high CPU usage detected"
+          },
+          "startsAt": "2026-06-30T10:00:00Z",
+          "endsAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "groupLabels": {
+        "alertname": "HighCPU"
+      },
+      "commonLabels": {
+        "alertname": "HighCPU",
+        "severity": "warning"
+      },
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "highcpu"
+  }
+]

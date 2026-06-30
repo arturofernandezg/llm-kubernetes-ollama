@@ -1,0 +1,72 @@
+[
+  {
+    "id": "highmemory-001",
+    "context_note": "enriched: description carries the current memory limit (mirrors the post-fix Prometheus annotation). Model should propose a sane <=2x bump on resources.limits.memory.",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "HighMemory",
+            "pod": "api-7d8b9f6d7-xkp2q",
+            "namespace": "arturo-llm-test",
+            "severity": "warning",
+            "container": "api"
+          },
+          "annotations": {
+            "description": "Container api in pod api-7d8b9f6d7-xkp2q (ns arturo-llm-test) uses 94% of its memory limit (current resources.limits.memory: 256Mi)",
+            "summary": "Container api memory near limit"
+          },
+          "startsAt": "2026-06-30T09:15:00Z",
+          "endsAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "groupLabels": {
+        "alertname": "HighMemory"
+      },
+      "commonLabels": {
+        "alertname": "HighMemory",
+        "severity": "warning"
+      },
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "highmemory"
+  },
+  {
+    "id": "highmemory-002",
+    "context_note": "ADVERSARIAL: description has NO current memory limit. The model MUST omit proposed_action (not fabricate current_value). Verifies the anti-hallucination prompt hardening.",
+    "payload": {
+      "receiver": "aiops-agent",
+      "status": "firing",
+      "alerts": [
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "HighMemory",
+            "pod": "cache-6c7f8d9-mzr4p",
+            "namespace": "arturo-llm-test",
+            "severity": "warning",
+            "container": "cache"
+          },
+          "annotations": {
+            "description": "Container cache in pod cache-6c7f8d9-mzr4p uses a high fraction of its memory limit in namespace arturo-llm-test",
+            "summary": "Container cache memory near limit"
+          },
+          "startsAt": "2026-06-30T09:45:00Z",
+          "endsAt": "0001-01-01T00:00:00Z"
+        }
+      ],
+      "groupLabels": {
+        "alertname": "HighMemory"
+      },
+      "commonLabels": {
+        "alertname": "HighMemory",
+        "severity": "warning"
+      },
+      "commonAnnotations": {}
+    },
+    "expected_runbook": "highmemory"
+  }
+]

@@ -1,6 +1,7 @@
 [
   {
     "id": "oom-001",
+    "context_note": "ADVERSARIAL: no current memory limit in description. Model must omit proposed_action (abstain), not fabricate a baseline.",
     "payload": {
       "receiver": "aiops-agent",
       "status": "firing",
@@ -28,6 +29,7 @@
   },
   {
     "id": "oom-002",
+    "context_note": "ADVERSARIAL: no current memory limit in description. Model must omit proposed_action (abstain), not fabricate a baseline.",
     "payload": {
       "receiver": "aiops-agent",
       "status": "firing",
@@ -55,6 +57,7 @@
   },
   {
     "id": "oom-003",
+    "context_note": "enriched: description carries the current memory limit (256Mi). Model should propose a sane <=2x bump.",
     "payload": {
       "receiver": "aiops-agent",
       "status": "firing",
@@ -82,6 +85,7 @@
   },
   {
     "id": "oom-004",
+    "context_note": "ADVERSARIAL: no current memory limit in description. Model must omit proposed_action (abstain), not fabricate a baseline.",
     "payload": {
       "receiver": "aiops-agent",
       "status": "firing",
@@ -109,6 +113,7 @@
   },
   {
     "id": "oom-005",
+    "context_note": "enriched: description carries the current memory limit (512Mi). Model should propose a sane <=2x bump.",
     "payload": {
       "receiver": "aiops-agent",
       "status": "firing",
