@@ -78,6 +78,8 @@ spec:
           value: "true"
         - name: REMEDIATION_DRY_RUN
           value: "false"
+        - name: REMEDIATION_AUTO_CPU_ENABLED
+          value: "false"   # escalate-first hasta validar el camino CPU en cluster; flip a "true" tras chaos.sh cpu OK
         - name: REMEDIATION_ROLLBACK_ENABLED
           value: "true"
         - name: REMEDIATION_ROLLBACK_TIMEOUT

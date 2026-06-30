@@ -38,17 +38,22 @@ OUTPUT SCHEMA:
     "name": "<resource-name>",
     "namespace": "<namespace>",
     "container": "<container-name>",
-    "field": "resources.limits.memory",
-    "current_value": "<current-memory-limit, e.g. 256Mi>",
-    "new_value": "<proposed-memory-limit, e.g. 512Mi>"
+    "field": "resources.limits.memory | resources.limits.cpu",
+    "current_value": "<current limit — memory e.g. 256Mi, cpu e.g. 250m>",
+    "new_value": "<proposed limit — memory e.g. 512Mi, cpu e.g. 500m>"
   }}
 }}
 
 PROPOSED ACTION RULES:
-- Include "proposed_action" ONLY when a command modifies resources.limits.memory on a specific workload.
-- "current_value" must reflect the memory limit in the alert labels or context; omit proposed_action if unknown.
-- "new_value" must match the value used in the corresponding kubectl command.
-- If no memory limit change is proposed, omit the "proposed_action" field entirely.
+- Include "proposed_action" ONLY when a command modifies a resource LIMIT on a specific workload.
+  Two fields are supported:
+  - "resources.limits.memory" — for memory pressure (e.g. OOMKilled, HighMemory). Values use IEC units (256Mi, 512Mi, 1Gi).
+  - "resources.limits.cpu" — for sustained CPU throttling (e.g. HighCPU). Values use millicores (250m, 500m, 1000m) or cores (1, 0.5).
+- "field" must be exactly one of the two values above.
+- "current_value" must reflect the limit in the alert labels or context; omit proposed_action if unknown.
+- "new_value" must match the value used in the corresponding kubectl command, and must NOT exceed 2× current_value.
+- For a CPU change, the command is `kubectl set resources deployment <name> -n <ns> --containers=<c> --limits=cpu=<new_value>`.
+- If no limit change is proposed, omit the "proposed_action" field entirely.
 
 --- ALERT ---
 {alert_text}

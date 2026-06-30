@@ -101,9 +101,11 @@ MUTATING_PATTERNS = [
 # Orden de riesgo para comparar risk levels
 RISK_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
 
-# Rule 4.5 exception (tutor-approved 2026-05-23): a controlled memory-limit bump via
+# Rule 4.5 exception (tutor-approved 2026-05-23): a controlled resource-limit bump via
 # `kubectl set resources` may restart the pod, and that restart is acceptable when the
 # diagnosis is high-confidence and bounded-risk. Never applies to scale/rollout/patch.
+# Memory is always eligible; CPU (F3 slice 2) only when remediation_auto_cpu_enabled is
+# set — escalate-first until the vertical CPU path is validated in cluster.
 _SET_RESOURCES_EXCEPTION_MIN_CONFIDENCE = 0.9
 _SET_RESOURCES_EXCEPTION_MAX_RISK = "medium"
 
@@ -165,6 +167,42 @@ def parse_memory_to_bytes(value: str) -> int:
         return int(value)
     except ValueError:
         raise ValueError(f"invalid memory value: {value!r}")
+
+
+def parse_cpu_to_millicores(value: str) -> int:
+    """Parse a Kubernetes CPU quantity to millicores. Raises ValueError on invalid input.
+
+    Supports millicores (e.g. "250m") and cores (e.g. "1", "0.5" → 500). A bare number
+    is interpreted as cores (Kubernetes semantics): "1" → 1000m, "2" → 2000m.
+    """
+    value = value.strip()
+    if not value:
+        raise ValueError("empty cpu value")
+
+    lower = value.lower()
+    if lower.endswith("m"):
+        num_str = lower[:-1]
+        try:
+            return int(float(num_str))
+        except ValueError:
+            raise ValueError(f"invalid cpu value: {value!r}")
+    try:
+        return int(float(lower) * 1000)
+    except ValueError:
+        raise ValueError(f"invalid cpu value: {value!r}")
+
+
+# Maps a proposed_action.field to its parser (value → comparable integer).
+_LIMIT_FIELD_PARSERS = {
+    "resources.limits.memory": parse_memory_to_bytes,
+    "resources.limits.cpu": parse_cpu_to_millicores,
+}
+
+
+def _limit_resource(field: str) -> str:
+    """Resource leaf ('cpu'|'memory') from a resources.limits.* field; defaults to 'memory'."""
+    leaf = (field or "").rsplit(".", 1)[-1]
+    return leaf if leaf in ("cpu", "memory") else "memory"
 
 
 def implies_pod_restart(command: str) -> tuple[bool, str]:
@@ -242,17 +280,26 @@ def validate_commands(commands: list[str]) -> list[dict]:
     return results
 
 
-def _set_resources_memory_exception(reason_code: str, diagnosis: dict) -> bool:
+def _set_resources_exception(reason_code: str, diagnosis: dict) -> bool:
     """True if a restart-implying command qualifies for the rule 4.5 exception.
 
     Only `kubectl set resources` (reason_code set_resources_triggers_rollout) on a
-    memory limit, with confidence >= 0.9 and risk <= medium. Never scale/rollout/patch.
+    resource limit, with confidence >= 0.9 and risk <= medium. Never scale/rollout/patch.
+    Memory is always eligible (tutor-approved). CPU (F3 slice 2) is eligible only when
+    settings.remediation_auto_cpu_enabled is set; otherwise it stays escalate-first.
     """
     if reason_code != "set_resources_triggers_rollout":
         return False
     proposed_action = diagnosis.get("proposed_action")
-    if not (isinstance(proposed_action, dict)
-            and proposed_action.get("field") == "resources.limits.memory"):
+    if not isinstance(proposed_action, dict):
+        return False
+    field = proposed_action.get("field")
+    if field == "resources.limits.memory":
+        pass  # always eligible
+    elif field == "resources.limits.cpu":
+        if not settings.remediation_auto_cpu_enabled:
+            return False  # CPU auto-remediation gated until cluster-validated
+    else:
         return False
     if diagnosis.get("confidence", 0.0) < _SET_RESOURCES_EXCEPTION_MIN_CONFIDENCE:
         return False
@@ -279,7 +326,8 @@ def decide_action(
     3. Algún comando BLOCKED → ESCALATE (LLM produjo algo peligroso)
     4. Algún comando UNKNOWN → SUGGEST_ONLY (incertidumbre)
     4.5 (tutor) Algún comando MUTATING implica reinicio de pod → ESCALATE
-    4.6 (tutor) proposed_action en memory.limits: new > 2× current → ESCALATE
+              (excepción set-resources: memory siempre; cpu solo si remediation_auto_cpu_enabled)
+    4.6 (tutor) proposed_action en resources.limits.{memory,cpu}: new > 2× current → ESCALATE
     5. risk > remediation_auto_max_risk → ESCALATE
     6. confidence < remediation_auto_confidence → SUGGEST_ONLY
     7.5 (PR-04) rag_degraded → ESCALATE (no auto-remediar sin grounding RAG)
@@ -299,15 +347,20 @@ def decide_action(
     if CommandSafety.UNKNOWN in safeties:
         return RemediationAction.SUGGEST_ONLY
 
-    # Rule 4.5 — tutor condition: block any command that restarts pods (except authorized memory bumps)
+    # Rule 4.5 — tutor condition: block any command that restarts pods (except authorized set-resources bumps)
     for v in command_validations:
         if v["safety"] == CommandSafety.MUTATING:
             restarts, reason_code = implies_pod_restart(v["command"])
             if restarts:
-                if _set_resources_memory_exception(reason_code, diagnosis):
+                if _set_resources_exception(reason_code, diagnosis):
+                    pa = diagnosis.get("proposed_action") or {}
                     logger.info(
-                        "Rule 4.5 exception: authorized set-resources memory change",
-                        extra={"command": v["command"], "reason_code": reason_code},
+                        "Rule 4.5 exception: authorized set-resources change",
+                        extra={
+                            "command": v["command"],
+                            "reason_code": reason_code,
+                            "resource": _limit_resource(pa.get("field", "")),
+                        },
                     )
                     continue
                 logger.warning(
@@ -316,49 +369,51 @@ def decide_action(
                 )
                 return RemediationAction.ESCALATE
 
-    # Rule 4.6 — tutor condition: new memory limit must be ≤ 2× current
+    # Rule 4.6 — tutor condition: a new resource limit must be ≤ 2× current.
+    # Field-aware: applies to both memory (bytes) and cpu (millicores).
     proposed_action = diagnosis.get("proposed_action")
-    if (
-        isinstance(proposed_action, dict)
-        and proposed_action.get("field") == "resources.limits.memory"
-    ):
-        current_val = proposed_action.get("current_value")
-        new_val = proposed_action.get("new_value")
-        if not current_val or not new_val:
-            logger.warning(
-                "Remediation blocked: proposed_action missing memory fields",
-                extra={
-                    "reason_code": "missing_memory_value",
-                    "current_value": current_val,
-                    "new_value": new_val,
-                },
-            )
-            return RemediationAction.ESCALATE
-        try:
-            current_bytes = parse_memory_to_bytes(current_val)
-            new_bytes = parse_memory_to_bytes(new_val)
-            if current_bytes == 0:
+    if isinstance(proposed_action, dict):
+        field = proposed_action.get("field")
+        parser = _LIMIT_FIELD_PARSERS.get(field)
+        if parser is not None:
+            resource = field.rsplit(".", 1)[-1]  # "memory" | "cpu"
+            current_val = proposed_action.get("current_value")
+            new_val = proposed_action.get("new_value")
+            if not current_val or not new_val:
                 logger.warning(
-                    "Remediation blocked: cannot evaluate 2x rule with zero current memory",
-                    extra={"reason_code": "zero_current_memory", "current_value": current_val},
-                )
-                return RemediationAction.ESCALATE
-            if new_bytes > 2 * current_bytes:
-                logger.warning(
-                    "Remediation blocked: proposed memory exceeds 2x current",
+                    "Remediation blocked: proposed_action missing limit fields",
                     extra={
-                        "reason_code": "memory_exceeds_2x",
+                        "reason_code": f"missing_{resource}_value",
                         "current_value": current_val,
                         "new_value": new_val,
                     },
                 )
                 return RemediationAction.ESCALATE
-        except ValueError as exc:
-            logger.warning(
-                "Remediation blocked: cannot parse memory values",
-                extra={"reason_code": "unparseable_memory", "error": str(exc)},
-            )
-            return RemediationAction.ESCALATE
+            try:
+                current_amount = parser(current_val)
+                new_amount = parser(new_val)
+                if current_amount == 0:
+                    logger.warning(
+                        "Remediation blocked: cannot evaluate 2x rule with zero current limit",
+                        extra={"reason_code": f"zero_current_{resource}", "current_value": current_val},
+                    )
+                    return RemediationAction.ESCALATE
+                if new_amount > 2 * current_amount:
+                    logger.warning(
+                        "Remediation blocked: proposed limit exceeds 2x current",
+                        extra={
+                            "reason_code": f"{resource}_exceeds_2x",
+                            "current_value": current_val,
+                            "new_value": new_val,
+                        },
+                    )
+                    return RemediationAction.ESCALATE
+            except ValueError as exc:
+                logger.warning(
+                    "Remediation blocked: cannot parse limit values",
+                    extra={"reason_code": f"unparseable_{resource}", "error": str(exc)},
+                )
+                return RemediationAction.ESCALATE
 
     risk = diagnosis.get("risk", "high")
     max_risk = settings.remediation_auto_max_risk
@@ -548,11 +603,12 @@ async def capture_pre_patch_value(proposed_action: dict) -> PrePatchSnapshot | N
             field=field, value=value, selector=selector,
         )
 
-    # Query all containers' memory limits, parse the matching one
+    # Query all containers' limits for the relevant resource, parse the matching one
+    resource = _limit_resource(field)
     try:
         proc = await asyncio.create_subprocess_exec(
             "kubectl", "get", "deployment", name, "-n", namespace,
-            "-o", "jsonpath={range .spec.template.spec.containers[*]}{.name}:{.resources.limits.memory};{end}",
+            "-o", f"jsonpath={{range .spec.template.spec.containers[*]}}{{.name}}:{{.resources.limits.{resource}}};{{end}}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -583,8 +639,8 @@ async def capture_pre_patch_value(proposed_action: dict) -> PrePatchSnapshot | N
 
     if not captured_value:
         logger.warning(
-            "capture_pre_patch_value: container not found or empty memory limit",
-            extra={"container": container, "raw": raw},
+            "capture_pre_patch_value: container not found or empty limit",
+            extra={"container": container, "resource": resource, "raw": raw},
         )
         return None
 
@@ -692,11 +748,12 @@ async def revert_patch(snapshot: PrePatchSnapshot) -> ExecuteResult:
             exit_code=None, outcome="error",
         )
 
+    resource = _limit_resource(snapshot.field)
     cmd = (
         f"kubectl set resources deployment {snapshot.deployment} "
         f"-n {snapshot.namespace} "
         f"--containers={snapshot.container} "
-        f"--limits=memory={snapshot.value}"
+        f"--limits={resource}={snapshot.value}"
     )
     logger.info(
         "revert_patch: executing rollback command",

@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     remediation_enabled: bool = False
     remediation_auto_confidence: float = 0.8
     remediation_auto_max_risk: str = "low"
+    remediation_auto_cpu_enabled: bool = False  # gate: extiende la excepción 4.5 a CPU (escalate-first hasta validar en cluster)
     remediation_dry_run: bool = True          # False = ejecución real via kubectl
     remediation_command_timeout: int = 30     # segundos por comando
     remediation_rollback_enabled: bool = True

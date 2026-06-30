@@ -29,7 +29,9 @@ from remediation import (
     revert_patch,
     process_remediation,
     parse_memory_to_bytes,
+    parse_cpu_to_millicores,
     implies_pod_restart,
+    _limit_resource,
 )
 from tests.helpers import mock_diagnosis_auto_remediate, mock_diagnosis_escalate, mock_diagnosis_result
 
@@ -810,7 +812,7 @@ class TestDecideActionTutorRule:
         assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
 
     def test_set_resources_non_memory_field_escalates(self, monkeypatch):
-        """field=resources.limits.cpu → exception not granted → rule 4.5 blocks → ESCALATE."""
+        """field=resources.limits.cpu → exception gated (auto-cpu flag off, default) → rule 4.5 blocks → ESCALATE."""
         self._base_monkeypatch(monkeypatch)
         diagnosis = {
             **mock_diagnosis_auto_remediate(),
@@ -979,6 +981,34 @@ class TestCapturePrePatchValue:
         assert result.value == "512Mi"
 
     @pytest.mark.asyncio
+    async def test_dry_run_cpu_field_returns_snapshot(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        result = await capture_pre_patch_value(
+            self._proposed(field="resources.limits.cpu", current_value="250m", new_value="500m")
+        )
+        assert result is not None
+        assert result.value == "250m"
+        assert result.field == "resources.limits.cpu"
+
+    @pytest.mark.asyncio
+    async def test_real_mode_cpu_field_queries_cpu_jsonpath(self, monkeypatch):
+        """F3 slice 1b: el jsonpath usa resources.limits.cpu y parsea el valor cpu."""
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"engine:500m;sidecar:100m;", returncode=0)
+        mock_exec = AsyncMock(return_value=proc)
+        with patch("remediation.asyncio.create_subprocess_exec", new=mock_exec):
+            result = await capture_pre_patch_value(
+                self._proposed(field="resources.limits.cpu", current_value="250m", new_value="500m")
+            )
+        assert result is not None
+        assert result.value == "500m"
+        # el comando kubectl debe consultar el límite de cpu, no el de memory
+        jsonpath_arg = " ".join(str(a) for a in mock_exec.call_args.args)
+        assert "resources.limits.cpu" in jsonpath_arg
+        assert "resources.limits.memory" not in jsonpath_arg
+
+    @pytest.mark.asyncio
     async def test_real_mode_kubectl_fails_returns_none(self, monkeypatch):
         monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
         monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
@@ -1118,6 +1148,18 @@ class TestRevertPatch:
         assert result.outcome == "error"
         assert result.success is False
 
+    @pytest.mark.asyncio
+    async def test_cpu_field_builds_cpu_limits_command(self, monkeypatch):
+        """F3 slice 1b: con field=cpu el comando revierte --limits=cpu, no memory."""
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        snapshot = PrePatchSnapshot(
+            deployment="engine", namespace="prod", container="engine",
+            field="resources.limits.cpu", value="500m", selector="app=engine",
+        )
+        result = await revert_patch(snapshot)
+        assert "--limits=cpu=500m" in result.command
+        assert "memory" not in result.command
+
 
 # ── TestProcessRemediationSnapshot ────────────────────────────────────────────
 
@@ -1181,4 +1223,247 @@ class TestProcessRemediationNonStringFilter:
         diagnosis = {**mock_diagnosis_result(), "commands": [None, 42]}
         result = await process_remediation(diagnosis)
         assert result["action"] == RemediationAction.SUGGEST_ONLY
-        assert result["execution_attempted"] is False
+
+
+# ── TestParseCpuToMillicores ──────────────────────────────────────────────────
+
+class TestParseCpuToMillicores:
+    """F3 — parser de CPU análogo a parse_memory_to_bytes."""
+
+    def test_millicores(self):
+        assert parse_cpu_to_millicores("250m") == 250
+
+    def test_one_core(self):
+        assert parse_cpu_to_millicores("1") == 1000
+
+    def test_two_cores(self):
+        assert parse_cpu_to_millicores("2") == 2000
+
+    def test_fractional_core(self):
+        assert parse_cpu_to_millicores("0.5") == 500
+
+    def test_case_insensitive_suffix(self):
+        assert parse_cpu_to_millicores("500M") == parse_cpu_to_millicores("500m")
+
+    def test_invalid_raises(self):
+        with pytest.raises(ValueError):
+            parse_cpu_to_millicores("garbage")
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError):
+            parse_cpu_to_millicores("")
+
+
+# ── TestDecideActionCpu ───────────────────────────────────────────────────────
+
+class TestDecideActionCpu:
+    """F3 slice 1 — la dimensión CPU del motor de decisión.
+
+    Por defecto (auto-cpu flag OFF) HighCPU es escalate-first: deja de morir en
+    suggest_only, produce un proposed_action(cpu) y el comando real (`set resources cpu`)
+    escala vía regla 4.5. El cap ≤2× (regla 4.6) aplica también a CPU (millicores).
+    Los casos flag-ON (F3 slice 2) viven en TestDecideActionCpuAuto.
+    """
+
+    def _base_monkeypatch(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", False)
+
+    def _cpu_action(self, current, new):
+        return {
+            "kind": "Deployment", "name": "engine", "namespace": "prod",
+            "container": "engine", "field": "resources.limits.cpu",
+            "current_value": current, "new_value": new,
+        }
+
+    def test_cpu_set_resources_escalates(self, monkeypatch):
+        """auto-cpu flag OFF (default): el comando de remediación CPU reinicia pods → ESCALATE (rule 4.5, escalate-first)."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action("250m", "500m"),
+        }
+        validations = validate_commands(
+            ["kubectl set resources deployment engine --containers=engine --limits=cpu=500m -n prod"]
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_cpu_4x_escalates_via_2x_cap(self, monkeypatch):
+        """250m → 1000m (>2×) con comando no-restart → lo atrapa la regla 4.6 CPU → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action("250m", "1000m"),
+        }
+        validations = validate_commands(["kubectl annotate deployment engine note=ok -n prod"])
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_cpu_2x_within_cap_passes_rule_4_6(self, monkeypatch):
+        """250m → 500m (exactamente 2×) con comando no-restart → la 4.6 no bloquea → AUTO_REMEDIATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action("250m", "500m"),
+        }
+        validations = validate_commands(["kubectl annotate deployment engine note=ok -n prod"])
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+    def test_cpu_cores_unit_within_cap(self, monkeypatch):
+        """current="1" new="2" (cores, 2×) → la 4.6 parsea millicores → AUTO_REMEDIATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action("1", "2"),
+        }
+        validations = validate_commands(["kubectl annotate deployment engine note=ok -n prod"])
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+    def test_cpu_unparseable_escalates(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action("250m", "not-a-value"),
+        }
+        validations = validate_commands(["kubectl annotate deployment engine note=ok -n prod"])
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_cpu_missing_current_value_escalates(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action(None, "500m"),
+        }
+        validations = validate_commands(["kubectl annotate deployment engine note=ok -n prod"])
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_cpu_investigation_commands_classify_safe(self):
+        """Smoke: los comandos de investigación del runbook HighCPU son SAFE."""
+        validations = validate_commands([
+            "kubectl top pod -n prod --sort-by=cpu",
+            "kubectl top node",
+        ])
+        assert all(v["safety"] == CommandSafety.SAFE for v in validations)
+
+
+# ── TestDecideActionCpuAuto ───────────────────────────────────────────────────
+
+class TestDecideActionCpuAuto:
+    """F3 slice 2 — auto-remediación de CPU tras el flag remediation_auto_cpu_enabled.
+
+    Con el flag ON, `set resources cpu` de alta confianza y riesgo acotado obtiene la
+    excepción de la regla 4.5 (análoga a memoria) y auto-remedia. El cap ≤2× (regla 4.6)
+    y los umbrales conf≥0.9 / risk≤medium siguen vigentes por encima.
+    """
+
+    _CPU_CMD = "kubectl set resources deployment engine --containers=engine --limits=cpu=500m -n prod"
+
+    def _base_monkeypatch(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", True)
+
+    def _cpu_action(self, current, new):
+        return {
+            "kind": "Deployment", "name": "engine", "namespace": "prod",
+            "container": "engine", "field": "resources.limits.cpu",
+            "current_value": current, "new_value": new,
+        }
+
+    def test_flag_on_cpu_set_resources_auto_remediates(self, monkeypatch):
+        """flag ON + set resources cpu + conf≥0.9 + risk≤max + ≤2× → AUTO_REMEDIATE (caso central slice 2)."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action("250m", "500m"),
+        }
+        validations = validate_commands([self._CPU_CMD])
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+    def test_flag_off_cpu_set_resources_escalates(self, monkeypatch):
+        """flag OFF (explícito) + mismo caso → ESCALATE: el gate mantiene escalate-first."""
+        self._base_monkeypatch(monkeypatch)
+        monkeypatch.setattr("remediation.settings.remediation_auto_cpu_enabled", False)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action("250m", "500m"),
+        }
+        validations = validate_commands([self._CPU_CMD])
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_flag_on_low_confidence_escalates(self, monkeypatch):
+        """flag ON + conf=0.85 (<0.9) → excepción no concedida → rule 4.5 → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.85,
+            "proposed_action": self._cpu_action("250m", "500m"),
+        }
+        validations = validate_commands([self._CPU_CMD])
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_flag_on_high_risk_escalates(self, monkeypatch):
+        """flag ON + risk=high → excepción no concedida (risk>medium) → ESCALATE."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "high", "confidence": 0.9,
+            "proposed_action": self._cpu_action("250m", "500m"),
+        }
+        validations = validate_commands([self._CPU_CMD])
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_flag_on_cpu_exceeds_2x_escalates(self, monkeypatch):
+        """flag ON + 250m→1000m: pasa la 4.5 pero la 4.6 (cap ≤2×) lo atrapa → ESCALATE. Defensa en profundidad."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action("250m", "1000m"),
+        }
+        validations = validate_commands(
+            ["kubectl set resources deployment engine --containers=engine --limits=cpu=1000m -n prod"]
+        )
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_flag_on_scale_still_escalates(self, monkeypatch):
+        """flag ON + proposed_action(cpu) pero el comando es scale → ESCALATE: la excepción es solo set-resources."""
+        self._base_monkeypatch(monkeypatch)
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "proposed_action": self._cpu_action("250m", "500m"),
+        }
+        validations = validate_commands(["kubectl scale deployment engine --replicas=2 -n prod"])
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+
+# ── TestLimitResource ─────────────────────────────────────────────────────────
+
+class TestLimitResource:
+    """F3 slice 1b — _limit_resource deriva la hoja de recurso del field."""
+
+    def test_cpu(self):
+        assert _limit_resource("resources.limits.cpu") == "cpu"
+
+    def test_memory(self):
+        assert _limit_resource("resources.limits.memory") == "memory"
+
+    def test_unknown_field_defaults_to_memory(self):
+        assert _limit_resource("spec.replicas") == "memory"
+
+    def test_empty_defaults_to_memory(self):
+        assert _limit_resource("") == "memory"
+
+    def test_none_defaults_to_memory(self):
+        assert _limit_resource(None) == "memory"
