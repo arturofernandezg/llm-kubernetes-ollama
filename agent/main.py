@@ -148,9 +148,15 @@ _ROLLBACK_LOCK = asyncio.Lock()
 
 
 def _verify_hmac_token(incident_id: str, action: str, token: str | None) -> bool:
-    """Returns True if HMAC is valid or HMAC is disabled (webhook_secret empty)."""
+    """Returns True if the HMAC token is valid, or if auth is safely disabled.
+
+    Fail-open (no webhook_secret configured) is allowed ONLY in dry-run mode
+    (dev/test). With real execution (remediation_dry_run=False) a missing secret
+    fails CLOSED: an unauthenticated "approve" callback would trigger a real
+    remediation. See P0·2 (auditoría 2026-07-01).
+    """
     if not settings.webhook_secret:
-        return True
+        return settings.remediation_dry_run
     if not token:
         return False
     expected = make_hmac_token(incident_id, action, settings.webhook_secret)
@@ -382,14 +388,26 @@ async def lifespan(app: FastAPI):
         logger.warning("Could not reach Ollama at startup: %s", exc)
 
     if not settings.webhook_secret:
-        logger.warning(
-            "WEBHOOK_SECRET not configured — Mattermost button callbacks accept any token"
-        )
+        if settings.remediation_dry_run:
+            logger.warning(
+                "WEBHOOK_SECRET not configured — button callbacks fail-open (dry-run mode)"
+            )
+        else:
+            logger.error(
+                "WEBHOOK_SECRET not configured with REMEDIATION_DRY_RUN=false — "
+                "button callbacks will be REJECTED (fail-closed). Escalations cannot be approved."
+            )
 
     if not settings.mm_command_token:
-        logger.warning(
-            "MM_COMMAND_TOKEN not configured — /aiops slash command accepts any token"
-        )
+        if settings.remediation_dry_run:
+            logger.warning(
+                "MM_COMMAND_TOKEN not configured — /aiops accepts any token (dry-run mode)"
+            )
+        else:
+            logger.error(
+                "MM_COMMAND_TOKEN not configured with REMEDIATION_DRY_RUN=false — "
+                "/aiops slash command will be REJECTED (fail-closed)."
+            )
 
     # Pre-initialize labeled counters so they appear in /metrics from startup.
     # prometheus_client only emits label combinations after the first observation.
@@ -1055,6 +1073,10 @@ async def handle_slash_command(
     if settings.mm_command_token:
         if not token or not hmac.compare_digest(token, settings.mm_command_token):
             raise HTTPException(status_code=401, detail="Invalid command token")
+    elif not settings.remediation_dry_run:
+        # Fail-closed: with real execution enabled, an unconfigured command token
+        # must reject rather than fail-open (symmetric to _verify_hmac_token). P0·2.
+        raise HTTPException(status_code=401, detail="Command auth not configured")
 
     if command != "/aiops":
         return {"response_type": "ephemeral", "text": f"Unknown command: `{command}`"}

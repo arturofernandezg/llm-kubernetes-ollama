@@ -846,6 +846,26 @@ class TestActionCallbackEndpoint:
             })
         assert r.status_code == 200
 
+    def test_empty_secret_fails_closed_when_not_dry_run(self, api_client):
+        """P0·2: no webhook_secret + REMEDIATION_DRY_RUN=false → 401 (no unauthenticated remediation)."""
+        with patch.object(main.settings, "webhook_secret", ""), \
+             patch.object(main.settings, "remediation_dry_run", False):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "approve", "incident_id": "hmac-004"},
+            })
+        assert r.status_code == 401
+
+    def test_empty_secret_fails_open_when_dry_run(self, api_client):
+        """P0·2: no webhook_secret + dry-run → fail-open preserved (dev/test)."""
+        _seed_redis(self.fake_redis, "hmac-005")
+        with patch.object(main.settings, "webhook_secret", ""), \
+             patch.object(main.settings, "remediation_dry_run", True), \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "reject", "incident_id": "hmac-005"},
+            })
+        assert r.status_code == 200
+
 
 class TestCleanupExpiredEscalations:
     """Escalation cleanup is now delegated to Redis TTL.
@@ -1666,6 +1686,15 @@ class TestSlashCommandEndpoint:
                 "command": "/aiops", "text": "help",
             })
         assert r.status_code == 200
+
+    def test_no_token_fails_closed_when_not_dry_run(self, api_client):
+        """P0·2: MM_COMMAND_TOKEN empty + REMEDIATION_DRY_RUN=false → 401 (fail-closed)."""
+        with patch.object(main.settings, "mm_command_token", ""), \
+             patch.object(main.settings, "remediation_dry_run", False):
+            r = api_client.post("/webhook/command", data={
+                "command": "/aiops", "text": "help",
+            })
+        assert r.status_code == 401
 
     def test_incidents_empty_chromadb_returns_no_incidents_message(self, api_client):
         """ChromaDB collection empty → friendly 'no incidents' message."""
