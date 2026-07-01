@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     ollama_url: str = "http://ollama-svc:11434/api/generate"
     ollama_tags: str = "http://ollama-svc:11434/api/tags"
     ollama_model: str = "tinyllama"
+    # Greedy decoding (temp=0): la remediación necesita razonamiento estructurado
+    # reproducible. Default 0.8 de Ollama causaba varianza run-to-run en proposed_action
+    # (un OOM dio current_value="32Mi", otro la lista fabricada "256Mi, 512Mi, 1Gi").
+    ollama_temperature: float = 0.0
 
     # Timeouts (segundos)
     # 300s alineado con el manifiesto desplegado: el LLM qwen2.5:1.5b tarda ~205-252s;

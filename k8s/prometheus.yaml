@@ -253,10 +253,15 @@ data:
               team: aiops
             annotations:
               summary: "Pod {{ $labels.pod }} killed by OOM"
+              # Enriquecido (mismo patrón que HighMemory): inyecta el límite actual para que
+              # el modelo NO fabrique current_value (en cluster emitía listas tipo "256Mi,512Mi,1Gi").
+              # El printf+query va en UNA línea física: el folding '>' uniría líneas con espacios
+              # y corrompería el selector PromQL.
               description: >
                 Container {{ $labels.container }} in pod {{ $labels.pod }}
-                (ns {{ $labels.namespace }}) was OOMKilled.
-                Memory limit may be too low.
+                (ns {{ $labels.namespace }}) was OOMKilled — memory limit too low
+                (current resources.limits.memory:
+                {{ with printf `kube_pod_container_resource_limits{resource="memory",namespace="%s",pod="%s",container="%s"}` $labels.namespace $labels.pod $labels.container | query }}{{ . | first | value | humanize1024 }}{{ else }}unknown{{ end }}).
 
           # 2. CrashLoopBackOff — pod reiniciándose repetidamente (>3 en 15m)
           - alert: KubePodCrashLoopBackOff
@@ -288,7 +293,9 @@ data:
               description: >
                 Container {{ $labels.container }} in pod {{ $labels.pod }}
                 (ns {{ $labels.namespace }}) uses
-                {{ $value | humanizePercentage }} of its memory limit.
+                {{ $value | humanizePercentage }} of its memory limit
+                (current resources.limits.memory:
+                {{ with printf `kube_pod_container_resource_limits{resource="memory",namespace="%s",pod="%s",container="%s"}` $labels.namespace $labels.pod $labels.container | query }}{{ . | first | value | humanize1024 }}{{ else }}unknown{{ end }}).
 
           # 4. HighCPU — uso >90% del CPU limit durante 5m
           - alert: HighCPU
@@ -306,7 +313,9 @@ data:
               description: >
                 Container {{ $labels.container }} in pod {{ $labels.pod }}
                 (ns {{ $labels.namespace }}) CPU at
-                {{ $value | humanizePercentage }} of its limit.
+                {{ $value | humanizePercentage }} of its limit
+                (current resources.limits.cpu:
+                {{ with printf `kube_pod_container_resource_limits{resource="cpu",namespace="%s",pod="%s",container="%s"}` $labels.namespace $labels.pod $labels.container | query }}{{ . | first | value | humanize }}{{ else }}unknown{{ end }}).
 
           # 5. TargetDown — scrape target caído durante 2m
           # Acotado a job=kubernetes-endpoints (ya namespace-scoped a arturo-*).

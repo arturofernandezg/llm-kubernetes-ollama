@@ -50,7 +50,7 @@ PROPOSED ACTION RULES:
   - "resources.limits.memory" — for memory pressure (e.g. OOMKilled, HighMemory). Values use IEC units (256Mi, 512Mi, 1Gi).
   - "resources.limits.cpu" — for sustained CPU throttling (e.g. HighCPU). Values use millicores (250m, 500m, 1000m) or cores (1, 0.5).
 - "field" must be exactly one of the two values above.
-- "current_value" must reflect the limit in the alert labels or context; omit proposed_action if unknown.
+- "current_value" must reflect the limit in the alert labels or context. If the current limit is NOT present in the alert text or context, OMIT proposed_action entirely. NEVER guess, fabricate, or default the current_value — a wrong baseline causes unsafe scaling.
 - "new_value" must match the value used in the corresponding kubectl command, and must NOT exceed 2× current_value.
 - For a CPU change, the command is `kubectl set resources deployment <name> -n <ns> --containers=<c> --limits=cpu=<new_value>`.
 - If no limit change is proposed, omit the "proposed_action" field entirely.
@@ -139,6 +139,7 @@ async def generate_diagnosis(
             "model": settings.ollama_model,
             "prompt": prompt,
             "stream": False,
+            "options": {"temperature": settings.ollama_temperature},
         },
     )
     response.raise_for_status()

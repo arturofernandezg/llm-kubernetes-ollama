@@ -22,7 +22,7 @@ spec:
         effect: "NoSchedule"
       containers:
       - name: agent
-        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:5d5d7c7
+        image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/aiops-agent:da7aafb
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8000

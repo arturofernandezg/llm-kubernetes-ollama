@@ -141,6 +141,20 @@ class TestGenerateDiagnosis:
         assert "rb-oom-001" in result["rag_sources"]
 
     @pytest.mark.asyncio
+    async def test_generation_uses_configured_temperature(self):
+        """The Ollama request must carry options.temperature (greedy default 0.0):
+        kills the run-to-run sampling variance in proposed_action."""
+        from config import settings
+        client = mock_llm_client(GOOD_DIAGNOSIS_JSON)
+        await generate_diagnosis(
+            SAMPLE_LABELS, SAMPLE_ANNOTATIONS, "firing",
+            SAMPLE_RAG_CONTEXT, client,
+        )
+        sent_json = client.post.call_args.kwargs["json"]
+        assert sent_json["options"]["temperature"] == settings.ollama_temperature
+        assert settings.ollama_temperature == 0.0  # default: deterministic remediation
+
+    @pytest.mark.asyncio
     async def test_unparseable_llm_response(self):
         client = mock_llm_client("I don't know what to do, sorry!")
         result = await generate_diagnosis(
