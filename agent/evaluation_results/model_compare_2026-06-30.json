@@ -1,0 +1,108 @@
+{
+  "date": "2026-06-30",
+  "models": [
+    "qwen2.5:1.5b"
+  ],
+  "alerts": [
+    "highcpu",
+    "highmemory"
+  ],
+  "aggregates": [
+    {
+      "model": "qwen2.5:1.5b",
+      "alerts": 5,
+      "parsed_ok": "5/5",
+      "field_correct": "5/5",
+      "auto_remediate_flag_on": "0/5",
+      "avg_confidence": 0.84,
+      "avg_duration_ms": 2014
+    }
+  ],
+  "details": [
+    {
+      "alert_id": "highcpu-001",
+      "model": "qwen2.5:1.5b",
+      "alertname": "HighCPU",
+      "expected_resource": "cpu",
+      "parsed_ok": true,
+      "proposed_field": "resources.limits.cpu",
+      "field_correct": true,
+      "has_set_resources": null,
+      "n_commands": 2,
+      "risk": "high",
+      "confidence": 0.8,
+      "verdict_flag_off": "escalate",
+      "verdict_flag_on": "escalate",
+      "duration_ms": 2711,
+      "diagnosis_text": "The high CPU usage is likely due to sustained consumption above the limits set on the agent deployment."
+    },
+    {
+      "alert_id": "highcpu-002",
+      "model": "qwen2.5:1.5b",
+      "alertname": "HighCPU",
+      "expected_resource": "cpu",
+      "parsed_ok": true,
+      "proposed_field": "resources.limits.cpu",
+      "field_correct": true,
+      "has_set_resources": "cpu",
+      "n_commands": 1,
+      "risk": "medium",
+      "confidence": 0.8,
+      "verdict_flag_off": "escalate",
+      "verdict_flag_on": "escalate",
+      "duration_ms": 1971,
+      "diagnosis_text": "High CPU usage in chaos-cpu-target-7c9d8f5b4-k2xqp exceeds limit, causing throttling."
+    },
+    {
+      "alert_id": "highcpu-003",
+      "model": "qwen2.5:1.5b",
+      "alertname": "HighCPU",
+      "expected_resource": "cpu",
+      "parsed_ok": true,
+      "proposed_field": "resources.limits.cpu",
+      "field_correct": true,
+      "has_set_resources": null,
+      "n_commands": 2,
+      "risk": "medium",
+      "confidence": 0.9,
+      "verdict_flag_off": "escalate",
+      "verdict_flag_on": "escalate",
+      "duration_ms": 1787,
+      "diagnosis_text": "Container 'worker' in pod 'worker-5f7c9d8b4-pp2mn' is consuming sustained high CPU usage, likely due to a workload spike or infinite loop in the application."
+    },
+    {
+      "alert_id": "highmemory-001",
+      "model": "qwen2.5:1.5b",
+      "alertname": "HighMemory",
+      "expected_resource": "memory",
+      "parsed_ok": true,
+      "proposed_field": "resources.limits.memory",
+      "field_correct": true,
+      "has_set_resources": null,
+      "n_commands": 1,
+      "risk": "high",
+      "confidence": 0.9,
+      "verdict_flag_off": "escalate",
+      "verdict_flag_on": "escalate",
+      "duration_ms": 1895,
+      "diagnosis_text": "Container api in pod api-7d8b9f6d7-xkp2q is using too much memory compared to its configured limit."
+    },
+    {
+      "alert_id": "highmemory-002",
+      "model": "qwen2.5:1.5b",
+      "alertname": "HighMemory",
+      "expected_resource": "memory",
+      "parsed_ok": true,
+      "proposed_field": "resources.limits.memory",
+      "field_correct": true,
+      "has_set_resources": null,
+      "n_commands": 2,
+      "risk": "medium",
+      "confidence": 0.8,
+      "verdict_flag_off": "escalate",
+      "verdict_flag_on": "escalate",
+      "duration_ms": 1708,
+      "diagnosis_text": "The high memory usage in the cache container is likely due to increased workload or a lack of eviction policy."
+    }
+  ]
+}
