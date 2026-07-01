@@ -23,6 +23,7 @@ Versión actual: 0.6.0
 | `diagnosis.py` | Prompt AIOps contextual, `generate_diagnosis()`, parsing JSON estructurado del LLM, `_clamp()` | 2 |
 | `remediation.py` | Validation layer (classify/validate commands), decision engine (9 reglas cascada), executor dual-mode + rollback | 3 |
 | `escalation_store.py` | Store/get/delete/count async de escalaciones sobre `redis.asyncio`. Serializa a JSON con TTL nativo. Fail-open. | Mini-Fase 4 |
+| `rollback_store.py` | Backstop durable de rollbacks en Redis (`store`/`delete`/`list_rollbacks`, clave `rollback:{id}`, TTL nativo, fail-open). Espejo de `escalation_store`. Permite recovery al arranque si el pod reinicia a mitad de ventana. | v2 P0·3 |
 | `utils.py` | `backoff_delay()` helper (exponential backoff compartido) | 3 |
 
 ## Endpoints
@@ -62,9 +63,9 @@ Versión actual: 0.6.0
 12. Si `AUTO_REMEDIATE` → ejecuta kubectl directamente (respeta `REMEDIATION_DRY_RUN`).
 13. Resultado (aprobado/rechazado/auto) se persiste en colección `incidents` de ChromaDB.
 
-**Mini-Fase 4 Sesión #5 (rollback automático)**:
-14. Si `AUTO_REMEDIATE` ejecuta al menos un comando exitoso y hay `pre_patch_snapshot` capturado, se registra un `RollbackContext` en `IN_FLIGHT_ROLLBACKS` (in-memory, `asyncio.Lock`) y se lanza `asyncio.create_task(_evaluate_rollback(incident_id))`.
-15. Tras `REMEDIATION_ROLLBACK_TIMEOUT` segundos (default 300), `_evaluate_rollback` consulta el estado de los pods con `kubectl get pods -n <ns> -l <selector>`.
+**Mini-Fase 4 Sesión #5 (rollback automático)** · *(durabilidad Redis: v2 P0·3, 2026-07-01)*:
+14. Si `AUTO_REMEDIATE` ejecuta al menos un comando exitoso y hay `pre_patch_snapshot` capturado, se registra un `RollbackContext` en `IN_FLIGHT_ROLLBACKS` (in-memory, `asyncio.Lock`) **y se persiste en Redis** via `rollback_store.store_rollback()` (clave `rollback:{id}`, TTL `timeout*2+grace`), luego se lanza `asyncio.create_task(_evaluate_rollback(incident_id))`.
+15. Tras el deadline (`REMEDIATION_ROLLBACK_TIMEOUT`, default 300s — `_evaluate_rollback` duerme el **tiempo restante** desde `scheduled_at`, no el timeout fijo), consulta el estado de los pods con `kubectl get pods -n <ns> -l <selector>`. Al terminar, borra la entrada de Redis (`delete_rollback`) además del dict.
 16. Si **todos** los pods están `Running` con `restartCount==0` → counter `aiops_remediation_rollback_total{outcome=healthy}`, mensaje Mattermost "Remediation healthy".
 17. Si algún pod está en estado fallido o ha reiniciado → ejecuta `kubectl set resources deployment <name> -n <ns> --containers=<container> --limits=<recurso>=<pre_patch_value>` (respeta `DRY_RUN`). El `<recurso>` (`cpu`|`memory`) lo deriva `_limit_resource(snapshot.field)` — field-agnostic desde F3 (antes hardcodeaba `memory`). Counter `outcome=reverted` o `outcome=revert_failed`. Mensaje Mattermost con resultado.
 
@@ -80,6 +81,8 @@ AUTO_REMEDIATE + snapshot capturado
                                ├── success → counter=reverted, MM "Rollback executed"
                                └── failure → counter=revert_failed, MM "Rollback FAILED"
 ```
+
+**Recuperación al arranque (P0·3)**: si el pod reinicia dentro de la ventana de espera (rollout/OOM/spot), el dict en memoria y su tarea `sleep` se pierden — pero el `RollbackContext` sobrevive en Redis. `_recover_rollbacks()` (en el lifespan, tras conectar Redis) re-arma cada rollback persistido y relanza `_evaluate_rollback`, que duerme solo el tiempo restante (o evalúa de inmediato si el deadline ya pasó). Idempotente (salta los ya in-flight); no-op sin Redis. Cierra la incoherencia con la cola durable de F2 (antes: patch aplicado que **nunca** se revertía tras un reinicio).
 
 **Rollback no se ejecuta si**:
 - `REMEDIATION_ROLLBACK_ENABLED=false`
@@ -103,7 +106,7 @@ Mattermost POST cuando el operador pulsa un botón de acción:
 }
 ```
 
-`hmac_token` = `HMAC-SHA256(incident_id:action, WEBHOOK_SECRET)`. Si `WEBHOOK_SECRET` está vacío (dev/test), el campo es `null` y la verificación se omite.
+`hmac_token` = `HMAC-SHA256(incident_id:action, WEBHOOK_SECRET)`. **Fail-open gated por `REMEDIATION_DRY_RUN` (v2 P0·2, 2026-07-01)**: si `WEBHOOK_SECRET` está vacío, la verificación se omite **solo en dry-run** (dev/test); con ejecución real (`REMEDIATION_DRY_RUN=false`) un secret vacío hace **fail-closed** → 401 (un "approve" no autenticado dispararía una remediación real). El slash `/webhook/command` (token `MM_COMMAND_TOKEN`) es simétrico. El arranque loguea `error` (no warning) en la combinación real-sin-secret.
 
 | Campo `action` | Comportamiento | Métrica |
 |---|---|---|
@@ -281,7 +284,8 @@ ExtractResponse:
 | `CHROMADB_HOST` | `chromadb-svc` | Host de ChromaDB | 2 |
 | `CHROMADB_PORT` | `8000` | Puerto de ChromaDB | 2 |
 | `MATTERMOST_WEBHOOK_URL` | `None` | URL del webhook entrante de Mattermost | 1 |
-| `WEBHOOK_SECRET` | `""` | Secreto HMAC-SHA256 para verificar callbacks de botones Mattermost. Vacío = sin verificación (dev/test). En K8s via Secret `agent-secrets.webhook-secret` (`optional: true`) | 3 |
+| `WEBHOOK_SECRET` | `""` | Secreto HMAC-SHA256 para verificar callbacks de botones Mattermost. Vacío = fail-open **solo en dry-run**; con `REMEDIATION_DRY_RUN=false` vacío ⇒ **fail-closed** (401). En K8s via Secret `agent-secrets.webhook-secret` (`optional: true`) | 3 · v2 P0·2 |
+| `MM_COMMAND_TOKEN` | `""` | Token del slash command `/aiops`. Vacío = fail-open **solo en dry-run**; con `REMEDIATION_DRY_RUN=false` vacío ⇒ **fail-closed** (401, simétrico a `WEBHOOK_SECRET`). En K8s via Secret `agent-secrets.mm-command-token` (`optional: true`) | Mini-Fase 4 · v2 P0·2 |
 | `REMEDIATION_AUTO_CPU_ENABLED` | `false` | Gate: extiende la excepción 4.5 (auto-remediación de `set resources`) a `resources.limits.cpu`. Off = escalate-first para CPU hasta validar en cluster; memoria siempre elegible (tutor-approved) | F3 |
 | `REMEDIATION_AUTO_NAMESPACE_PREFIX` | `arturo-` | Guardrail blast-radius: `is_structured_remediation` rechaza `proposed_action` cuyo `namespace` no empiece por el prefijo → no auto cross-tenant en cluster compartido. `""` = sin restricción | F3 |
 | `REMEDIATION_ROLLBACK_ENABLED` | `true` | Activa el mecanismo de rollback automático post-patch | Mini-Fase 4 |

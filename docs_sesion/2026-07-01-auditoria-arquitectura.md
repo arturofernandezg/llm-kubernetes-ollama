@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-01
 slug: auditoria-arquitectura
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

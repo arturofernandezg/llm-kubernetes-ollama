@@ -131,6 +131,22 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 
 ---
 
+## Auditoría arquitectónica v2 (2026-07-01)
+
+> Revisión senior (rol arquitecto DevOps/SRE/MLOps), 5.9/10, "rechazo para producción". Informe modo-libro: `docs_sesion/2026-07-01-auditoria-arquitectura.html`. Reencuadra el trabajo pendiente como **v2** (3 ejes: A grounding / B confianza / C cobertura).
+
+| ID | Severidad | Localización | Descripción | Fix propuesto | Estado |
+|---|---|---|---|---|---|
+| P0·1 | **blocker** | main.py / diagnosis.py | **Diagnóstico a ciegas**: `generate_diagnosis()` solo recibe labels+annotations+RAG; cero `kubectl get/logs/events` antes del LLM (tiene el RBAC y no lo usa). El target/`current_value` salen del LLM → el 1.5b los alucina (causa raíz de la slice C de F3) | `agent/enrichment.py`: gather K8s paralelo (get/logs/events) fail-soft **antes** del LLM; `current_value`/target desde el snapshot. Unifica comando humano/auto | TODO (Eje A — siguiente sesión) |
+| P0·2 | **blocker** | main.py:150 (`_verify_hmac_token`), 1055 (`/webhook/command`); secrets-setup.sh | **Auth fail-open**: secret vacío → verificación omitida → remediación no autenticada con `DRY_RUN=false`. Agravado por mismatch de `secrets-setup.sh` (crea claves equivocadas, nunca los tokens) | Fail-open gated por `remediation_dry_run` (real ⇒ 401); startup log `error`; reescribir `secrets-setup.sh` con las claves reales del deployment | DONE (2026-07-01 — +3 tests; `test_endpoints -k` 10 passed) |
+| P0·3 | **blocker** | main.py:146 (`IN_FLIGHT_ROLLBACKS`) | **Rollback no durable**: dict en memoria + `sleep(300)`; si el pod reinicia en la ventana, el patch queda aplicado y nunca se revierte. Incoherente con la cola durable de F2 | Persistir `RollbackContext` en Redis (`rollback_store.py`); `_recover_rollbacks()` al arranque; `_evaluate_rollback` duerme el tiempo restante | DONE (2026-07-01 — nuevo módulo + recovery; +11 tests; `test_rollback.py` 22 passed) |
+| A1 | high | remediation.py:654 (`check_pod_health`) | Selector `-l app={name}` hardcodeado: si el deployment usa otra label → `no_pods_found` → `healthy=False` → rollback falso sobre una remediación que funcionó | Derivar el selector del deployment real (ya se captura en `PrePatchSnapshot.selector`; usarlo en vez de reconstruir `app={name}`) | TODO |
+| A2 | medium | main.py (approve humano) | El approve humano ejecuta `incident.safe_commands` (free-text del LLM, a menudo no ejecutables), no el `build_set_resources_command` determinista | Unificar: humano y auto comparten el comando sintetizado por el motor (lo cierra el Eje A) | TODO (parte de Eje A) |
+| A3 | medium | rag.py (ingest_incident) | **Poisoning RAG diferido**: los incidentes se persisten desde salidas del LLM (incl. `raw_response`) y se reinyectan como contexto | Gate de calidad en la ingesta (F4 bucle de aprendizaje) | TODO (F4) |
+| A4 | low | Dockerfile / Fase 0 | Código muerto Fase 0 (`tf_generator`, `extraction`, `validation`, `/extract`) shippeado en el binario de producción; `.DS_Store`/`.pytest_cache` en repo | Excluir del build de producción; limpiar artefactos | TODO |
+
+---
+
 ## Notas
 
 - Los `WONTFIX` reflejan decisiones conscientemente aceptadas para el MVP del TFG.

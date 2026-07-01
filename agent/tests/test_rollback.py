@@ -72,7 +72,7 @@ class TestRollbackScheduling:
         snapshot = _make_snapshot()
         alert = _make_alert()
 
-        with patch("main.asyncio.create_task"):
+        with patch("main.asyncio.create_task", side_effect=lambda c, *a, **k: c.close()):
             await _schedule_rollback_evaluation(
                 incident_id, snapshot, alert, mock_diagnosis_auto_remediate()
             )
@@ -85,7 +85,7 @@ class TestRollbackScheduling:
     @pytest.mark.asyncio
     async def test_schedule_creates_task(self):
         IN_FLIGHT_ROLLBACKS.clear()
-        with patch("main.asyncio.create_task") as mock_create_task:
+        with patch("main.asyncio.create_task", side_effect=lambda c, *a, **k: c.close()) as mock_create_task:
             await _schedule_rollback_evaluation(
                 "test-task-001", _make_snapshot(), _make_alert(), {}
             )
@@ -385,7 +385,7 @@ class TestRollbackDurability:
         r = FakeRedis()
         main.app.state.redis = r
         try:
-            with patch("main.asyncio.create_task"):
+            with patch("main.asyncio.create_task", side_effect=lambda c, *a, **k: c.close()):
                 await _schedule_rollback_evaluation(
                     "dur-1", _make_snapshot(), _make_alert(), mock_diagnosis_auto_remediate()
                 )
@@ -432,7 +432,7 @@ class TestRollbackDurability:
         )
         await store_rollback(incident_id, _rollback_to_dict(ctx), 60, r)
         try:
-            with patch("main.asyncio.create_task") as mock_task:
+            with patch("main.asyncio.create_task", side_effect=lambda c, *a, **k: c.close()) as mock_task:
                 await _recover_rollbacks()
             assert incident_id in IN_FLIGHT_ROLLBACKS
             mock_task.assert_called_once()

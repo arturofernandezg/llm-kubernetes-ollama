@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-01
 slug: v2-kickoff-eje-b-fail-closed
-promoted: false
+promoted: true
 ---
 
 ## Objetivo
@@ -101,7 +101,8 @@ se revierte. Incoherente con el esfuerzo de durabilizar la cola (F2).
 - **`agent/tests/test_rollback.py`** (+11 tests): `TestRollbackSerialization` (round-trip +
   json), `TestRollbackStore` (store/delete/list + fail-open), `TestRollbackDurability`
   (schedule persiste, evaluate borra, recover re-arma, idempotencia, no-op sin Redis).
-- `py_compile` OK. **pytest pendiente (Jay).**
+- `py_compile` OK. **pytest OK (Jay): 22 passed** en `test_rollback.py` (warnings "coroutine never
+  awaited" silenciados: el mock de `create_task` cierra la coroutine). Suite 460→**474**.
 
 ## Encontrado / gotchas
 - `remediation_dry_run` default `True` en config y **no** lo pisa el conftest → el fail-open
