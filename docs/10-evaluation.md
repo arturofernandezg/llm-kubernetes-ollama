@@ -7,6 +7,34 @@
 
 ---
 
+## Actualización 2026-06-30 — Re-medición F3/F4 (CPU + enriquecimiento de contexto)
+
+> Contexto: en cluster, `qwen2.5:1.5b` no proponía `set resources cpu` ante HighCPU. En vez de saltar a un modelo mayor, se midió **offline** primero. **Nuevo script** `eval_model_compare.py` (recorre `--models` × `--alerts`, inyecta el runbook como contexto **sin ChromaDB**, pasa el diagnóstico por el motor real `validate_commands`+`decide_action` con `remediation_auto_cpu_enabled` off/on). **Nuevos datasets** `alerts_highcpu.json` + `alerts_highmemory.json` (variantes mínima vs enriquecida con el límite). Ficheros: `evaluation_results/retrieval_2026-06-30.json`, `model_compare_2026-06-30.json`.
+
+**Retrieval baseline re-medido (N=15):**
+
+| Métrica | Valor | Nota |
+|---|---|---|
+| precision@1 | **73.3%** (11/15) | subió de 60% al añadir HighCPU/HighMemory |
+| precision@3 | **86.7%** (13/15) | |
+| **HighCPU/HighMemory** | **5/5 @1** | el retrieval de CPU/memoria **nunca** fue el problema |
+| Misses residuales | imagepull-001 (@1 y @3), oom-001 (@1 y @3), imagepull-002/oom-004 (solo @3) | debilidad real en imagepull/oom (descripciones genéricas), ortogonal a F3 |
+
+**Model-compare (`--alerts highcpu,highmemory`, tras enriquecer la alerta con el límite):**
+
+| Modelo | field_ok | auto(on) | Latencia | Veredicto |
+|---|---|---|---|---|
+| `qwen2.5:1.5b` @temp=0 | **5/5** | 0/5 | ~2s/alerta | **Viable y rápido** cuando recibe el contexto correcto |
+| `qwen3.5` (~6.6GB) | — | — | 147s media (uno 294s), 1/2 errró | Descartado: lento y frágil, no mejora el outcome |
+| `qwen3.5:9b` | — | — | **600s timeout** (swapping en M4) | No desplegable (ni en M4 ni en cluster sin GPU) |
+
+**Hallazgos (material de defensa):**
+- **Contexto > tamaño de modelo (medido)**: con el runbook servido y el límite en la alerta, el 1.5b acierta el field CPU/memoria **5/5** en ~2s; un modelo mayor no aporta y no es desplegable. El fallo de cluster era **100% el límite ausente en la alerta**, ni el modelo ni el retrieval. La palanca era **F4 (enriquecer contexto)**, no GPU.
+- **La abstención la garantiza el motor, no el modelo**: decirle a un 1.5b "omite `proposed_action` si no sabes el `current_value`" **no funciona** (fabricó valores basura). Pero la **validation layer lo atrapó** (`unparseable_memory` → escalate). La seguridad viene de la defensa en profundidad del motor.
+- **`auto(on)=0/5` — legítimo, no un bug**: cada caso cae por un gate correcto (cap 2× atrapó una alucinación `1000m←250m`; `conf<0.9` de la excepción 4.5; `risk=high`). Con el **re-sourcing** posterior (motor sintetiza el comando + bypass regla 5), el auto **sí dispara** — es lo que valida el slice 6 en cluster.
+
+---
+
 ## Resumen ejecutivo
 
 | Métrica | RAG | zero_shot | Veredicto |

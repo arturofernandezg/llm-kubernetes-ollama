@@ -48,10 +48,10 @@ Reglas no negociables:
 Fuente única de estado y planificación: **`docs/07-roadmap.md`** (léelo al empezar, o usa `/start`).
 
 - **TFM ya evaluado.** Objetivo actual: **presentación a un chapter** (MasOrange/Telecable), fechas 8 o 14 julio 2026. Foco: production-readiness + features de valor real.
-- Sistema **completo y desplegado** (imagen `aiops-agent:5d5d7c7`): Fases 0-3 + Mini-Fase 4 + FASE 2 (RAG) + **F2 (cola Redis Streams)**. Pipeline E2E verificado (Prometheus→Alertmanager→agente→**cola**→RAG+LLM→Mattermost→kubectl con rollback). 422 tests.
-- **Hecho**: F1 quick-wins de código (PR-01/04/05/06, horneados) + **F2 completa** — cola Redis Streams como camino único de ingesta (`agent/streams.py`), validada en cluster (replay + dead-letter + readyz Redis), legacy retirado. Cierra PR-02/03/07.
-- **En curso / siguiente**: F1 matriz E1–E6 en cluster (`docs/14`); HPA/CPU (F3); bucle RAG (F4). Observabilidad acotada a tenant `arturo-*` (cluster compartido); paneles Grafana `aiops_queue_*` ya hechos (Gate 8 "Paso F").
-- Pendiente real (requiere cluster): Gate 8 — screenshots Grafana con caudal; validar live el self-heal NOGROUP de `consume_loop` (imagen nueva sin commitear).
+- Sistema **completo y desplegado** (imagen `aiops-agent:da7aafb`): Fases 0-3 + Mini-Fase 4 + FASE 2 (RAG) + **F2 (cola Redis Streams)** + **F3 (motor CPU + re-sourcing auto)**. Pipeline E2E verificado (Prometheus→Alertmanager→agente→**cola**→RAG+LLM→Mattermost→kubectl con rollback). 460 tests. *(Staged sin commitear/imagen: temp=0 + enrich OOM.)*
+- **Hecho**: F1 quick-wins + **F2 completa** (cola Redis Streams única, legacy retirado; cierra PR-02/03/07) + **F3 mecanismo** — dimensión CPU (field-agnostic, flag `remediation_auto_cpu_enabled`) + re-sourcing del auto ("el modelo propone, el motor dispone": `is_structured_remediation` fuente única, `build_set_resources_command`, bypass regla 5, guardrail namespace `arturo-`). Evals: contexto > tamaño de modelo (medido), abstención por el motor no por el modelo.
+- **En curso / siguiente**: **F3 slice C (sourcing determinista)** — la validación en cluster (slice 6) destapó la causa raíz REAL: el target/valor del comando salen de `proposed_action` (LLM) y el 1.5b los alucina; C los sella desde los labels de la alerta + snapshot del cluster. También pendiente: F1 matriz E1–E6 (`docs/14`); bucle de aprendizaje RAG (F4 real).
+- Pendiente real (requiere cluster): commitear/buildear temp=0 + enrich OOM (+ `kubectl apply` prometheus.yaml + reload para validar el render del límite en OOM); Gate 8 — screenshots Grafana con caudal.
 
 ## Stack
 
@@ -61,18 +61,19 @@ Python 3.11 | FastAPI | httpx | Pydantic v2 | Ollama (qwen2.5:1.5b en K8s, tinyl
 
 ```
 agent/main.py           → FastAPI app (endpoints, retry, metrics, webhook)
-agent/config.py         → Settings (pydantic-settings) + JSON logging
+agent/config.py         → Settings (pydantic-settings) + JSON logging. Incluye ollama_temperature=0.0 (greedy determinista), remediation_auto_cpu_enabled=False (gate auto-CPU), remediation_auto_namespace_prefix="arturo-" (guardrail blast-radius)
 agent/schemas.py        → Modelos Pydantic v2 (AlertmanagerPayload, AlertItem, ProposedAction, ExtractResponse...)
 agent/extraction.py     → 3 estrategias de extracción JSON
 agent/validation.py     → Validación de parámetros GCP
 agent/tf_generator.py   → Generación de template Terraform (Fase 0 legacy)
 agent/mattermost.py     → Cliente HTTP async Mattermost con retry/backoff
 agent/rag.py            → Cliente ChromaDB, ingesta, query, embeddings via Ollama
-agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON estructurado
+agent/diagnosis.py      → Prompt AIOps contextual, generate_diagnosis(), JSON estructurado. Genera a temperature=settings.ollama_temperature (0.0). proposed_action field-agnostic (resources.limits.memory + resources.limits.cpu). Prompt anti-alucinación ("omite proposed_action si no tienes el current_value; nunca lo fabriques")
+agent/remediation.py    → Motor de remediación: validation layer + 9 reglas en cascada + re-sourcing. is_structured_remediation() (fuente única de elegibilidad auto: field elegible + name/ns/container + valores parseables + solo-subir + namespace allow-list), build_set_resources_command() (síntesis determinista), bypass regla 5 si estructurado. _LIMIT_FIELD_PARSERS / _limit_resource / parse_cpu_to_millicores (field-agnostic cpu+memory); regla 4.6 cap ≤2× por-recurso; capture_pre_patch_value/revert_patch derivan el recurso de field. NOTA (slice C pendiente): el target/valor que ejecuta salen de proposed_action (LLM) → el 1.5b los alucina; C los sella desde labels + snapshot
 agent/utils.py          → backoff_delay() helper (exponential backoff compartido)
 agent/escalation_store.py → store/get/delete/count async de escalaciones en Redis (fail-open)
 agent/streams.py        → Cola Redis Streams (F2): enqueue_alert (dedup SETNX + XADD, fail-closed), ensure_group(start_id), consume_loop (XREADGROUP 1-a-1 in-process; self-healing ante NOGROUP → recrea grupo con id=$ + backoff, mata busy-spin), reclaim_pending (XPENDING+XCLAIM+dead-letter, fail-soft), métricas aiops_queue_*
-agent/tests/            → 422 funciones de test en 14 ficheros (incluye TestChaosMetrics, TestSlashCommandEndpoint, TestRollbackScheduling, TestEvaluateRollback, TestDecideActionTutorRule, TestDiagnosisTimeout, TestEscalationStoreMetric, TestRagReconnect, escalation_store ×15, test_streams.py + TestWebhookQueuePath/TestHandleStreamEntry/TestPeriodicReclaim/TestReadyzQueueMode)
+agent/tests/            → 460 funciones de test en 14 ficheros (incluye TestChaosMetrics, TestSlashCommandEndpoint, TestRollbackScheduling, TestEvaluateRollback, TestDecideActionTutorRule, TestDiagnosisTimeout, TestEscalationStoreMetric, TestRagReconnect, escalation_store ×15, test_streams.py + TestWebhookQueuePath/TestHandleStreamEntry/TestPeriodicReclaim/TestReadyzQueueMode; F3: TestParseCpuToMillicores, TestDecideActionCpu, TestDecideActionCpuAuto, TestLimitResource, TestCapturePrePatchValue/TestRevertPatch cpu, TestProcessRemediationCpuAuto, TestStructuredAutoRemediation)
 .claude/skills/         → Skills del método de trabajo: start | log | promote (gitignored, locales)
 docs_sesion/            → Bitácora cruda por sesión (skill /log); se promueve a docs canónicos con /promote
 generate_tf.py          → CLI generador de .tf (importa de agent/tf_generator.py)
@@ -96,7 +97,7 @@ memoria/                → Memoria del TFM en LaTeX (main.tex, capitulos/, demo
 - **Cluster**: ai-infra-agent (europe-southwest1-a, e2-standard-2 spot + 2 nodos guaranteed con label `guaranteed=true` desde 2026-05-06)
 - **Namespaces**: `arturo-llm-test` (core), `arturo-monitoring` (alertmanager), `arturo-mattermost` (chatops), `arturo-chaos` (chaos experiments)
 - **Registry**: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent
-- **Imagen actual**: `aiops-agent:5d5d7c7` (nota: el nombre de imagen es `aiops-agent`, no `agent`)
+- **Imagen actual**: `aiops-agent:da7aafb` (nota: el nombre de imagen es `aiops-agent`, no `agent`). El tag de deploy es SIEMPRE el short SHA del commit, nunca el build ID de Cloud Build (los tags del registry son short SHAs de 7 chars; usar el build ID da ImagePullBackOff)
 - **Ollama models**: qwen2.5:1.5b (generación), nomic-embed-text:latest (embeddings)
 - Jay trabaja desde **Mac ARM (M4)** con acceso directo a GCP/GKE — git/tests/builds los lanza él a mano
 - **Sin Cloud NAT** — pods no tienen internet, modelos se cargan manualmente

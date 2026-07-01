@@ -26,6 +26,8 @@ El agente detecta alertas del namespace `arturo-chaos` e incrementa métricas es
 | `k8s/chaos/chaos-bad-image.yaml` | ImagePullBackOff (tag inexistente) | `KubePodImagePullBackOff` | 1m |
 | `k8s/chaos/chaos-cpu-stress.yaml` | HighCPU (stress-ng --cpu 2 > limit 100m) | `HighCPU` | 5m |
 
+> **Validación de auto-remediación real (slice 6, 2026-07-01)**: con `da7aafb` (re-sourcing) y `REMEDIATION_DRY_RUN=false`, `chaos.sh oom` dispara el auto de verdad — logs `Rule 5 bypassed: structured remediation` + comando `set resources ... --limits=memory=512Mi` bien sintetizado. **Pero destapó la causa raíz real**: el `name/namespace/container/current/new` del comando salen de `proposed_action` (LLM) y el 1.5b los **alucina** (target=namespace, container=pod, `current='256Mi, 512Mi, 1Gi'` fabricado) → `NotFound`/`unparseable`. El target es problema de **sourcing**, no de inteligencia → **slice C** lo sella desde los labels de la alerta + snapshot del cluster (ver `docs/07` §F3). Gotcha operativo: `chaos.sh cleanup` borra el ns `arturo-chaos` → se lleva el RBAC; recrear ns + `apply rbac` antes del experimento (ver `docs/03`).
+
 ## Prerrequisito: mirror de imágenes
 
 `polinux/stress` no está en Artifact Registry. Mirrorear **antes** de aplicar `chaos-oom.yaml` o `chaos-cpu-stress.yaml`:

@@ -85,6 +85,8 @@ annotations:
 
 Todas tienen `labels.team: aiops` — Alertmanager las enruta al webhook del agente.
 
+> **Enriquecimiento de contexto (F4, 2026-06-30)**: las reglas `HighCPU`/`HighMemory` llevan en su `description` el **límite actual del contenedor** vía templating `query()` sobre `kube_pod_container_resource_limits` — `(current resources.limits.cpu: 250m)` / `(...memory: 256Mi)`. CPU usa `humanize` (cores→millicores: `0.25`→`"250m"`), memoria `humanize1024` (bytes→`"256Mi"`). **Sin esto el modelo alucinaba el `current_value`** (medido: pasaba de field_ok parcial a 5/5 con el límite presente). El PromQL del `query()` va en **una sola línea física** — el folding `>` de YAML mete espacios al unir líneas y corrompería el selector. **`KubePodOOMKilled` recibe el mismo enrich (staged, `kubectl apply` + reload de Prometheus pendiente)** — F4 solo cubrió las reglas proactivas; el OOM post-mortem no llevaba el límite, por eso el motor fabricaba el `current` en las remediaciones OOM.
+
 > **Tenancy en cluster compartido (2026-06-29)**: el cluster pasó de mono-usuario a compartido (apareció una compañera con namespace `brms-gorules`). Las 5 reglas basadas en KSM/cAdvisor llevan ahora `namespace=~"arturo-.*"` en el `expr` (OOM, CrashLoop, HighMemory ×2 lados del join, HighCPU ×2, ImagePullBackOff) para alertar **solo sobre lo nuestro**; sin el filtro, un OOM/CrashLoop en cualquier namespace ajeno disparaba mi webhook → cola → LLM → Mattermost (la remediación ya estaba protegida por el RBAC `Role` namespaced, pero el ruido + ciclos de LLM + escalaciones sí ocurrían). `TargetDown` pasa a `up{job="kubernetes-endpoints"} == 0` (excluye cadvisor cluster-wide, cuya rotación de nodos spot ajenos daba `critical` falsos).
 
 ### Namespace label collision KSM/cAdvisor (fix aplicado 2026-05-26)
@@ -284,6 +286,8 @@ crane copy --platform linux/amd64 polinux/stress:latest europe-southwest1-docker
 El agente detecta alertas de este namespace e incrementa `aiops_chaos_*` en `/metrics`. Ver `docs/12-chaos-engineering.md` para tabla de resultados.
 
 **RBAC en arturo-chaos** (añadido 2026-05-28): `k8s/rbac.yaml` incluye un Role + RoleBinding en `arturo-chaos` que otorga al SA `default` de `arturo-llm-test` los mismos verbos de remediación (`get/patch deployments`, `get/list pods/log/events/limitranges`). RoleBinding cross-namespace — el sujeto especifica `namespace: arturo-llm-test` explícitamente.
+
+> **Gotcha de orden (2026-07-01)**: `chaos.sh cleanup` **borra el namespace `arturo-chaos` completo → se lleva el Role/RoleBinding** (viven ahí). `chaos.sh oom` recrea el ns pero **NO** el RBAC → la auto-remediación falla con `Forbidden` (el SA no puede `get/patch` deployments en `arturo-chaos`). Orden correcto SIEMPRE: `cleanup` → `kubectl create namespace arturo-chaos` → `kubectl apply -f k8s/rbac.yaml` → `oom`. NUNCA `cleanup && apply rbac` en cadena (el `&&` falla: el ns aún no existe → `NotFound`).
 
 **metrics-server**: GKE Standard gestiona metrics-server como addon del sistema (APIService `v1beta1.metrics.k8s.io`, `Available=True`). No requiere instalación manual. `kubectl top node` y `kubectl top pod` funcionan en todos los namespaces sin configuración adicional.
 

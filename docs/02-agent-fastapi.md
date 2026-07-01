@@ -66,7 +66,7 @@ Versión actual: 0.6.0
 14. Si `AUTO_REMEDIATE` ejecuta al menos un comando exitoso y hay `pre_patch_snapshot` capturado, se registra un `RollbackContext` en `IN_FLIGHT_ROLLBACKS` (in-memory, `asyncio.Lock`) y se lanza `asyncio.create_task(_evaluate_rollback(incident_id))`.
 15. Tras `REMEDIATION_ROLLBACK_TIMEOUT` segundos (default 300), `_evaluate_rollback` consulta el estado de los pods con `kubectl get pods -n <ns> -l <selector>`.
 16. Si **todos** los pods están `Running` con `restartCount==0` → counter `aiops_remediation_rollback_total{outcome=healthy}`, mensaje Mattermost "Remediation healthy".
-17. Si algún pod está en estado fallido o ha reiniciado → ejecuta `kubectl set resources deployment <name> -n <ns> --containers=<container> --limits=memory=<pre_patch_value>` (respeta `DRY_RUN`). Counter `outcome=reverted` o `outcome=revert_failed`. Mensaje Mattermost con resultado.
+17. Si algún pod está en estado fallido o ha reiniciado → ejecuta `kubectl set resources deployment <name> -n <ns> --containers=<container> --limits=<recurso>=<pre_patch_value>` (respeta `DRY_RUN`). El `<recurso>` (`cpu`|`memory`) lo deriva `_limit_resource(snapshot.field)` — field-agnostic desde F3 (antes hardcodeaba `memory`). Counter `outcome=reverted` o `outcome=revert_failed`. Mensaje Mattermost con resultado.
 
 **Diagrama de flujo de rollback**:
 ```
@@ -155,6 +155,27 @@ En el `except` de diagnóstico (`_process_alert_with_diagnosis`), `httpx.Timeout
 | `count_escalations(redis)` | `SCAN MATCH escalation:*` → count |
 
 Redis init en `lifespan`: `aioredis.Redis(host, port, decode_responses=True)` + `ping()`. Fail-open: si ping falla → `app.state.redis = None`, warning en startup. `_cleanup_expired_escalations()` eliminado (Redis TTL nativo lo gestiona). Helpers de serialización `_escalation_to_dict` / `_dict_to_escalation` en `main.py` (evitan circular import con `PendingEscalation`).
+
+## Motor de remediación — dimensión CPU + re-sourcing (F3)
+
+### Dimensión CPU (field-agnostic)
+
+El motor era memory-only; F3 lo generaliza a `resources.limits.cpu` sin duplicar lógica:
+- `parse_cpu_to_millicores(value)` (`"250m"→250`, `"1"→1000`, `"0.5"→500`, cores×1000) análogo a `parse_memory_to_bytes`.
+- Tabla `_LIMIT_FIELD_PARSERS` (`resources.limits.memory`→bytes, `resources.limits.cpu`→millicores) y helper `_limit_resource(field)` → `"cpu"|"memory"` (default `memory` para campos vacíos/desconocidos — fail-safe hacia el caso histórico).
+- **Regla 4.6** (cap ≤2×) hace dispatch por `field`: parser según el recurso, reason codes por-recurso (`{cpu,memory}_exceeds_2x`, `missing_{...}_value`, `zero_current_{...}`, `unparseable_{...}`).
+- `capture_pre_patch_value` (jsonpath `{.resources.limits.<resource>}`) y `revert_patch` (`--limits=<resource>=...`) derivan el recurso de `field`/`snapshot.field`.
+- **Mecanismo elegido**: bump vertical del limit, NO scale/HPA (reusa snapshot/health/rollback del camino de memoria; HPA requiere `metrics-server`, sin confirmar en GKE). Auto-CPU tras flag `REMEDIATION_AUTO_CPU_ENABLED` (default off, escalate-first).
+
+### Re-sourcing de decisiones ("el modelo propone, el motor dispone")
+
+Causa raíz de por qué el auto **nunca disparaba**: `process_remediation` ejecutaba en AUTO los comandos de `diagnosis["commands"]` (el modelo pone ahí *investigativos*: `describe/top/logs` — `has_set_resources=null` en 4/5), no la `proposed_action` estructurada (que el modelo acierta 5/5). Fix:
+- **`is_structured_remediation(diagnosis)`** — fuente única de elegibilidad: field elegible (memory siempre; cpu iff flag) + `name/ns/container` presentes + `namespace` en el allow-list `arturo-` + `current/new` parseables + `current>0` + **solo-subir** (`new>current`). NO comprueba ≤2× (eso lo dueña la regla 4.6).
+- **`build_set_resources_command(deployment, namespace, container, field, value)`** — constructor puro y determinista del `kubectl set resources`; `revert_patch` delega en él. Cuando AUTO + estructurado, el motor sintetiza y ejecuta **solo ese** comando (no los investigativos).
+- **Bypass de la regla 5 (riesgo)** si `is_structured_remediation`: el `risk` auto-rating del modelo lo sustituye el bound determinista (field elegible + solo-subir + ≤2× + reversible con health-check). **Es un upgrade de seguridad, no una rebaja**: ejecutar el comando sintetizado por el motor es más seguro que ejecutar el string de texto libre de un 1.5b. La **regla 6 (confianza ≥0.8)** se mantiene para todos.
+- **Guardrail namespace allow-list** (`REMEDIATION_AUTO_NAMESPACE_PREFIX="arturo-"`): no auto cross-tenant en cluster compartido.
+
+> **Límite conocido (slice C pendiente)**: el comando sintetizado toma `name/namespace/container/current/new` **directos de `proposed_action` (el LLM los emite)**. `is_structured_remediation` valida que existan y sean parseables, pero **NO que el deployment exista ni que `container` no sea un pod**. Un 1.5b los alucina (target=namespace, container=pod, current=lista fabricada) → `NotFound`/`unparseable` en cluster. temp=0 mató la varianza del *valor*; el *target* es problema de **sourcing** → slice C lo sella desde los labels de la alerta (namespace/container; deployment por strip-hash del pod) + gate de existencia + valores desde el snapshot, reduciendo el LLM a *field + dirección*.
 
 ## Flujo de /extract
 
@@ -254,12 +275,15 @@ ExtractResponse:
 | `OLLAMA_URL` | `http://ollama-svc:11434/api/generate` | Endpoint de generación | 0+ |
 | `OLLAMA_TAGS` | `http://ollama-svc:11434/api/tags` | Endpoint de modelos | 0+ |
 | `OLLAMA_MODEL` | `tinyllama` | Modelo generativo (en K8s: `qwen2.5:1.5b`) | 0+ |
+| `OLLAMA_TEMPERATURE` | `0.0` | Temperatura de generación (greedy/determinista; viaja en `options.temperature` del POST a Ollama). Un motor de remediación necesita razonamiento reproducible — mató la varianza run-to-run del `new_value` | F3 |
 | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Modelo de embeddings (768 dims) | 2 |
 | `OLLAMA_EMBED_URL` | `http://ollama-svc:11434/api/embeddings` | Endpoint de embeddings | 2 |
 | `CHROMADB_HOST` | `chromadb-svc` | Host de ChromaDB | 2 |
 | `CHROMADB_PORT` | `8000` | Puerto de ChromaDB | 2 |
 | `MATTERMOST_WEBHOOK_URL` | `None` | URL del webhook entrante de Mattermost | 1 |
 | `WEBHOOK_SECRET` | `""` | Secreto HMAC-SHA256 para verificar callbacks de botones Mattermost. Vacío = sin verificación (dev/test). En K8s via Secret `agent-secrets.webhook-secret` (`optional: true`) | 3 |
+| `REMEDIATION_AUTO_CPU_ENABLED` | `false` | Gate: extiende la excepción 4.5 (auto-remediación de `set resources`) a `resources.limits.cpu`. Off = escalate-first para CPU hasta validar en cluster; memoria siempre elegible (tutor-approved) | F3 |
+| `REMEDIATION_AUTO_NAMESPACE_PREFIX` | `arturo-` | Guardrail blast-radius: `is_structured_remediation` rechaza `proposed_action` cuyo `namespace` no empiece por el prefijo → no auto cross-tenant en cluster compartido. `""` = sin restricción | F3 |
 | `REMEDIATION_ROLLBACK_ENABLED` | `true` | Activa el mecanismo de rollback automático post-patch | Mini-Fase 4 |
 | `REMEDIATION_ROLLBACK_TIMEOUT` | `300` | Segundos de espera antes de evaluar salud del pod tras un patch | Mini-Fase 4 |
 | `REMEDIATION_ROLLBACK_GRACE` | `30` | Segundos de gracia para el rollout antes del health check (reservado, no usado aún en polling) | Mini-Fase 4 |
