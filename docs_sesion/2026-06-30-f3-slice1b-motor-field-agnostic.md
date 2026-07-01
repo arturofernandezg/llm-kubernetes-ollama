@@ -1,7 +1,7 @@
 ---
 fecha: 2026-06-30
 slug: f3-slice1b-motor-field-agnostic
-promoted: false
+promoted: true
 ---
 
 > Segunda sesión de F3 del 2026-06-30 (tras `f3-slice1-cpu-remediacion`). Arrancada con `/start` → "siguiente?". Objetivo: quitar el acoplamiento latente a "memory" en el camino AUTO_REMEDIATE para dejar el motor field-agnostic. Código y tests yo; pytest y commits Jay.

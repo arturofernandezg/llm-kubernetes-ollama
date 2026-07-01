@@ -1,7 +1,7 @@
 ---
 fecha: 2026-06-30
 slug: f3-slice1-cpu-remediacion
-promoted: false
+promoted: true
 ---
 
 > Primera sesión de F3 (remediación de CPU). Arrancada con `/start`. Objetivo: cerrar el hueco visible — HighCPU muere hoy en `confidence=0 / suggest_only`, el único de los 4 modos de fallo (OOM, CrashLoop, BadImage, **CPU**) sin acción de remediación. Código y tests yo; pytest y commits Jay.

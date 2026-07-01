@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auditoría técnica — AIOps Infrastructure Agent · 2026-07-01</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1d222c; --ink: #e7ecf3;
+    --muted: #9aa6b8; --line: #2a3240; --accent: #ff6a00; --accent2: #4aa3ff;
+    --red: #ff5f56; --amber: #ffbd2e; --green: #35c46a; --grey: #8391a3;
+    --code: #0b0d11;
+    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--serif); font-size: 18px; line-height: 1.7;
+  }
+  /* Layout */
+  .wrap { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+  nav {
+    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 28px 22px; font-family: var(--sans); font-size: 14px;
+  }
+  nav h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--muted); margin: 22px 0 8px; }
+  nav h2:first-child { margin-top: 0; }
+  nav a { display: block; color: var(--muted); text-decoration: none;
+    padding: 4px 8px; border-radius: 6px; border-left: 2px solid transparent; }
+  nav a:hover { color: var(--ink); background: var(--panel2); }
+  nav a.p0 { color: #ffb3a0; }
+  nav .brand { font-family: var(--serif); font-size: 20px; color: var(--ink); font-weight: 700; }
+  nav .brand span { color: var(--accent); }
+  nav .meta { color: var(--grey); font-size: 12px; margin-top: 4px; }
+  main { padding: 60px 8vw 120px; max-width: 900px; }
+  /* Typography */
+  h1 { font-size: 40px; line-height: 1.15; margin: 0 0 8px; }
+  h1 small { display:block; font-size: 15px; font-family: var(--sans);
+    color: var(--muted); font-weight: 400; letter-spacing: .5px; margin-top: 14px; }
+  h2.sec { font-size: 30px; margin: 68px 0 6px; padding-top: 20px;
+    border-top: 1px solid var(--line); }
+  h2.sec .num { color: var(--accent); font-family: var(--mono); font-size: 22px; margin-right: 12px; }
+  h3 { font-size: 22px; margin: 34px 0 10px; color: #f2f5fa; }
+  p { margin: 14px 0; }
+  em { color: #f0d9c4; font-style: italic; }
+  strong { color: #fff; }
+  a.inline { color: var(--accent2); }
+  code { font-family: var(--mono); font-size: 14px; background: var(--code);
+    padding: 2px 6px; border-radius: 5px; color: #d6e2f0; border: 1px solid var(--line); }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; overflow-x: auto; font-family: var(--mono);
+    font-size: 13.5px; line-height: 1.55; color: #d6e2f0; }
+  pre code { background: none; border: none; padding: 0; }
+  blockquote { border-left: 3px solid var(--accent); margin: 20px 0; padding: 6px 20px;
+    background: var(--panel); border-radius: 0 8px 8px 0; color: #d8dee8; }
+  ul, ol { padding-left: 24px; }
+  li { margin: 8px 0; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 40px 0; }
+  /* Callouts */
+  .callout { border-radius: 10px; padding: 16px 20px; margin: 22px 0;
+    font-family: var(--sans); font-size: 15.5px; line-height: 1.6; border: 1px solid var(--line); }
+  .callout .tag { font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+    font-size: 12px; display: inline-block; margin-bottom: 6px; }
+  .callout.crit { background: #26161a; border-color: #52262b; }
+  .callout.crit .tag { color: var(--red); }
+  .callout.warn { background: #241f14; border-color: #4a3d1f; }
+  .callout.warn .tag { color: var(--amber); }
+  .callout.good { background: #14231a; border-color: #24422f; }
+  .callout.good .tag { color: var(--green); }
+  .callout.idea { background: #141d26; border-color: #234055; }
+  .callout.idea .tag { color: var(--accent2); }
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 24px 0; font-family: var(--sans);
+    font-size: 14.5px; }
+  th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line);
+    vertical-align: top; }
+  th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px;
+    background: var(--panel); position: sticky; }
+  tbody tr:hover { background: var(--panel2); }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+  .d-red { background: var(--red);} .d-amber { background: var(--amber);}
+  .d-green { background: var(--green);} .d-grey { background: var(--grey);}
+  .pri { font-family: var(--mono); font-weight: 700; font-size: 13px; padding: 2px 8px;
+    border-radius: 20px; }
+  .pri.p0 { background:#52262b; color:#ffb3a0;} .pri.p1 { background:#4a3d1f; color:#ffd98a;}
+  .pri.p2 { background:#234055; color:#a9d3ff;} .pri.p3 { background:#2a3240; color:#b7c2d0;}
+  /* Score cards */
+  .scores { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 26px 0; }
+  .score { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; font-family: var(--sans); }
+  .score .name { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .score .val { font-size: 34px; font-weight: 800; margin: 4px 0 2px; }
+  .score .bar { height: 6px; background: var(--panel2); border-radius: 4px; overflow: hidden; margin-top:8px;}
+  .score .bar i { display:block; height:100%; border-radius: 4px; }
+  .v-lo { color: var(--red);} .v-mid { color: var(--amber);} .v-hi { color: var(--green);}
+  .b-lo { background: var(--red);} .b-mid { background: var(--amber);} .b-hi { background: var(--green);}
+  .global { text-align:center; background: linear-gradient(180deg,#1d222c,#171a21);
+    border:1px solid var(--line); border-radius: 16px; padding: 26px; margin: 26px 0; font-family: var(--sans);}
+  .global .big { font-size: 64px; font-weight: 900; color: var(--amber); line-height:1; }
+  .global .cap { color: var(--muted); letter-spacing:1px; text-transform: uppercase; font-size: 12px; }
+  /* Brainstorm */
+  .qbox { background: var(--panel); border: 1px dashed var(--line); border-radius: 12px;
+    padding: 18px 22px; margin: 18px 0; font-family: var(--sans); font-size: 15.5px; }
+  .qbox h4 { margin: 0 0 6px; color: var(--accent2); font-size: 16px; }
+  .kbd { font-family: var(--mono); font-size: 12px; background:#000; border:1px solid var(--line);
+    border-radius:5px; padding:1px 6px; color:#c7d2e0;}
+  .lead { font-size: 21px; line-height: 1.6; color: #dfe6f0; font-style: italic; }
+  .filepath { font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  footer { font-family: var(--sans); color: var(--grey); font-size: 13px; margin-top: 80px;
+    border-top: 1px solid var(--line); padding-top: 20px; }
+  @media (max-width: 820px) {
+    .wrap { grid-template-columns: 1fr; }
+    nav { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
+    main { padding: 40px 6vw 80px; }
+    .scores { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>
+  <div class="brand">AIOps <span>Audit</span></div>
+  <div class="meta">2026-07-01 · Revisión pre-producción<br>Rol: Arquitecto Senior DevOps / SRE / MLOps</div>
+
+  <h2>Lectura</h2>
+  <a href="#veredicto">Veredicto ejecutivo</a>
+  <a href="#scores">Puntuaciones</a>
+
+  <h2>Bloqueantes P0</h2>
+  <a class="p0" href="#p0-1">1 · Diagnóstico a ciegas</a>
+  <a class="p0" href="#p0-2">2 · Auth fail-open</a>
+  <a class="p0" href="#p0-3">3 · Rollback no durable</a>
+
+  <h2>Dimensiones</h2>
+  <a href="#deteccion">Detección</a>
+  <a href="#analisis">Análisis / contexto</a>
+  <a href="#llm">IA / LLM</a>
+  <a href="#remediacion">Autoremediación</a>
+  <a href="#seguridad">Seguridad</a>
+  <a href="#observabilidad">Observabilidad</a>
+  <a href="#escalabilidad">Escalabilidad / resiliencia</a>
+  <a href="#calidad">Calidad de código</a>
+  <a href="#mattermost">Mattermost</a>
+
+  <h2>Acción</h2>
+  <a href="#tabla">Tabla priorizada</a>
+  <a href="#brainstorm">Guion de brainstorm</a>
+</nav>
+
+<main>
+
+<h1>Auditoría técnica<small>AIOps Infrastructure Agent · Sistema de remediación automática en Kubernetes con LLM local (qwen2.5:1.5b) + RAG · Revisión crítica pre-producción</small></h1>
+
+<!-- ═══════════════ VEREDICTO ═══════════════ -->
+<h2 class="sec" id="veredicto"><span class="num">§0</span>Veredicto ejecutivo</h2>
+
+<p class="lead">Sólido como prototipo de investigación y demo de chapter, con guardrails de seguridad genuinamente buenos. Pero no está listo para producción y tiene una desalineación arquitectónica con su propio objetivo declarado.</p>
+
+<p>El punto 3 del flujo objetivo —<em>"obtener información del incidente mediante la API de Kubernetes"</em>— <strong>no se cumple</strong>: el LLM diagnostica prácticamente a ciegas. Esa única decisión arrastra la nota de IA, la de seguridad (confianza no calibrada gateando acciones) y es la causa raíz real de la alucinación de <code>current_value</code> que ya tenéis identificada como "slice C".</p>
+
+<div class="global">
+  <div class="cap">Nota global ponderada</div>
+  <div class="big">5.9</div>
+  <div class="cap" style="margin-top:8px">Rechazo para producción · 3 bloqueantes P0</div>
+</div>
+
+<div class="callout good">
+  <span class="tag">Lo que ya está bien</span>
+  Cascada de guardrails de <code>decide_action</code> (reglas 1→7.5), cola Redis Streams seria (fail-closed, dead-letter, reclaim, self-heal NOGROUP), <code>securityContext</code> ejemplar, ejecución sin shell-injection, y una observabilidad fuerte (métricas + logs JSON + chaos MTTD/MTTR). Los cimientos están puestos.
+</div>
+
+<!-- ═══════════════ SCORES ═══════════════ -->
+<h2 class="sec" id="scores"><span class="num">§1</span>Puntuaciones por dimensión</h2>
+
+<div class="scores">
+  <div class="score"><div class="name">Arquitectura</div><div class="val v-mid">6.5</div><div class="bar"><i class="b-mid" style="width:65%"></i></div></div>
+  <div class="score"><div class="name">DevOps / CI-CD</div><div class="val v-mid">6.0</div><div class="bar"><i class="b-mid" style="width:60%"></i></div></div>
+  <div class="score"><div class="name">Kubernetes</div><div class="val v-hi">7.0</div><div class="bar"><i class="b-hi" style="width:70%"></i></div></div>
+  <div class="score"><div class="name">IA / LLM</div><div class="val v-lo">4.5</div><div class="bar"><i class="b-lo" style="width:45%"></i></div></div>
+  <div class="score"><div class="name">Seguridad</div><div class="val v-mid">5.5</div><div class="bar"><i class="b-mid" style="width:55%"></i></div></div>
+  <div class="score"><div class="name">Escalabilidad</div><div class="val v-lo">4.0</div><div class="bar"><i class="b-lo" style="width:40%"></i></div></div>
+  <div class="score"><div class="name">Observabilidad</div><div class="val v-hi">8.0</div><div class="bar"><i class="b-hi" style="width:80%"></i></div></div>
+  <div class="score"><div class="name">Calidad código</div><div class="val v-hi">7.5</div><div class="bar"><i class="b-hi" style="width:75%"></i></div></div>
+  <div class="score"><div class="name">Prod-readiness</div><div class="val v-lo">4.5</div><div class="bar"><i class="b-lo" style="width:45%"></i></div></div>
+</div>
+
+<!-- ═══════════════ P0-1 ═══════════════ -->
+<h2 class="sec" id="p0-1"><span class="num">P0·1</span>El hallazgo crítico: diagnóstico a ciegas</h2>
+
+<div class="callout crit">
+  <span class="tag">🔴 Bloqueante P0</span>
+  El agente <strong>no enriquece el contexto con la API de Kubernetes antes de llamar al LLM</strong>. Todo lo demás es secundario a esto.
+</div>
+
+<p><code>generate_diagnosis()</code> (<span class="filepath">diagnosis.py:103</span>) recibe únicamente <code>alert.labels</code> + <code>alert.annotations</code> (lo que manda Alertmanager) y el contexto RAG. Un grep confirma que <strong>no hay ni una sola llamada a</strong> <code>kubectl logs / describe / get events</code> <strong>en el camino de diagnóstico</strong>. El único uso de <code>kubectl</code> es <em>posterior</em> a la decisión (<code>capture_pre_patch_value</code>, <code>check_pod_health</code>).</p>
+
+<p>La ironía: el agente <strong>tiene el RBAC</strong> para <code>pods</code>, <code>pods/log</code> y <code>events</code> (<span class="filepath">rbac.yaml:10-18</span>)… y no lo usa para diagnosticar.</p>
+
+<h3>Consecuencias en cascada</h3>
+<ol>
+  <li>El modelo de 1.5B tiene que <strong>inventar</strong> <code>current_value</code> porque no está en las labels. <em>La causa raíz no es el modelo pequeño: es que la fuente de verdad es el LLM en vez del cluster.</em> Esto es exactamente vuestra "slice C" pendiente.</li>
+  <li>La confianza que gatea la auto-remediación (<code>remediation_auto_confidence=0.8</code>) es autoevaluada por un 1.5B sobre contexto pobre → <strong>métrica no calibrada gateando una acción destructiva</strong>.</li>
+</ol>
+
+<h3>Solución concreta</h3>
+<p>Insertar una etapa determinista de <em>context gathering</em> entre la cola y el LLM:</p>
+<pre><code># agent/enrichment.py (nuevo)
+async def gather_incident_context(alert: AlertItem) -> IncidentSnapshot:
+    ns, pod = alert.labels["namespace"], alert.labels["pod"]
+    # todo en paralelo, timeout corto, fail-soft por campo
+    logs, events, pod_json = await asyncio.gather(
+        kubectl_json("logs", pod, "-n", ns, "--tail=50", "--previous"),
+        kubectl_json("get", "events", "-n", ns,
+                     "--field-selector", f"involvedObject.name={pod}"),
+        kubectl_json("get", "pod", pod, "-n", ns, "-o", "json"),
+        return_exceptions=True,
+    )
+    return IncidentSnapshot(
+        restart_count=..., phase=..., last_state_reason=...,   # de pod_json
+        current_limits=pod_json[...resources.limits],          # ← current_value REAL
+        recent_events=events, log_tail=logs,
+    )</code></pre>
+
+<blockquote><strong>current_value</strong> y el <strong>target</strong> salen de este snapshot, nunca del LLM. El LLM queda relegado a lo que hace bien (explicar y clasificar), no a producir hechos numéricos.</blockquote>
+
+<p><strong>Por qué es mejor:</strong> convierte el sistema de "LLM que adivina el estado del cluster" a "LLM que razona sobre el estado real del cluster". Es la diferencia entre un juguete y una herramienta de SRE — y sella de un tiro la clase entera de alucinaciones que os bloquea.</p>
+
+<!-- ═══════════════ P0-2 ═══════════════ -->
+<h2 class="sec" id="p0-2"><span class="num">P0·2</span>Auth de callbacks fail-open + Secrets rotos</h2>
+
+<div class="callout crit">
+  <span class="tag">🔴 Bloqueante P0</span>
+  Con <code>REMEDIATION_DRY_RUN=false</code>, cualquiera con acceso de red al pod puede aprobar y ejecutar remediaciones reales si el Secret no está.
+</div>
+
+<p><code>_verify_hmac_token</code> (<span class="filepath">main.py:150</span>) devuelve <code>True</code> si <code>webhook_secret</code> está vacío. Igual el <code>mm_command_token</code>. Es <em>fail-open</em>: falta de secreto = sin autenticación.</p>
+
+<h3>Y encima el Secret probablemente no está</h3>
+<p>Hay un <strong>mismatch</strong> que desactiva HMAC en la práctica:</p>
+<ul>
+  <li><code>secrets-setup.sh:23</code> crea <code>agent-secrets</code> con clave <code>mattermost-webhook-url</code>.</li>
+  <li>El deployment lee el Secret <strong><code>mattermost-webhook</code> clave <code>url</code></strong> (<span class="filepath">deployment-agent.yaml:94</span>) — otro nombre.</li>
+  <li>Y espera <code>webhook-secret</code> + <code>mm-command-token</code> en <code>agent-secrets</code> (<span class="filepath">:98-108</span>), que el script <strong>nunca crea</strong>.</li>
+</ul>
+<p>Resultado real: HMAC y token de slash-command deshabilitados → combinado con el fail-open, superficie de ejecución no autenticada.</p>
+
+<div class="callout idea">
+  <span class="tag">Fix</span>
+  (1) Fail-<strong>closed</strong> cuando <code>REMEDIATION_DRY_RUN=false</code>: sin secreto → 401, no ejecutar. (2) Alinear <code>secrets-setup.sh</code> con las claves exactas que lee el deployment. (3) Marcar en docs como <strong>bloqueante de despliegue</strong>.
+</div>
+
+<!-- ═══════════════ P0-3 ═══════════════ -->
+<h2 class="sec" id="p0-3"><span class="num">P0·3</span>Estado de rollback en memoria = no durable</h2>
+
+<div class="callout crit">
+  <span class="tag">🔴 Bloqueante P0</span>
+  Si el pod reinicia durante la ventana de 5 min, el patch queda aplicado y <strong>jamás se revierte</strong>.
+</div>
+
+<p>Habéis puesto un esfuerzo enorme en durabilizar la cola (Redis Streams, PEL, dead-letter, reclaim)… y luego el rollback vive en un <code>dict</code> de proceso (<code>IN_FLIGHT_ROLLBACKS</code>, <span class="filepath">main.py:146</span>) con <code>asyncio.sleep(300)</code>. Rollout, OOM o spot-eviction en esos 5 minutos → se pierde el <code>RollbackContext</code> → la remediación queda sin evaluar y sin revertir.</p>
+
+<blockquote>Es la inconsistencia de resiliencia más grave del proyecto: máxima durabilidad en la ingesta, cero durabilidad en la acción correctiva.</blockquote>
+
+<div class="callout idea">
+  <span class="tag">Fix</span>
+  Persistir <code>RollbackContext</code> en Redis con TTL, y reevaluar los pendientes al arranque dentro de <code>_periodic_reclaim</code> / <code>_periodic_cleanup</code>. Reutiliza el patrón que ya tenéis en <code>escalation_store.py</code>.
+</div>
+
+<!-- ═══════════════ DETECCIÓN ═══════════════ -->
+<h2 class="sec" id="deteccion"><span class="num">§2</span>Detección</h2>
+
+<p><strong>Mecanismo:</strong> 100% Prometheus / Alertmanager → webhook. No hay Watch API ni polling de eventos K8s. Enfoque pull correcto y desacoplado (mejor que un <code>watch</code> frágil dentro del agente), pero la cobertura de reglas está a mitad de camino.</p>
+
+<table>
+  <thead><tr><th>Incidencia pedida</th><th>¿Detecta?</th><th>Regla / nota</th></tr></thead>
+  <tbody>
+    <tr><td>OOMKilled</td><td><span class="dot d-green"></span>Sí</td><td><code>KubePodOOMKilled</code></td></tr>
+    <tr><td>CrashLoopBackOff</td><td><span class="dot d-amber"></span>Proxy</td><td><code>increase(restarts_total[15m]) &gt; 3</code> — no lee el <code>reason</code></td></tr>
+    <tr><td>ImagePullBackOff</td><td><span class="dot d-green"></span>Sí</td><td><code>KubePodImagePullBackOff</code></td></tr>
+    <tr><td>HighCPU / HighMemory</td><td><span class="dot d-green"></span>Sí</td><td>reglas propias</td></tr>
+    <tr><td>Pending</td><td><span class="dot d-red"></span>No</td><td>sin regla (detectable con KSM)</td></tr>
+    <tr><td>NotReady (nodos)</td><td><span class="dot d-red"></span>No</td><td>sin regla</td></tr>
+    <tr><td>Evicted</td><td><span class="dot d-red"></span>No</td><td>sin regla</td></tr>
+    <tr><td>Failed Jobs</td><td><span class="dot d-red"></span>No</td><td>sin regla</td></tr>
+  </tbody>
+</table>
+
+<p>Los cuatro huecos son detectables con <code>kube-state-metrics</code> (ya desplegado) sin tocar código:</p>
+<pre><code>- alert: KubePodPending
+  expr: kube_pod_status_phase{phase="Pending",namespace=~"arturo-.*"} == 1
+  for: 5m
+- alert: KubeNodeNotReady
+  expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+- alert: KubeJobFailed
+  expr: kube_job_status_failed{namespace=~"arturo-.*"} > 0</code></pre>
+
+<!-- ═══════════════ ANÁLISIS ═══════════════ -->
+<h2 class="sec" id="analisis"><span class="num">§3</span>Análisis / contexto recogido</h2>
+<p>Cubierto en P0·1. Resumen de lo que el objetivo pide vs. lo que hay:</p>
+<table>
+  <thead><tr><th>Dato</th><th>¿Pre-LLM?</th></tr></thead>
+  <tbody>
+    <tr><td>logs</td><td><span class="dot d-red"></span>No</td></tr>
+    <tr><td>eventos</td><td><span class="dot d-red"></span>No</td></tr>
+    <tr><td>estado del Pod / phase</td><td><span class="dot d-red"></span>No (solo lo que venga en labels)</td></tr>
+    <tr><td>Deployment / límites actuales</td><td><span class="dot d-red"></span>No (los inventa el LLM)</td></tr>
+    <tr><td>Namespace</td><td><span class="dot d-green"></span>Sí (label)</td></tr>
+    <tr><td>Node</td><td><span class="dot d-red"></span>No</td></tr>
+    <tr><td>Restart count</td><td><span class="dot d-red"></span>No</td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════ LLM ═══════════════ -->
+<h2 class="sec" id="llm"><span class="num">§4</span>Uso del LLM / IA</h2>
+
+<div class="callout good">
+  <span class="tag">Bien</span>
+  Prompt estructurado con esquema JSON explícito, <code>temperature=0</code> (reproducibilidad — decisión correcta y bien justificada), instrucción anti-alucinación, <code>_clamp</code> de confianza, saneado de <code>risk</code>. La salida cumple el checklist pedido (causa, confianza, explicación, acción, riesgo).
+</div>
+
+<h3>A mejorar</h3>
+<ul>
+  <li><strong>Sin contexto real</strong> (P0·1): el prompt anti-alucinación es un parche sobre un problema de arquitectura. No le pidas a un 1.5B "no inventes"; <em>no le des la oportunidad</em> inyectando el valor real.</li>
+  <li><strong>No se fuerza salida estructurada de Ollama.</strong> Estáis parseando texto libre con 3 estrategias regex. Ollama soporta <code>format: "json"</code>:
+    <pre><code>json={..., "format": "json",
+      "options": {"temperature": 0, "num_predict": 512}}</code></pre>
+    Elimina la mitad de los fallos de parseo y acota tokens.</li>
+  <li><strong>Sin cap de tokens</strong> (<code>num_predict</code>) + <code>http_timeout=360s</code> → una divagación cuesta minutos.</li>
+  <li><strong>Confianza no calibrada:</strong> autoevaluada por un 1.5B. Gatear una acción con ella es débil; con contexto real (P0·1) mejora, pero considera derivar la confianza de señales deterministas (nº de reinicios, coincidencia de runbook) además del self-report.</li>
+</ul>
+<p>Vuestra comparativa <em>"contexto &gt; tamaño de modelo"</em> es correcta y es justo el argumento para invertir en P0·1 antes que en un modelo mayor.</p>
+
+<!-- ═══════════════ REMEDIACIÓN ═══════════════ -->
+<h2 class="sec" id="remediacion"><span class="num">§5</span>Autoremediación</h2>
+
+<p><strong>Acciones auto-ejecutables: exactamente UNA</strong> → <code>kubectl set resources</code> (subir límite mem/cpu). Todo lo demás escala o se bloquea:</p>
+<table>
+  <thead><tr><th>Acción</th><th>Comportamiento</th></tr></thead>
+  <tbody>
+    <tr><td>set resources (subir límite ≤2×)</td><td><span class="dot d-green"></span>AUTO (con todos los gates)</td></tr>
+    <tr><td>rollout restart</td><td><span class="dot d-amber"></span>ESCALATE (implica restart)</td></tr>
+    <tr><td>scale</td><td><span class="dot d-amber"></span>ESCALATE</td></tr>
+    <tr><td>delete pod</td><td><span class="dot d-red"></span>BLOCKED</td></tr>
+    <tr><td>cordon / drain / taint</td><td><span class="dot d-red"></span>BLOCKED (bien)</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="tag">Precisión de naming</span>
+  No es un "auto-remediador general": es un <strong>auto-escalador de límites de recursos con aprobación humana para todo lo demás</strong>. Nómbralo así en la memoria. La política de gates (<code>decide_action</code>, reglas 1→7.5) es la joya del proyecto.
+</div>
+
+<h3>Bugs / fragilidades concretas</h3>
+<ol>
+  <li><strong>Selector hardcodeado <code>app={name}</code></strong> (<span class="filepath">remediation.py:654</span>). Si el deployment usa otra label → <code>no_pods_found</code> → <code>healthy=False</code> → <strong>rollback falso</strong> sobre una remediación que sí funcionó. Deriva el selector del <code>.spec.selector.matchLabels</code> real.</li>
+  <li><strong><code>check_pod_health</code> mira solo <code>containerStatuses[0]</code></strong> (<span class="filepath">:733</span>). Pods multi-contenedor → evalúa el contenedor equivocado.</li>
+  <li><strong>El approve humano ejecuta comandos free-text del LLM</strong>, no el sintetizado. En <span class="filepath">main.py:972</span> se corre <code>incident.safe_commands</code> (texto del modelo), mientras el auto usa <code>build_set_resources_command</code> (determinista). Según vuestra nota F4 esos comandos suelen ser no ejecutables → el operador pulsa "Ejecutar" y no pasa nada. Unifica: el humano aprueba la <em>acción estructurada</em>.</li>
+  <li><strong>Rollback en memoria</strong> → ver P0·3.</li>
+</ol>
+
+<!-- ═══════════════ SEGURIDAD ═══════════════ -->
+<h2 class="sec" id="seguridad"><span class="num">§6</span>Seguridad</h2>
+
+<div class="callout good">
+  <span class="tag">Bien</span>
+  Sin <code>shell=True</code> (usa <code>create_subprocess_exec</code> + <code>shlex</code>, solo <code>argv[0]=="kubectl"</code>) → sin inyección de shell. <code>securityContext</code> ejemplar (<code>runAsNonRoot</code>, <code>readOnlyRootFilesystem</code>, <code>drop ALL</code>). RBAC namespaced, sin recursos cluster-scoped. Secret de Mattermost por <code>secretKeyRef</code>.
+</div>
+
+<h3>Problemas</h3>
+<ol>
+  <li><strong>Auth fail-open</strong> → P0·2.</li>
+  <li><strong>Mismatch de Secrets</strong> → P0·2.</li>
+  <li><strong>Envenenamiento del bucle RAG (prompt injection diferido).</strong> Los incidentes se persisten desde salidas del propio LLM (incluido <code>raw_response</code>) y se reinyectan como contexto en diagnósticos futuros. Un diagnóstico erróneo/malicioso persistido sesga decisiones posteriores. Mitigación: ingiere solo campos estructurados y sanitizados, no el crudo; marca procedencia.</li>
+  <li><strong><code>kubectl</code> sin verificación de checksum</strong> (<span class="filepath">Dockerfile:16</span>). <code>ADD https://…/kubectl</code> sin <code>sha256</code> → riesgo de cadena de suministro. Añade <code>sha256sum -c</code>.</li>
+  <li><strong>ServiceAccount <code>default</code></strong> con <code>patch</code> sobre deployments. Cualquier pod del namespace hereda el binding. Crea una SA dedicada <code>aiops-agent</code> y bindea contra ella.</li>
+</ol>
+
+<!-- ═══════════════ OBSERVABILIDAD ═══════════════ -->
+<h2 class="sec" id="observabilidad"><span class="num">§7</span>Observabilidad — la mejor dimensión</h2>
+<p>Métricas Prometheus abundantes y bien etiquetadas (retries, extraction, diagnosis, remediation, rollback, chaos MTTD/MTTR, cola). Logs JSON estructurados. Historial de incidentes en ChromaDB. Pre-inicialización de counters para que aparezcan desde el arranque — detalle de profesional.</p>
+<div class="callout idea">
+  <span class="tag">Falta</span>
+  <strong>Correlation-id de extremo a extremo.</strong> Se genera <code>incident_id</code> pero no se propaga como campo de log desde <code>webhook → cola → diagnóstico → mattermost</code>. Añadirlo en <code>_handle_stream_entry</code> y meterlo en el <code>extra</code> de cada log haría trivial rastrear un incidente. OpenTelemetry sería el siguiente paso (no hay trazas).
+</div>
+
+<!-- ═══════════════ ESCALABILIDAD ═══════════════ -->
+<h2 class="sec" id="escalabilidad"><span class="num">§8</span>Escalabilidad y resiliencia</h2>
+<ul>
+  <li><strong>Techo de throughput duro:</strong> Ollama serializa la generación (~205-252 s/diagnóstico), consumidor in-process 1-a-1, <code>replicas: 1</code> → <strong>~1 alerta cada ~4 minutos</strong>. Una tormenta llena la cola y el MTTR se dispara.</li>
+  <li><strong>Escalado horizontal bloqueado</strong> por el estado de rollback en memoria (P0·3). No puedes subir <code>replicas</code> sin corromper la evaluación de rollback.</li>
+  <li><strong>Redis SPOF sin persistencia</strong> (<span class="filepath">redis.yaml</span>: <code>replicas:1</code>, sin AOF/PVC). Si Redis reinicia: se pierden cola + dedup + escalaciones. Habilita AOF + PVC, o asúmelo como riesgo explícito.</li>
+  <li>Sin PDB para el agente ni para Redis (sí lo hay para Ollama).</li>
+</ul>
+<div class="callout good">
+  <span class="tag">Bien</span>
+  Fail-open de RAG/ChromaDB, fail-closed de la cola (503→Alertmanager reintenta), dedup, dead-letter, reclaim con <code>min_idle &gt; peor caso</code>, self-heal de NOGROUP con backoff. La cola es ingeniería seria.
+</div>
+
+<!-- ═══════════════ CALIDAD ═══════════════ -->
+<h2 class="sec" id="calidad"><span class="num">§9</span>Calidad de código</h2>
+<p><strong>Alta en general:</strong> tipado, docstrings con el <em>porqué</em>, <code>dataclass</code>/<code>Enum</code>, separación por módulos, 460 tests.</p>
+<h3>Deuda</h3>
+<ul>
+  <li><strong><code>main.py</code> (1201 líneas) es un monolito.</strong> Mezcla 4 routers + orquestación del pipeline + formateo Mattermost + estado de rollback + métricas. Extraer: <code>routers/</code>, <code>pipeline.py</code>, <code>rollback.py</code>.</li>
+  <li><strong><code>remediation.py</code> (937 líneas)</strong> mezcla clasificación + parsing + executor + health + rollback.</li>
+  <li><strong>Lógica de parseo duplicada</strong> entre <code>is_structured_remediation</code> y la regla 4.6 de <code>decide_action</code>. Extraer a helper.</li>
+  <li><strong>Vestigios de la Fase 0 (Terraform):</strong> <code>tf_generator.py</code>, <code>extraction.py</code>, <code>validation.py</code>, endpoint <code>/extract</code> — código muerto en el binario de producción → amplía superficie y confunde el propósito. Sepáralo en paquete/imagen aparte o elimínalo.</li>
+  <li><strong>Basura en repo:</strong> <code>.DS_Store</code>, <code>.pytest_cache/</code>. Limpiar con <code>.gitignore</code> + <code>git rm --cached</code>.</li>
+</ul>
+
+<!-- ═══════════════ MATTERMOST ═══════════════ -->
+<h2 class="sec" id="mattermost"><span class="num">§10</span>Integración con Mattermost</h2>
+<p>El mensaje incluye: recurso, namespace, severidad, diagnóstico, riesgo, confianza, comandos, explicación, fuentes RAG, acción ejecutada (dry-run vs escalación) y resultado de rollback. <strong>Cumple casi todo el checklist.</strong> Botones interactivos Aprobar/Rechazar con HMAC (cuando está configurado), TTL de escalación, y actualización del mensaje original al decidir. Bien resuelto.</p>
+
+<!-- ═══════════════ TABLA ═══════════════ -->
+<h2 class="sec" id="tabla"><span class="num">§11</span>Tabla de acción priorizada</h2>
+<table>
+  <thead><tr><th>Área</th><th>Estado</th><th>Problema</th><th>Prioridad</th><th>Cómo solucionarlo</th></tr></thead>
+  <tbody>
+    <tr><td>IA / Arquitectura</td><td><span class="dot d-red"></span></td><td>LLM no ve logs/eventos/límites; inventa <code>current_value</code></td><td><span class="pri p0">P0</span></td><td>Etapa <code>enrichment.py</code>; target y current_value desde el cluster (sella slice C)</td></tr>
+    <tr><td>Seguridad</td><td><span class="dot d-red"></span></td><td>HMAC/token fail-open + mismatch de Secrets → ejecución no autenticada</td><td><span class="pri p0">P0</span></td><td>Fail-closed si <code>dry_run=false</code>; alinear <code>secrets-setup.sh</code></td></tr>
+    <tr><td>Resiliencia</td><td><span class="dot d-red"></span></td><td>Rollback en memoria → patch sin revertir si el pod reinicia</td><td><span class="pri p0">P0</span></td><td>Persistir <code>RollbackContext</code> en Redis + reevaluar al arranque</td></tr>
+    <tr><td>Remediación</td><td><span class="dot d-amber"></span></td><td><code>check_pod_health</code> usa <code>app={name}</code> → rollbacks falsos</td><td><span class="pri p1">P1</span></td><td>Derivar selector del <code>matchLabels</code> real</td></tr>
+    <tr><td>Remediación</td><td><span class="dot d-amber"></span></td><td>Approve humano ejecuta comandos free-text del LLM</td><td><span class="pri p1">P1</span></td><td>Aprobar la acción estructurada determinista</td></tr>
+    <tr><td>Detección</td><td><span class="dot d-amber"></span></td><td>Sin reglas Pending/NotReady/Evicted/FailedJob</td><td><span class="pri p1">P1</span></td><td>Añadir reglas KSM; leer <code>reason</code> en CrashLoop</td></tr>
+    <tr><td>Escalabilidad</td><td><span class="dot d-amber"></span></td><td>Ollama serializado + <code>replicas:1</code> → ~1 alerta/4min</td><td><span class="pri p1">P1</span></td><td>Documentar techo; réplicas Ollama tras P0; permitir <code>replicas&gt;1</code> tras durabilizar rollback</td></tr>
+    <tr><td>Seguridad</td><td><span class="dot d-amber"></span></td><td>Redis SPOF sin persistencia; SA <code>default</code></td><td><span class="pri p1">P1</span></td><td>AOF + PVC; SA dedicada <code>aiops-agent</code></td></tr>
+    <tr><td>IA</td><td><span class="dot d-amber"></span></td><td>Parseo JSON por regex frágil, sin cap de tokens</td><td><span class="pri p2">P2</span></td><td><code>format:"json"</code> + <code>num_predict</code></td></tr>
+    <tr><td>Seguridad</td><td><span class="dot d-amber"></span></td><td><code>kubectl</code> sin checksum; poisoning del bucle RAG</td><td><span class="pri p2">P2</span></td><td><code>sha256sum -c</code>; no ingerir <code>raw_response</code> crudo</td></tr>
+    <tr><td>Observabilidad</td><td><span class="dot d-amber"></span></td><td>Sin correlation-id end-to-end ni tracing</td><td><span class="pri p2">P2</span></td><td>Propagar <code>correlation_id</code>; evaluar OpenTelemetry</td></tr>
+    <tr><td>Mantenibilidad</td><td><span class="dot d-amber"></span></td><td>Monolitos + código muerto Fase 0 en el binario</td><td><span class="pri p2">P2</span></td><td>Split routers/pipeline/rollback; sacar Terraform</td></tr>
+    <tr><td>Higiene</td><td><span class="dot d-grey"></span></td><td><code>.DS_Store</code>, <code>.pytest_cache</code> en repo</td><td><span class="pri p3">P3</span></td><td><code>.gitignore</code> + <code>git rm --cached</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════ BRAINSTORM ═══════════════ -->
+<h2 class="sec" id="brainstorm"><span class="num">§12</span>Guion de brainstorm</h2>
+<p>Preguntas para pilotar la sesión de hoy, ordenadas para encajar con el roadmap activo (F3 slice C ya apunta al P0·1).</p>
+
+<div class="qbox">
+  <h4>1 · ¿P0·1 y "slice C" son la misma microtarea?</h4>
+  La slice C que ya tienes planificada ("sellar target/valor desde labels + snapshot del cluster") <em>es</em> el fix del diagnóstico a ciegas, pero acotado a remediación. ¿Ampliamos su alcance para que el snapshot enriquezca también el <strong>prompt de diagnóstico</strong> (logs+events), o lo mantenemos mínimo (solo current_value) y dejamos el enriquecimiento de logs como F4?
+</div>
+<div class="qbox">
+  <h4>2 · Fail-closed sin romper la demo</h4>
+  El fix de auth (P0·2) es barato pero cambia comportamiento. ¿Fail-closed solo cuando <code>dry_run=false</code> (prod real) y mantener fail-open en dev/test? ¿O metemos un flag explícito <code>require_auth</code>?
+</div>
+<div class="qbox">
+  <h4>3 · ¿Durabilizar rollback ahora o asumir el riesgo para el chapter?</h4>
+  Para una demo de chapter con <code>replicas:1</code> estable, el rollback en memoria "funciona". El coste es honestidad técnica en la presentación. ¿Lo arreglamos (reusa <code>escalation_store.py</code>) o lo documentamos como "known limitation" y priorizamos features visibles?
+</div>
+<div class="qbox">
+  <h4>4 · Naming honesto en la memoria</h4>
+  ¿Reetiquetamos el sistema como "auto-escalador de límites + aprobación humana" en la narrativa? Es más defendible ante un revisor que "auto-remediación" a secas, y el guardrail set es tu punto fuerte.
+</div>
+<div class="qbox">
+  <h4>5 · Quick wins de cobertura de detección</h4>
+  3 reglas KSM (Pending/NotReady/FailedJob) son ~15 líneas de YAML y amplían la historia de "detecta N tipos de incidencia" sin tocar Python. ¿Entran en el deck?
+</div>
+
+<div class="callout idea" style="margin-top:30px">
+  <span class="tag">Sugerencia de secuencia</span>
+  Si hoy solo cabe una microtarea de ~20 min: <strong>alinear <code>secrets-setup.sh</code> + fail-closed</strong> (P0·2) es la de mejor ratio impacto/esfuerzo y no depende del cluster. La grande (<code>enrichment.py</code>, P0·1) merece su propia sesión porque redefine el flujo de diagnóstico.
+</div>
+
+<footer>
+  Auditoría generada el 2026-07-01 · Fuente: revisión de <code>agent/</code> (~3.800 LOC), <code>k8s/</code>, RBAC, Dockerfile, reglas Prometheus, NetworkPolicy y flujo de remediación.<br>
+  Documento de trabajo — capa cruda (bitácora <span class="filepath">docs_sesion/2026-07-01-auditoria-arquitectura.md</span>, <code>promoted: false</code>). No es documentación canónica; consolídalo con <span class="kbd">/promote</span> cuando decidas qué acciones entran al roadmap.
+</footer>
+
+</main>
+</div>
+</body>
+</html>
