@@ -78,7 +78,30 @@ pasar a ejecución real: no puedes remediar de verdad sin auth configurada.
 - **`k8s/secrets-setup.sh`**: reescrito §1 → crea `mattermost-webhook`/`url` (URL) +
   `agent-secrets`/`webhook-secret`+`mm-command-token` (las claves que el deployment lee).
   Comandos en una línea; `webhook-secret` via `openssl rand -hex 32`, `mm-command-token` placeholder.
-- `py_compile` + `bash -n` OK. **pytest pendiente (lo corre Jay).**
+- `py_compile` + `bash -n` OK. **pytest OK (Jay): 10 passed** (`-k hmac or token or fails_closed or fails_open`).
+
+### P0·3 — rollback durable en Redis (Eje B, 2ª microtarea)
+**Problema (auditoría):** `IN_FLIGHT_ROLLBACKS` era un dict en memoria + `asyncio.sleep(300)`.
+Si el pod reinicia en esos 5 min (rollout/OOM/spot), el patch queda aplicado y **nunca**
+se revierte. Incoherente con el esfuerzo de durabilizar la cola (F2).
+**Fix (backstop en Redis, espejo de `escalation_store`):**
+- **`agent/rollback_store.py`** (nuevo): `store_rollback`/`delete_rollback`/`list_rollbacks`,
+  fail-open, clave `rollback:{id}`, TTL Redis. Mismo patrón que `escalation_store`.
+- **`agent/main.py`**:
+  - `_rollback_to_dict`/`_dict_to_rollback` (serialize; `asdict(snapshot)` +
+    `alert_item.model_dump(mode="json")` + `scheduled_at.isoformat()`).
+  - `_schedule_rollback_evaluation`: persiste el ctx en Redis (TTL `timeout*2+grace`)
+    además del dict en memoria.
+  - `_evaluate_rollback` **refactor**: duerme el **tiempo restante** hasta el deadline
+    (`timeout - (now - scheduled_at)`), no el timeout completo → soporta contextos
+    recuperados a mitad de espera. `finally` borra también de Redis.
+  - `_recover_rollbacks()` nuevo, llamado en el lifespan tras conectar Redis: re-arma en
+    memoria + `create_task(_evaluate_rollback)` cada rollback persistido (idempotente:
+    salta los ya in-flight; no-op sin Redis).
+- **`agent/tests/test_rollback.py`** (+11 tests): `TestRollbackSerialization` (round-trip +
+  json), `TestRollbackStore` (store/delete/list + fail-open), `TestRollbackDurability`
+  (schedule persiste, evaluate borra, recover re-arma, idempotencia, no-op sin Redis).
+- `py_compile` OK. **pytest pendiente (Jay).**
 
 ## Encontrado / gotchas
 - `remediation_dry_run` default `True` en config y **no** lo pisa el conftest → el fail-open
@@ -94,6 +117,7 @@ pasar a ejecución real: no puedes remediar de verdad sin auth configurada.
 
 ## Siguiente
 - **Eje A — `agent/enrichment.py`** (keystone, sesión grande): gather K8s antes del LLM,
-  sella slice C / P0·1. Unifica comando humano/auto.
-- **P0·3** — durabilizar `RollbackContext` en Redis (TTL) + reevaluación al arranque.
-- Validar en cluster el fail-closed (crear secretos con el script arreglado; approve real autenticado).
+  sella slice C / P0·1. Unifica comando humano/auto. → único P0 que queda abierto.
+- Validar en cluster: (a) fail-closed (crear secretos con el script arreglado; approve real
+  autenticado); (b) rollback durable (matar el pod a mitad de ventana → recover revierte).
+- Con P0·2 + P0·3 cerrados, el **Eje B (confianza) está completo** → v2 pasa al keystone.

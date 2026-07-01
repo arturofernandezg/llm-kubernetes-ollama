@@ -7,7 +7,7 @@ natural, usando un LLM local (Ollama) como motor de inferencia.
 
 import asyncio
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone
 import hmac
 from typing import Annotated
@@ -44,6 +44,7 @@ from remediation import (
 )
 from utils import backoff_delay
 from escalation_store import store_escalation, get_escalation, delete_escalation, count_escalations
+from rollback_store import store_rollback, delete_rollback, list_rollbacks
 from streams import (
     enqueue_alert, ensure_group, consume_loop, reclaim_pending, QUEUE_PROCESSED,
 )
@@ -185,6 +186,28 @@ def _dict_to_escalation(data: dict) -> PendingEscalation:
     )
 
 
+def _rollback_to_dict(ctx: RollbackContext) -> dict:
+    """Serialize a RollbackContext to a JSON-serializable dict for Redis storage."""
+    return {
+        "incident_id": ctx.incident_id,
+        "snapshot": asdict(ctx.snapshot),
+        "alert_item": ctx.alert_item.model_dump(mode="json"),
+        "diagnosis": ctx.diagnosis,
+        "scheduled_at": ctx.scheduled_at.isoformat(),
+    }
+
+
+def _dict_to_rollback(data: dict) -> RollbackContext:
+    """Deserialize a Redis-stored dict back to a RollbackContext."""
+    return RollbackContext(
+        incident_id=data["incident_id"],
+        snapshot=PrePatchSnapshot(**data["snapshot"]),
+        alert_item=AlertItem(**data["alert_item"]),
+        diagnosis=data["diagnosis"],
+        scheduled_at=datetime.fromisoformat(data["scheduled_at"]),
+    )
+
+
 async def _cleanup_expired_rollbacks() -> None:
     """Elimina rollbacks cuya ventana de evaluación ha expirado sin ser procesados."""
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.remediation_rollback_timeout * 2)
@@ -202,14 +225,20 @@ async def _schedule_rollback_evaluation(
     diagnosis: dict,
 ) -> None:
     """Register a rollback context and schedule the evaluation task."""
+    ctx = RollbackContext(
+        incident_id=incident_id,
+        snapshot=snapshot,
+        alert_item=alert_item,
+        diagnosis=diagnosis,
+        scheduled_at=datetime.now(timezone.utc),
+    )
     async with _ROLLBACK_LOCK:
-        IN_FLIGHT_ROLLBACKS[incident_id] = RollbackContext(
-            incident_id=incident_id,
-            snapshot=snapshot,
-            alert_item=alert_item,
-            diagnosis=diagnosis,
-            scheduled_at=datetime.now(timezone.utc),
-        )
+        IN_FLIGHT_ROLLBACKS[incident_id] = ctx
+    # Durability backstop (P0·3): persist so a pod restart during the wait window
+    # doesn't strand an un-reverted patch. TTL outlives the wait + evaluation.
+    if getattr(app.state, "redis", None):
+        ttl = settings.remediation_rollback_timeout * 2 + settings.remediation_rollback_grace
+        await store_rollback(incident_id, _rollback_to_dict(ctx), ttl, app.state.redis)
     ROLLBACK_COUNTER.labels(outcome="scheduled").inc()
     logger.info(
         "Rollback evaluation scheduled",
@@ -219,16 +248,22 @@ async def _schedule_rollback_evaluation(
 
 
 async def _evaluate_rollback(incident_id: str) -> None:
-    """Wait REMEDIATION_ROLLBACK_TIMEOUT seconds, then check pod health and revert if needed."""
+    """Wait until the rollback deadline, then check pod health and revert if needed."""
     try:
-        await asyncio.sleep(settings.remediation_rollback_timeout)
-
         async with _ROLLBACK_LOCK:
             ctx = IN_FLIGHT_ROLLBACKS.get(incident_id)
 
         if ctx is None:
             logger.info("Rollback context already cleared", extra={"incident_id": incident_id})
             return
+
+        # Sleep only the time remaining until the deadline. On the happy path this
+        # is the full timeout; for a context recovered from Redis after a restart
+        # (P0·3) it is what's left — or 0 if the deadline already passed.
+        elapsed = (datetime.now(timezone.utc) - ctx.scheduled_at).total_seconds()
+        remaining = settings.remediation_rollback_timeout - elapsed
+        if remaining > 0:
+            await asyncio.sleep(remaining)
 
         health = await check_pod_health(ctx.snapshot)
         logger.info(
@@ -293,6 +328,35 @@ async def _evaluate_rollback(incident_id: str) -> None:
     finally:
         async with _ROLLBACK_LOCK:
             IN_FLIGHT_ROLLBACKS.pop(incident_id, None)
+        if getattr(app.state, "redis", None):
+            await delete_rollback(incident_id, app.state.redis)
+
+
+async def _recover_rollbacks() -> None:
+    """Startup recovery (P0·3): re-arm rollback evaluations persisted in Redis.
+
+    If the pod restarted during a rollback wait window, the in-memory dict and
+    its sleeping task were lost — but the context survived in Redis. Re-register
+    each and spawn evaluation (which sleeps only the *remaining* time, or fires
+    immediately if the deadline already passed).
+    """
+    redis = getattr(app.state, "redis", None)
+    if not redis:
+        return
+    for data in await list_rollbacks(redis):
+        try:
+            ctx = _dict_to_rollback(data)
+        except Exception as exc:
+            logger.warning("Skipping unparseable persisted rollback: %s", exc)
+            continue
+        async with _ROLLBACK_LOCK:
+            if ctx.incident_id in IN_FLIGHT_ROLLBACKS:
+                continue
+            IN_FLIGHT_ROLLBACKS[ctx.incident_id] = ctx
+        logger.info(
+            "Recovered in-flight rollback from Redis", extra={"incident_id": ctx.incident_id}
+        )
+        asyncio.create_task(_evaluate_rollback(ctx.incident_id))
 
 
 async def _periodic_cleanup() -> None:
@@ -372,6 +436,10 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to start stream consumer: %r", exc)
     else:
         logger.error("Redis unavailable at startup — ingestion queue cannot start (readyz will report 503)")
+
+    # Durability backstop (P0·3): re-arm any rollback that was mid-wait when the
+    # pod last stopped, so an un-reverted patch doesn't get stranded.
+    await _recover_rollbacks()
 
     try:
         r = await app.state.http_client.get(settings.ollama_tags, timeout=10.0)

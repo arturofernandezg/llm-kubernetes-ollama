@@ -8,6 +8,7 @@ Cubre:
 """
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,12 +18,15 @@ import main
 from main import (
     IN_FLIGHT_ROLLBACKS, _ROLLBACK_LOCK,
     _schedule_rollback_evaluation, _evaluate_rollback,
+    _recover_rollbacks, _rollback_to_dict, _dict_to_rollback,
     _process_alert_with_diagnosis,
     ROLLBACK_COUNTER,
 )
+from rollback_store import store_rollback, delete_rollback, list_rollbacks
 from remediation import PrePatchSnapshot, PodHealthStatus, ExecuteResult
 from schemas import AlertItem
 from tests.helpers import (
+    FakeRedis,
     mock_chroma_client, mock_rag_context,
     mock_diagnosis_auto_remediate, mock_diagnosis_escalate,
 )
@@ -309,3 +313,156 @@ class TestProcessAlertRollbackWire:
             )
 
         mock_schedule.assert_not_called()
+
+
+# ── TestRollbackSerialization ─────────────────────────────────────────────────
+
+class TestRollbackSerialization:
+    """Round-trip of RollbackContext ↔ dict for Redis persistence (P0·3)."""
+
+    def _make_ctx(self, incident_id: str = "rt-001") -> "main.RollbackContext":
+        return main.RollbackContext(
+            incident_id=incident_id,
+            snapshot=_make_snapshot("512Mi"),
+            alert_item=_make_alert(),
+            diagnosis=mock_diagnosis_auto_remediate(),
+            scheduled_at=datetime.now(timezone.utc),
+        )
+
+    def test_roundtrip_preserves_fields(self):
+        ctx = self._make_ctx()
+        restored = _dict_to_rollback(_rollback_to_dict(ctx))
+        assert restored.incident_id == ctx.incident_id
+        assert restored.snapshot == ctx.snapshot          # dataclass __eq__
+        assert restored.alert_item.labels == ctx.alert_item.labels
+        assert restored.scheduled_at == ctx.scheduled_at
+
+    def test_to_dict_is_json_serializable(self):
+        # Must survive json.dumps (the exact path store_rollback takes).
+        json.dumps(_rollback_to_dict(self._make_ctx()))
+
+
+# ── TestRollbackStore ─────────────────────────────────────────────────────────
+
+class TestRollbackStore:
+    """rollback_store.py — thin Redis mirror, fail-open like escalation_store."""
+
+    @pytest.mark.asyncio
+    async def test_store_and_list_roundtrip(self):
+        r = FakeRedis()
+        payload = {"incident_id": "s-1", "field": "resources.limits.memory"}
+        assert await store_rollback("s-1", payload, 60, r) is True
+        assert payload in await list_rollbacks(r)
+
+    @pytest.mark.asyncio
+    async def test_delete_removes_entry(self):
+        r = FakeRedis()
+        await store_rollback("d-1", {"incident_id": "d-1"}, 60, r)
+        await delete_rollback("d-1", r)
+        assert await list_rollbacks(r) == []
+
+    @pytest.mark.asyncio
+    async def test_store_fail_open_on_redis_error(self):
+        r = AsyncMock()
+        r.setex.side_effect = Exception("connection refused")
+        assert await store_rollback("f-1", {}, 60, r) is False
+
+    @pytest.mark.asyncio
+    async def test_list_fail_open_on_redis_error(self):
+        r = MagicMock()
+        r.scan_iter = MagicMock(side_effect=Exception("connection refused"))
+        assert await list_rollbacks(r) == []
+
+
+# ── TestRollbackDurability ────────────────────────────────────────────────────
+
+class TestRollbackDurability:
+    """P0·3: rollback context survives a pod restart via Redis and is recovered."""
+
+    @pytest.mark.asyncio
+    async def test_schedule_persists_to_redis(self):
+        IN_FLIGHT_ROLLBACKS.clear()
+        r = FakeRedis()
+        main.app.state.redis = r
+        try:
+            with patch("main.asyncio.create_task"):
+                await _schedule_rollback_evaluation(
+                    "dur-1", _make_snapshot(), _make_alert(), mock_diagnosis_auto_remediate()
+                )
+            items = await list_rollbacks(r)
+            assert any(d["incident_id"] == "dur-1" for d in items)
+        finally:
+            main.app.state.redis = None
+            IN_FLIGHT_ROLLBACKS.clear()
+
+    @pytest.mark.asyncio
+    async def test_evaluate_deletes_from_redis(self, monkeypatch):
+        monkeypatch.setattr("main.settings.remediation_rollback_timeout", 0)
+        IN_FLIGHT_ROLLBACKS.clear()
+        r = FakeRedis()
+        main.app.state.redis = r
+        incident_id = "dur-eval-1"
+        ctx = main.RollbackContext(
+            incident_id=incident_id, snapshot=_make_snapshot(), alert_item=_make_alert(),
+            diagnosis=mock_diagnosis_auto_remediate(), scheduled_at=datetime.now(timezone.utc),
+        )
+        IN_FLIGHT_ROLLBACKS[incident_id] = ctx
+        await store_rollback(incident_id, _rollback_to_dict(ctx), 60, r)
+        healthy = PodHealthStatus(
+            healthy=True, reason="ok", observed_phases=["Running"], observed_restarts=[0],
+        )
+        try:
+            with patch("main.check_pod_health", new=AsyncMock(return_value=healthy)), \
+                 patch("main.send_mattermost_alert", new=AsyncMock(return_value=True)):
+                await _evaluate_rollback(incident_id)
+            assert await list_rollbacks(r) == []
+        finally:
+            main.app.state.redis = None
+            IN_FLIGHT_ROLLBACKS.clear()
+
+    @pytest.mark.asyncio
+    async def test_recover_rearms_persisted_rollback(self):
+        IN_FLIGHT_ROLLBACKS.clear()
+        r = FakeRedis()
+        main.app.state.redis = r
+        incident_id = "recover-1"
+        ctx = main.RollbackContext(
+            incident_id=incident_id, snapshot=_make_snapshot(), alert_item=_make_alert(),
+            diagnosis=mock_diagnosis_auto_remediate(), scheduled_at=datetime.now(timezone.utc),
+        )
+        await store_rollback(incident_id, _rollback_to_dict(ctx), 60, r)
+        try:
+            with patch("main.asyncio.create_task") as mock_task:
+                await _recover_rollbacks()
+            assert incident_id in IN_FLIGHT_ROLLBACKS
+            mock_task.assert_called_once()
+        finally:
+            main.app.state.redis = None
+            IN_FLIGHT_ROLLBACKS.clear()
+
+    @pytest.mark.asyncio
+    async def test_recover_is_idempotent_when_already_inflight(self):
+        IN_FLIGHT_ROLLBACKS.clear()
+        r = FakeRedis()
+        main.app.state.redis = r
+        incident_id = "recover-dup-1"
+        ctx = main.RollbackContext(
+            incident_id=incident_id, snapshot=_make_snapshot(), alert_item=_make_alert(),
+            diagnosis=mock_diagnosis_auto_remediate(), scheduled_at=datetime.now(timezone.utc),
+        )
+        IN_FLIGHT_ROLLBACKS[incident_id] = ctx  # already in memory
+        await store_rollback(incident_id, _rollback_to_dict(ctx), 60, r)
+        try:
+            with patch("main.asyncio.create_task") as mock_task:
+                await _recover_rollbacks()
+            mock_task.assert_not_called()  # no double-spawn
+        finally:
+            main.app.state.redis = None
+            IN_FLIGHT_ROLLBACKS.clear()
+
+    @pytest.mark.asyncio
+    async def test_recover_noop_without_redis(self):
+        IN_FLIGHT_ROLLBACKS.clear()
+        main.app.state.redis = None
+        await _recover_rollbacks()  # must not raise
+        assert len(IN_FLIGHT_ROLLBACKS) == 0
