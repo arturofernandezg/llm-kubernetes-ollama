@@ -222,6 +222,64 @@ def build_set_resources_command(
     )
 
 
+# Matches a k8s quantity string: leading number (int or decimal) + optional unit suffix.
+_LIMIT_VALUE_RE = re.compile(r"^([0-9]*\.?[0-9]+)\s*([A-Za-z]*)$")
+
+
+def _double_limit_value(value: str) -> str | None:
+    """Double a k8s quantity string preserving its unit ('64Mi' → '128Mi', '250m' → '500m').
+
+    Returns None when the value doesn't look like a quantity (caller keeps the LLM value).
+    """
+    m = _LIMIT_VALUE_RE.match(str(value).strip())
+    if not m:
+        return None
+    amount = float(m.group(1)) * 2
+    rendered = str(int(amount)) if amount == int(amount) else str(amount)
+    return f"{rendered}{m.group(2)}"
+
+
+def _normalize_new_value(pa: dict, cluster_current: str) -> None:
+    """Engine-author new_value when the LLM's is unusable (missing/unparseable/not a raise).
+
+    Grounding (v2 Eje A): with identity and current_value sealed from the cluster, the last
+    model-sourced number in the command is new_value. If it can't drive a valid raise over
+    the REAL current limit, synthesize the deterministic doubling (2× current — exactly the
+    rule 4.6 boundary). An overshoot (>2×) is deliberately NOT clamped: the tutor rule
+    escalates it to a human instead of silently rewriting the model's proposal.
+    The LLM's original value is preserved under model_new_value for audit.
+    """
+    parser = _LIMIT_FIELD_PARSERS.get(pa.get("field"))
+    if parser is None:
+        return
+    try:
+        current_amount = parser(cluster_current)
+    except ValueError:
+        return
+    if current_amount <= 0:
+        return
+
+    new_val = pa.get("new_value")
+    usable = False
+    if new_val:
+        try:
+            usable = parser(new_val) > current_amount
+        except ValueError:
+            usable = False
+    if usable:
+        return
+
+    doubled = _double_limit_value(cluster_current)
+    if doubled is None:
+        return
+    pa["model_new_value"] = new_val
+    pa["new_value"] = doubled
+    logger.info(
+        "seal_proposed_action: engine-authored new_value (LLM value unusable)",
+        extra={"model_new_value": new_val, "new_value": doubled, "current_value": cluster_current},
+    )
+
+
 def implies_pod_restart(command: str) -> tuple[bool, str]:
     """True + reason_code if the command will restart or recreate pods.
 
@@ -368,6 +426,10 @@ def seal_proposed_action(diagnosis: dict, snapshot) -> None:
 
     if not getattr(snapshot, "workload_name", None):
         diagnosis["proposed_action"] = None  # unconfirmed target → no auto on a phantom
+        # Marker read by decide_action rule 4.7: an unconfirmed target must ESCALATE —
+        # without it the model's leftover SAFE commands could still auto-run and report
+        # a "remediation" that fixed nothing (outcome would hinge on the model's risk).
+        diagnosis["target_unresolved"] = True
         logger.info("seal_proposed_action: workload unresolved, dropping proposed_action")
         return
 
@@ -380,6 +442,7 @@ def seal_proposed_action(diagnosis: dict, snapshot) -> None:
     cluster_current = snapshot.current_limit(snapshot.container, resource)
     if cluster_current:
         pa["current_value"] = cluster_current
+        _normalize_new_value(pa, cluster_current)
 
     # Real selector for post-patch health checks — replaces the app={name} guess in
     # capture_pre_patch_value. Only set when confirmed (else the fallback applies).
@@ -483,6 +546,8 @@ def decide_action(
     4.5 (tutor) Algún comando MUTATING implica reinicio de pod → ESCALATE
               (excepción set-resources: memory siempre; cpu solo si remediation_auto_cpu_enabled)
     4.6 (tutor) proposed_action en resources.limits.{memory,cpu}: new > 2× current → ESCALATE
+    4.7 (v2 grounding) target_unresolved (el sellado anuló proposed_action: workload sin
+        confirmar en el cluster) → ESCALATE
     5. risk > remediation_auto_max_risk → ESCALATE
     6. confidence < remediation_auto_confidence → SUGGEST_ONLY
     7.5 (PR-04) rag_degraded → ESCALATE (no auto-remediar sin grounding RAG)
@@ -569,6 +634,18 @@ def decide_action(
                     extra={"reason_code": f"unparseable_{resource}", "error": str(exc)},
                 )
                 return RemediationAction.ESCALATE
+
+    # Rule 4.7 (v2 grounding) — the seal dropped proposed_action because the cluster could
+    # not confirm the target workload (phantom target: bare pod, orphan ReplicaSet, or
+    # missing RBAC). Never auto-run the model's leftover commands on an unconfirmed
+    # incident; a human must look at it. Placed BEFORE rule 5 so the outcome does not
+    # depend on the model's self-rated risk.
+    if diagnosis.get("target_unresolved"):
+        logger.warning(
+            "Remediation blocked: target workload unresolved by enrichment",
+            extra={"reason_code": "target_unresolved"},
+        )
+        return RemediationAction.ESCALATE
 
     risk = diagnosis.get("risk", "high")
     max_risk = settings.remediation_auto_max_risk
@@ -1008,23 +1085,27 @@ async def process_remediation(diagnosis: dict, rag_degraded: bool = False) -> di
     validations = validate_commands(commands)
     action = decide_action(diagnosis, validations, rag_degraded)
 
+    # Engine-authored command for a structured remediation — synthesized ONCE here so the
+    # auto path and the human path run the SAME deterministic command: on ESCALATE it is
+    # what the escalation stores and the approve button executes (never the model's
+    # free-text, which is typically investigative — F4: 4/5 emit no executable command).
+    proposed_action = diagnosis.get("proposed_action")
+    structured_command: str | None = None
+    if is_structured_remediation(diagnosis):
+        structured_command = build_set_resources_command(
+            proposed_action["name"], proposed_action["namespace"],
+            proposed_action["container"], proposed_action["field"],
+            proposed_action["new_value"],
+        )
+
     execute_results: list[ExecuteResult] = []
     pre_patch_snapshot: PrePatchSnapshot | None = None
 
     if action == RemediationAction.AUTO_REMEDIATE:
-        proposed_action = diagnosis.get("proposed_action")
-        if is_structured_remediation(diagnosis):
-            # Engine-authored remediation: synthesize the set-resources command from the
-            # structured proposal (deterministic, bounded, reversible) instead of running the
-            # model's free-text commands, which are typically investigative (F4: 4/5 emit no
-            # executable command). The model proposes the diagnosis; the engine disposes.
+        if structured_command is not None:
+            # Deterministic, bounded, reversible. The model proposes; the engine disposes.
             pre_patch_snapshot = await capture_pre_patch_value(proposed_action)
-            command = build_set_resources_command(
-                proposed_action["name"], proposed_action["namespace"],
-                proposed_action["container"], proposed_action["field"],
-                proposed_action["new_value"],
-            )
-            execute_results = await execute_commands([command])
+            execute_results = await execute_commands([structured_command])
         else:
             safe_cmds = _get_safe_commands(validations)
             if isinstance(proposed_action, dict):
@@ -1033,6 +1114,7 @@ async def process_remediation(diagnosis: dict, rag_degraded: bool = False) -> di
 
     result = build_remediation_result(diagnosis, action, validations, execute_results)
     result["pre_patch_snapshot"] = pre_patch_snapshot
+    result["structured_command"] = structured_command
     logger.info(
         "Remediation decision",
         extra={

@@ -37,6 +37,7 @@ from remediation import (
     derive_confidence,
     ground_confidence,
     _limit_resource,
+    _double_limit_value,
 )
 from enrichment import IncidentSnapshot
 from tests.helpers import mock_diagnosis_auto_remediate, mock_diagnosis_escalate, mock_diagnosis_result
@@ -1880,3 +1881,179 @@ class TestGroundConfidence:
             "kubectl annotate deployment engine aiops-checked=true -n prod",
         ])
         assert decide_action(d, validations) == RemediationAction.AUTO_REMEDIATE
+
+
+# ── TestDoubleLimitValue (v2 — engine-authored new_value) ─────────────────────
+
+class TestDoubleLimitValue:
+    """_double_limit_value doubles a k8s quantity preserving its unit."""
+
+    def test_memory_mi(self):
+        assert _double_limit_value("64Mi") == "128Mi"
+
+    def test_memory_gi(self):
+        assert _double_limit_value("1Gi") == "2Gi"
+
+    def test_cpu_millicores(self):
+        assert _double_limit_value("250m") == "500m"
+
+    def test_cpu_fractional_cores(self):
+        assert _double_limit_value("0.5") == "1"
+
+    def test_plain_bytes(self):
+        assert _double_limit_value("134217728") == "268435456"
+
+    def test_garbage_returns_none(self):
+        assert _double_limit_value("a lot") is None
+
+
+# ── TestSealNewValueSynthesis (v2 — engine authors the value when unusable) ───
+
+class TestSealNewValueSynthesis:
+    """With identity+current sealed, an unusable LLM new_value is engine-authored (2×current)."""
+
+    def _diag(self, new_value) -> dict:
+        pa = {
+            "kind": "Deployment", "name": "WRONG", "namespace": "arturo-x",
+            "container": "WRONG", "field": "resources.limits.memory",
+            "current_value": "999Mi",
+        }
+        if new_value is not None:
+            pa["new_value"] = new_value
+        return {"proposed_action": pa}
+
+    def _snap(self) -> IncidentSnapshot:
+        return IncidentSnapshot(
+            namespace="arturo-x", pod="p", gather_ok=True, container="app",
+            workload_kind="Deployment", workload_name="web",
+            limits={"app": {"memory": "256Mi"}},
+        )
+
+    def test_synthesizes_when_new_not_above_current(self):
+        # LLM anchored on its hallucinated current (999Mi→128Mi "raise" is below real 256Mi)
+        d = self._diag("128Mi")
+        seal_proposed_action(d, self._snap())
+        assert d["proposed_action"]["new_value"] == "512Mi"          # 2× real current
+        assert d["proposed_action"]["model_new_value"] == "128Mi"    # audit trail
+
+    def test_synthesizes_when_missing(self):
+        d = self._diag(None)
+        seal_proposed_action(d, self._snap())
+        assert d["proposed_action"]["new_value"] == "512Mi"
+        assert d["proposed_action"]["model_new_value"] is None
+
+    def test_synthesizes_when_unparseable(self):
+        d = self._diag("mucho")
+        seal_proposed_action(d, self._snap())
+        assert d["proposed_action"]["new_value"] == "512Mi"
+
+    def test_keeps_sane_llm_value(self):
+        d = self._diag("400Mi")  # current < 400Mi ≤ 2×current → model keeps agency
+        seal_proposed_action(d, self._snap())
+        assert d["proposed_action"]["new_value"] == "400Mi"
+        assert "model_new_value" not in d["proposed_action"]
+
+    def test_keeps_overshoot_for_rule_46(self):
+        # >2× is NOT clamped — the tutor rule must escalate it, not a silent rewrite
+        d = self._diag("2Gi")
+        seal_proposed_action(d, self._snap())
+        assert d["proposed_action"]["new_value"] == "2Gi"
+
+    def test_no_synthesis_without_cluster_current(self):
+        d = self._diag("128Mi")
+        snap = self._snap()
+        snap.limits = {"app": {}}  # no memory limit observed
+        seal_proposed_action(d, snap)
+        assert d["proposed_action"]["new_value"] == "128Mi"          # nothing to derive from
+
+
+# ── TestSealTargetUnresolvedMarker + rule 4.7 (v2 — phantom target escalates) ─
+
+class TestSealTargetUnresolvedMarker:
+    """Dropping proposed_action must leave a marker so decide_action escalates."""
+
+    def _diag(self) -> dict:
+        return {"proposed_action": {
+            "kind": "Deployment", "name": "x", "namespace": "arturo-x",
+            "container": "app", "field": "resources.limits.memory",
+            "current_value": "256Mi", "new_value": "512Mi",
+        }}
+
+    def test_drop_sets_marker(self):
+        d = self._diag()
+        snap = IncidentSnapshot(
+            namespace="arturo-x", pod="p", gather_ok=True, container="app",
+            limits={"app": {"memory": "256Mi"}},  # gathered, but workload unresolved
+        )
+        seal_proposed_action(d, snap)
+        assert d["proposed_action"] is None
+        assert d["target_unresolved"] is True
+
+    def test_confirmed_workload_does_not_set_marker(self):
+        d = self._diag()
+        snap = IncidentSnapshot(
+            namespace="arturo-x", pod="p", gather_ok=True, container="app",
+            workload_kind="Deployment", workload_name="web",
+            limits={"app": {"memory": "256Mi"}},
+        )
+        seal_proposed_action(d, snap)
+        assert "target_unresolved" not in d
+
+
+class TestDecideActionTargetUnresolved:
+    """Rule 4.7: an unconfirmed target escalates regardless of the model's risk/confidence."""
+
+    def test_phantom_target_escalates_despite_safe_commands(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        # risk=low + confidence 1.0 + SAFE commands: without 4.7 this would AUTO_REMEDIATE
+        # the model's investigative leftovers and report a "remediation" that fixed nothing
+        diagnosis = {**mock_diagnosis_auto_remediate(), "confidence": 1.0, "target_unresolved": True}
+        validations = validate_commands(["kubectl describe pod p -n arturo-x"])
+        assert decide_action(diagnosis, validations) == RemediationAction.ESCALATE
+
+    def test_same_diagnosis_without_marker_auto_remediates(self, monkeypatch):
+        """Contrast: rule 4.7 (not risk/confidence) is what blocks the phantom case."""
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        diagnosis = {**mock_diagnosis_auto_remediate(), "confidence": 1.0}
+        validations = validate_commands(["kubectl describe pod p -n arturo-x"])
+        assert decide_action(diagnosis, validations) == RemediationAction.AUTO_REMEDIATE
+
+
+# ── TestProcessRemediationStructuredCommand (v2 — single source human/auto) ───
+
+class TestProcessRemediationStructuredCommand:
+    """process_remediation exposes the engine synthesis for the escalation/approve path."""
+
+    def _structured_diagnosis(self) -> dict:
+        return {
+            "diagnosis": "OOMKilled: memory limit too low",
+            "commands": ["kubectl describe pod engine-0 -n arturo-prod"],
+            "confidence": 1.0,
+            "risk": "low",
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "arturo-prod",
+                "container": "app", "field": "resources.limits.memory",
+                "current_value": "256Mi", "new_value": "512Mi",
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_escalate_result_carries_structured_command(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        # rag_degraded forces ESCALATE (rule 7.5) on an otherwise auto-eligible diagnosis
+        result = await process_remediation(self._structured_diagnosis(), rag_degraded=True)
+        assert result["action"] == RemediationAction.ESCALATE
+        assert result["structured_command"] == (
+            "kubectl set resources deployment engine -n arturo-prod "
+            "--containers=app --limits=memory=512Mi"
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_structured_result_has_none(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        result = await process_remediation(mock_diagnosis_result())
+        assert result["structured_command"] is None

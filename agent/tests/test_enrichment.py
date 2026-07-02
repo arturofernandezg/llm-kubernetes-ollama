@@ -113,6 +113,16 @@ class TestKubectlJson:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_timeout_kills_leaked_process(self):
+        """A timed-out kubectl must be reaped (kill), not left running against a hung API server."""
+        proc = _make_proc()
+        proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+        with patch("enrichment.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await _kubectl_json("get", "pod", "p", "-n", "ns", "-o", "json")
+        assert result is None
+        proc.kill.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_invalid_json_returns_none(self):
         proc = _make_proc(stdout=b"not-json{{", returncode=0)
         with patch("enrichment.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):

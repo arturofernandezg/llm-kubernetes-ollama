@@ -57,6 +57,7 @@ async def _kubectl_json(*args: str) -> dict | None:
     Same safe invocation as remediation.execute_commands (argv, no shell). Short timeout:
     enrichment is best-effort context, not on the critical path of correctness.
     """
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "kubectl", *args,
@@ -66,7 +67,22 @@ async def _kubectl_json(*args: str) -> dict | None:
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             proc.communicate(), timeout=settings.enrichment_timeout,
         )
+    except asyncio.CancelledError:
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        raise
     except Exception as exc:
+        # Reap the child: wait_for cancels communicate() but a timed-out kubectl would
+        # keep running — against a hung API server that leaks a process per query.
+        if proc is not None:
+            try:
+                proc.kill()
+                await proc.communicate()
+            except Exception:
+                pass
         logger.warning("enrichment: kubectl exception", extra={"cmd_args": list(args), "error": str(exc)})
         return None
 
@@ -136,8 +152,6 @@ def _select_container(
     if culprit:
         return culprit
 
-    if len(spec_names) == 1:
-        return spec_names[0]
     return spec_names[0] if spec_names else None
 
 

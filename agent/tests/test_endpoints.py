@@ -1717,3 +1717,220 @@ class TestSlashCommandEndpoint:
             })
         assert r.status_code == 200
         assert "No incidents" in r.json()["text"]
+
+
+# ── v2 Eje A: grounding observable + unificación humano/auto ─────────────────
+
+from remediation import RemediationAction
+from enrichment import IncidentSnapshot
+
+
+def _structured_escalation(incident_id: str, ttl_minutes: int = 60) -> PendingEscalation:
+    """Escalación cuyo diagnosis es estructurado (post-sellado): el approve debe tener
+    la misma red de seguridad que el camino auto (snapshot + rollback)."""
+    alert = AlertItem(
+        status="firing",
+        labels={"alertname": "KubePodOOMKilled", "pod": "engine-0", "namespace": "arturo-prod", "severity": "critical"},
+        annotations={"description": "Pod OOMKilled"},
+        startsAt="2026-05-06T10:00:00Z",
+    )
+    diagnosis = {
+        "diagnosis": "OOMKilled: memory limit too low",
+        "commands": ["kubectl describe pod engine-0 -n arturo-prod"],
+        "confidence": 1.0,
+        "risk": "low",
+        "explanation": "Recurring OOM; raise the limit.",
+        "proposed_action": {
+            "kind": "Deployment", "name": "engine", "namespace": "arturo-prod",
+            "container": "app", "field": "resources.limits.memory",
+            "current_value": "256Mi", "new_value": "512Mi",
+            "match_labels": {"app": "engine"},
+        },
+        "model_used": "qwen", "duration_ms": 1000, "rag_sources": [], "raw_response": "{}",
+    }
+    return PendingEscalation(
+        incident_id=incident_id,
+        alert_item=alert,
+        diagnosis=diagnosis,
+        safe_commands=["kubectl set resources deployment engine -n arturo-prod --containers=app --limits=memory=512Mi"],
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes),
+    )
+
+
+class TestApproveStructuredParity:
+    """Approve de una remediación estructurada → snapshot previo + rollback programado."""
+
+    def setup_method(self):
+        self.fake_redis = FakeRedis()
+        app.state.redis = self.fake_redis
+
+    def teardown_method(self):
+        app.state.redis = None
+
+    def _seed(self, incident_id: str) -> PendingEscalation:
+        esc = _structured_escalation(incident_id)
+        self.fake_redis.set_raw(f"escalation:{incident_id}", json.dumps(_escalation_to_dict(esc)))
+        return esc
+
+    def test_approve_structured_schedules_rollback(self, api_client):
+        esc = self._seed("st-1")
+        ok = MagicMock(success=True)
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value=[ok]) as mock_exec, \
+             patch("main.results_to_log", return_value="[OK] kubectl set resources ..."), \
+             patch("main.capture_pre_patch_value", new_callable=AsyncMock, return_value=MagicMock()) as mock_snap, \
+             patch("main._schedule_rollback_evaluation", new_callable=AsyncMock) as mock_sched, \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve", "incident_id": "st-1"},
+            })
+        assert r.status_code == 200
+        mock_exec.assert_called_once_with(esc.safe_commands)  # ejecuta el comando determinista almacenado
+        mock_snap.assert_called_once()                        # snapshot ANTES del patch
+        mock_sched.assert_called_once()
+        assert mock_sched.call_args.args[0] == "st-1"         # reusa el incident_id (trazabilidad E2E)
+
+    def test_approve_structured_no_rollback_when_execution_fails(self, api_client):
+        self._seed("st-2")
+        failed = MagicMock(success=False)
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value=[failed]), \
+             patch("main.results_to_log", return_value="[FAILED] ..."), \
+             patch("main.capture_pre_patch_value", new_callable=AsyncMock, return_value=MagicMock()), \
+             patch("main._schedule_rollback_evaluation", new_callable=AsyncMock) as mock_sched, \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "approve", "incident_id": "st-2"},
+            })
+        assert r.status_code == 200
+        mock_sched.assert_not_called()
+
+    def test_approve_non_structured_unchanged(self, api_client):
+        """Sin proposed_action estructurado el approve no captura snapshot ni programa rollback."""
+        _seed_redis(self.fake_redis, "ns-1")
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value=[]), \
+             patch("main.capture_pre_patch_value", new_callable=AsyncMock) as mock_snap, \
+             patch("main._schedule_rollback_evaluation", new_callable=AsyncMock) as mock_sched, \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "approve", "incident_id": "ns-1"},
+            })
+        assert r.status_code == 200
+        mock_snap.assert_not_called()
+        mock_sched.assert_not_called()
+
+
+class TestStructuredEscalationStoresEngineCommand:
+    """La escalación de una remediación estructurada guarda y enseña el comando del motor
+    (lo que el humano aprueba es exactamente lo que se ejecuta — v2, unificación humano/auto)."""
+
+    @pytest.mark.asyncio
+    async def test_structured_command_replaces_llm_free_text(self):
+        alert = AlertItem(
+            status="firing",
+            labels={"alertname": "KubePodOOMKilled", "pod": "engine-0", "namespace": "arturo-prod", "severity": "critical"},
+            annotations={"description": "OOM"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+        cmd = "kubectl set resources deployment engine -n arturo-prod --containers=app --limits=memory=512Mi"
+        esc_result = {
+            "action": RemediationAction.ESCALATE, "execution_log": "",
+            "blocked_commands": [], "safe_commands": ["kubectl describe pod engine-0 -n arturo-prod"],
+            "structured_command": cmd,
+        }
+        snap = IncidentSnapshot(namespace="arturo-prod", pod="engine-0")  # gather_ok=False → seal no-op
+        with patch("main.gather_incident_context", new_callable=AsyncMock, return_value=snap), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value=esc_result), \
+             patch("main.store_escalation", new_callable=AsyncMock, return_value=True) as mock_store, \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.send_escalation_with_buttons", new_callable=AsyncMock) as mock_buttons, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client(), redis_client=AsyncMock())
+        stored = mock_store.call_args.args[1]
+        assert stored["safe_commands"] == [cmd]
+        attachment = mock_buttons.call_args.kwargs["attachment_text"]
+        assert cmd in attachment
+        assert "determinista" in attachment
+
+
+class TestEnrichmentMetric:
+    """aiops_enrichment_total hace observable la etapa de grounding (zero black-box)."""
+
+    def _alert(self) -> AlertItem:
+        return AlertItem(
+            status="firing",
+            labels={"alertname": "KubePodOOMKilled", "pod": "p-1", "namespace": "arturo-prod", "severity": "critical"},
+            annotations={"description": "OOM"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+
+    async def _run(self, snap) -> None:
+        suggest = {"action": RemediationAction.SUGGEST_ONLY, "execution_log": "",
+                   "blocked_commands": [], "safe_commands": []}
+        with patch("main.gather_incident_context", new_callable=AsyncMock, return_value=snap), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value=suggest), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            await _process_alert_with_diagnosis(self._alert(), AsyncMock(), mock_chroma_client(), redis_client=None)
+
+    @pytest.mark.asyncio
+    async def test_gathered_when_workload_confirmed(self):
+        snap = IncidentSnapshot(namespace="arturo-prod", pod="p-1", gather_ok=True,
+                                workload_kind="Deployment", workload_name="engine")
+        before = _get_counter("aiops_enrichment", {"outcome": "gathered"})
+        await self._run(snap)
+        assert _get_counter("aiops_enrichment", {"outcome": "gathered"}) == before + 1
+
+    @pytest.mark.asyncio
+    async def test_workload_unresolved(self):
+        snap = IncidentSnapshot(namespace="arturo-prod", pod="p-1", gather_ok=True)
+        before = _get_counter("aiops_enrichment", {"outcome": "workload_unresolved"})
+        await self._run(snap)
+        assert _get_counter("aiops_enrichment", {"outcome": "workload_unresolved"}) == before + 1
+
+    @pytest.mark.asyncio
+    async def test_skipped_when_gather_fails(self):
+        snap = IncidentSnapshot(namespace="arturo-prod", pod="p-1")  # gather_ok=False
+        before = _get_counter("aiops_enrichment", {"outcome": "skipped"})
+        await self._run(snap)
+        assert _get_counter("aiops_enrichment", {"outcome": "skipped"}) == before + 1
+
+
+class TestGroundedConfidenceDisplay:
+    """La confianza grounded es visible en Mattermost junto a la autoevaluación del modelo."""
+
+    def _alert(self) -> AlertItem:
+        return AlertItem(
+            status="firing",
+            labels={"alertname": "KubePodOOMKilled", "pod": "p-1", "namespace": "arturo-prod", "severity": "critical"},
+            annotations={"description": "OOM"},
+            startsAt="2026-01-01T00:00:00Z",
+        )
+
+    def test_diagnosis_message_shows_grounded_and_model(self):
+        d = {**mock_diagnosis_result(), "confidence": 1.0, "model_confidence": 0.65}
+        msg = _format_diagnosis_message(self._alert(), d)
+        assert "100%" in msg
+        assert "65%" in msg
+        assert "grounded" in msg
+
+    def test_diagnosis_message_without_model_confidence_unchanged(self):
+        msg = _format_diagnosis_message(self._alert(), mock_diagnosis_result())
+        assert "grounded" not in msg
+
+    def test_escalation_body_shows_both(self):
+        d = {**mock_diagnosis_result(), "confidence": 1.0, "model_confidence": 0.95}
+        body = _format_escalation_body(d, {"safe_commands": []})
+        assert "grounded" in body
+        assert "95%" in body
+
+    def test_structured_fix_hint_on_suggest_only(self):
+        remediation = {"action": RemediationAction.SUGGEST_ONLY, "execution_log": "",
+                       "blocked_commands": [], "safe_commands": [],
+                       "structured_command": "kubectl set resources deployment engine -n arturo-prod --containers=app --limits=memory=512Mi"}
+        msg = _format_diagnosis_message(self._alert(), mock_diagnosis_result(), remediation)
+        assert "Fix determinista" in msg
+        assert "set resources" in msg

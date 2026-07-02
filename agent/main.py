@@ -40,7 +40,7 @@ from diagnosis import generate_diagnosis
 from remediation import (
     process_remediation, execute_commands, results_to_log, RemediationAction,
     capture_pre_patch_value, check_pod_health, revert_patch, PrePatchSnapshot,
-    _limit_resource, seal_proposed_action, ground_confidence,
+    _limit_resource, seal_proposed_action, ground_confidence, is_structured_remediation,
 )
 from enrichment import gather_incident_context
 from utils import backoff_delay
@@ -117,6 +117,11 @@ ESCALATION_STORE_COUNTER = Counter(
     "aiops_escalation_store_total",
     "Escalation persistence attempts by outcome",
     ["outcome"],  # "stored" | "redis_down"
+)
+ENRICHMENT_COUNTER = Counter(
+    "aiops_enrichment_total",
+    "Cluster grounding (enrichment) gather outcomes per alert",
+    ["outcome"],  # "gathered" | "workload_unresolved" | "skipped" | "error"
 )
 
 
@@ -488,6 +493,8 @@ async def lifespan(app: FastAPI):
     WEBHOOK_COUNTER.labels(status="error").inc(0)
     QUEUE_PROCESSED.labels(outcome="success").inc(0)
     QUEUE_PROCESSED.labels(outcome="error").inc(0)
+    for _outcome in ("gathered", "workload_unresolved", "skipped", "error"):
+        ENRICHMENT_COUNTER.labels(outcome=_outcome).inc(0)
 
     cleanup_task = asyncio.create_task(_periodic_cleanup())
 
@@ -619,10 +626,17 @@ def _format_diagnosis_message(
     confidence_pct = int(diagnosis.get("confidence", 0.0) * 100)
     risk = diagnosis.get("risk", "high").upper()
 
+    # Grounded confidence (v2 Eje A): make the grounding visible — when the cluster
+    # signal overrode the model's self-assessment, show both.
+    conf_line = f"**Risk:** {risk} | **Confidence:** {confidence_pct}%"
+    model_conf = diagnosis.get("model_confidence")
+    if isinstance(model_conf, (int, float)):
+        conf_line += f" _(grounded del cluster; el modelo dijo {int(model_conf * 100)}%)_"
+
     parts = [
         header,
         f"\n**Diagnosis:** {diagnosis.get('diagnosis', 'Sin diagnóstico')}",
-        f"**Risk:** {risk} | **Confidence:** {confidence_pct}%",
+        conf_line,
     ]
 
     if diagnosis.get("commands"):
@@ -649,6 +663,10 @@ def _format_diagnosis_message(
                 parts.append(f"\n⚠️ **Requires human approval:**\n{blocked_str}")
             else:
                 parts.append("\n⚠️ **Requires human approval** (high risk)")
+        if action != RemediationAction.AUTO_REMEDIATE and remediation.get("structured_command"):
+            parts.append(
+                f"🔧 **Fix determinista (motor):**\n```\n{remediation['structured_command']}\n```"
+            )
 
     return "\n".join(parts)
 
@@ -664,15 +682,25 @@ def _format_escalation_body(diagnosis: dict, remediation: dict) -> str:
     confidence_pct = int(diagnosis.get("confidence", 0.0) * 100)
     risk = diagnosis.get("risk", "high").upper()
 
+    conf_line = f"**Risk:** {risk} | **Confidence:** {confidence_pct}%"
+    model_conf = diagnosis.get("model_confidence")
+    if isinstance(model_conf, (int, float)):
+        conf_line += f" _(grounded del cluster; el modelo dijo {int(model_conf * 100)}%)_"
+
     parts = [
         f"**Diagnóstico:** {diagnosis.get('diagnosis', 'Sin diagnóstico')}",
-        f"**Risk:** {risk} | **Confidence:** {confidence_pct}%",
+        conf_line,
     ]
 
-    safe_cmds = remediation.get("safe_commands", [])
+    structured_cmd = remediation.get("structured_command")
+    safe_cmds = [structured_cmd] if structured_cmd else remediation.get("safe_commands", [])
     if safe_cmds:
         cmds_str = "\n".join(safe_cmds)
-        parts.append(f"**Comandos propuestos (requieren aprobación):**\n```\n{cmds_str}\n```")
+        label = (
+            "**Comando determinista del motor (requiere aprobación):**"
+            if structured_cmd else "**Comandos propuestos (requieren aprobación):**"
+        )
+        parts.append(f"{label}\n```\n{cmds_str}\n```")
 
     return "\n".join(parts)
 
@@ -786,6 +814,15 @@ async def _process_alert_with_diagnosis(
             snapshot = await gather_incident_context(alert.labels)
         except Exception as exc:
             logger.warning("Enrichment gather failed for %s, proceeding LLM-only: %r", alert_name, exc)
+            ENRICHMENT_COUNTER.labels(outcome="error").inc()
+        else:
+            # Zero black-box: the grounding stage is observable per alert. "gathered" means
+            # the pod snapshot AND the owning workload were confirmed from the cluster.
+            if snapshot.gather_ok:
+                _outcome = "gathered" if snapshot.workload_name else "workload_unresolved"
+            else:
+                _outcome = "skipped"
+            ENRICHMENT_COUNTER.labels(outcome=_outcome).inc()
 
         # LLM diagnosis (fail-open: None if Ollama down or timeout)
         try:
@@ -855,19 +892,24 @@ async def _process_alert_with_diagnosis(
 
         chaos_outcome = remediation_result["action"].value if remediation_result else "no_diagnosis"
 
-        # Escalations with approvable commands → persist in Redis + send with interactive buttons
+        # Escalations with approvable commands → persist in Redis + send with interactive buttons.
+        # For a structured remediation the approvable command IS the engine synthesis (single
+        # source with the auto path — v2: what the human approves is exactly what runs), never
+        # the model's free-text commands.
+        structured_cmd = remediation_result.get("structured_command") if remediation_result else None
         if (
             remediation_result is not None
             and remediation_result["action"] == RemediationAction.ESCALATE
-            and remediation_result.get("safe_commands")
+            and (structured_cmd or remediation_result.get("safe_commands"))
         ):
             incident_id = str(uuid.uuid4())
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=ESCALATION_TTL_MINUTES)
+            esc_commands = [structured_cmd] if structured_cmd else remediation_result["safe_commands"]
             esc = PendingEscalation(
                 incident_id=incident_id,
                 alert_item=alert,
                 diagnosis=diagnosis,
-                safe_commands=remediation_result["safe_commands"],
+                safe_commands=esc_commands,
                 expires_at=expires_at,
             )
             ttl_seconds = ESCALATION_TTL_MINUTES * 60
@@ -878,7 +920,7 @@ async def _process_alert_with_diagnosis(
                 ESCALATION_STORE_COUNTER.labels(outcome="stored").inc()
                 logger.info(
                     "Stored pending escalation %s for %s (%d commands) in Redis",
-                    incident_id, alert_name, len(remediation_result["safe_commands"]),
+                    incident_id, alert_name, len(esc_commands),
                 )
                 await send_escalation_with_buttons(
                     header=_format_escalation_header(alert),
@@ -1072,10 +1114,27 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
     action = payload.context.action
 
     if action == "approve":
+        # Human/auto parity (v2 Eje A): for a structured remediation the stored command IS
+        # the engine synthesis, so the human path gets the same safety net as the auto path —
+        # pre-patch snapshot (from the sealed target) + scheduled rollback evaluation.
+        pre_patch_snapshot = None
+        if is_structured_remediation(incident.diagnosis):
+            try:
+                pre_patch_snapshot = await capture_pre_patch_value(incident.diagnosis["proposed_action"])
+            except Exception as exc:
+                logger.warning("Pre-patch snapshot failed for %s: %s", incident.incident_id, exc)
         try:
             execute_results = await execute_commands(incident.safe_commands)
             log = results_to_log(execute_results)
             REMEDIATION_COUNTER.labels(action="human_approved").inc()
+            if (
+                settings.remediation_rollback_enabled
+                and pre_patch_snapshot is not None
+                and any(r.success for r in execute_results)
+            ):
+                await _schedule_rollback_evaluation(
+                    incident.incident_id, pre_patch_snapshot, incident.alert_item, incident.diagnosis,
+                )
         except Exception as exc:
             logger.error("Command execution failed for incident %s: %s", incident.incident_id, exc)
             log = f"ERROR: {exc}"
