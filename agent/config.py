@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     # Remediation (Fase 3)
     remediation_enabled: bool = False
     remediation_auto_confidence: float = 0.8
+    remediation_auto_min_restarts: int = 1  # grounding: min cluster-observed restarts to trust an OOM/crash incident as recurring (feeds ground_confidence)
     remediation_auto_max_risk: str = "low"
     remediation_auto_cpu_enabled: bool = False  # gate: extiende la excepción 4.5 a CPU (escalate-first hasta validar en cluster)
     remediation_auto_namespace_prefix: str = "arturo-"  # guardrail: auto solo en namespaces propios (cluster compartido); "" = sin restricción
@@ -63,6 +64,12 @@ class Settings(BaseSettings):
     remediation_rollback_enabled: bool = True
     remediation_rollback_timeout: int = 300  # seconds to wait before evaluating rollback
     remediation_rollback_grace: int = 30     # seconds for pod rollout before health check
+
+    # Enrichment (v2 Eje A / P0·1 — grounding) — gather de estado K8s ANTES del LLM.
+    # "El cluster informa, el modelo razona": current_value/target salen del snapshot,
+    # no del modelo. Fail-soft: si falla, se degrada a diagnóstico LLM-only.
+    enrichment_enabled: bool = True
+    enrichment_timeout: int = 10  # segundos por query kubectl (corto; best-effort, no crítico)
 
     # Human escalation callback URL (Fase 3 — botones interactivos Mattermost)
     # URL base del agente accesible desde Mattermost (intra-cluster FQDN)

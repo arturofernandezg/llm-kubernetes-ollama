@@ -40,8 +40,9 @@ from diagnosis import generate_diagnosis
 from remediation import (
     process_remediation, execute_commands, results_to_log, RemediationAction,
     capture_pre_patch_value, check_pod_health, revert_patch, PrePatchSnapshot,
-    _limit_resource,
+    _limit_resource, seal_proposed_action, ground_confidence,
 )
+from enrichment import gather_incident_context
 from utils import backoff_delay
 from escalation_store import store_escalation, get_escalation, delete_escalation, count_escalations
 from rollback_store import store_rollback, delete_rollback, list_rollbacks
@@ -777,11 +778,20 @@ async def _process_alert_with_diagnosis(
                 rag_degraded = True
                 DIAGNOSIS_COUNTER.labels(outcome="rag_failed").inc()
 
+        # Grounding (v2 Eje A): gather the cluster snapshot ONCE, up front. It feeds the
+        # diagnosis prompt (the model reasons over real facts) and then seals the action
+        # target below. Fail-soft — a failed/disabled gather returns gather_ok=False.
+        snapshot = None
+        try:
+            snapshot = await gather_incident_context(alert.labels)
+        except Exception as exc:
+            logger.warning("Enrichment gather failed for %s, proceeding LLM-only: %r", alert_name, exc)
+
         # LLM diagnosis (fail-open: None if Ollama down or timeout)
         try:
             diagnosis = await generate_diagnosis(
                 alert.labels, alert.annotations, alert.status,
-                rag_context, http_client,
+                rag_context, http_client, snapshot=snapshot,
             )
             DIAGNOSIS_COUNTER.labels(outcome="success").inc()
         except httpx.TimeoutException as exc:
@@ -796,6 +806,14 @@ async def _process_alert_with_diagnosis(
 
         remediation_result = None
         if diagnosis is not None:
+            # Grounding (v2 Eje A): seal the action target/current_value from the cluster
+            # snapshot gathered above before deciding. Fail-soft — a failed/disabled gather
+            # (snapshot is None or gather_ok=False) leaves the LLM values untouched.
+            try:
+                seal_proposed_action(diagnosis, snapshot)
+                ground_confidence(diagnosis, snapshot)
+            except Exception as exc:
+                logger.warning("Seal/ground failed for %s, proceeding LLM-only: %r", alert_name, exc)
             try:
                 remediation_result = await process_remediation(diagnosis, rag_degraded=rag_degraded)
                 REMEDIATION_COUNTER.labels(action=remediation_result["action"].value).inc()

@@ -63,7 +63,7 @@ PROPOSED ACTION RULES:
 
 --- PAST INCIDENTS ---
 {incident_context}
-
+{cluster_context}
 Output:"""
 
 
@@ -81,6 +81,40 @@ def format_context_docs(docs: list[dict]) -> str:
         distance = doc.get("distance", 0)
         parts.append(f"[{header}] (similarity: {1 - distance:.2f})\n{doc['document']}")
     return "\n\n".join(parts)
+
+
+def format_cluster_facts(snapshot) -> str:
+    """Format the cluster-sourced snapshot into an authoritative prompt block.
+
+    Grounding (v2 Eje A): feed the LLM the REAL pod state (phase, last termination
+    reason, restarts, current limits) so it reasons over facts, not guesses. Returns
+    an empty string when there is no usable snapshot (gather disabled/failed) — the
+    prompt then degrades to the previous alert+RAG-only form (backward-compatible).
+    """
+    if snapshot is None or not getattr(snapshot, "gather_ok", False):
+        return ""
+
+    lines = []
+    if getattr(snapshot, "phase", None):
+        lines.append(f"- phase: {snapshot.phase}")
+    if getattr(snapshot, "last_state_reason", None):
+        lines.append(f"- last termination reason: {snapshot.last_state_reason}")
+    if getattr(snapshot, "restart_count", None) is not None:
+        lines.append(f"- restarts: {snapshot.restart_count}")
+
+    container = getattr(snapshot, "container", None)
+    limits = (getattr(snapshot, "limits", {}) or {}).get(container or "", {})
+    if limits:
+        rendered = ", ".join(f"{k}={v}" for k, v in limits.items())
+        lines.append(f"- container '{container}' limits: {rendered}")
+
+    if not lines:
+        return ""
+
+    return (
+        "\n--- CLUSTER FACTS (observed, authoritative — trust over your own guesses) ---\n"
+        + "\n".join(lines) + "\n"
+    )
 
 
 def build_alert_text(alert_labels: dict, alert_annotations: dict, status: str) -> str:
@@ -106,6 +140,7 @@ async def generate_diagnosis(
     alert_status: str,
     rag_context: dict,
     http_client: httpx.AsyncClient,
+    snapshot=None,
 ) -> dict:
     """
     Generate a structured AIOps diagnosis.
@@ -126,11 +161,13 @@ async def generate_diagnosis(
     alert_text = build_alert_text(alert_labels, alert_annotations, alert_status)
     runbook_context = format_context_docs(rag_context.get("runbooks", []))
     incident_context = format_context_docs(rag_context.get("incidents", []))
+    cluster_context = format_cluster_facts(snapshot)
 
     prompt = DIAGNOSIS_PROMPT.format(
         alert_text=alert_text,
         runbook_context=runbook_context,
         incident_context=incident_context,
+        cluster_context=cluster_context,
     )
 
     response = await http_client.post(

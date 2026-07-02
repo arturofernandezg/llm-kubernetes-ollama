@@ -7,6 +7,11 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "patch"]
+  # Read-only walk of the ownerReferences chain (pod → ReplicaSet → Deployment, or STS/DaemonSet
+  # directly) for enrichment.py grounding (v2 Eje A). get-only: only deployments are patched.
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
@@ -44,6 +49,11 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "patch"]
+  # Read-only walk of the ownerReferences chain (pod → ReplicaSet → Deployment, or STS/DaemonSet
+  # directly) for enrichment.py grounding (v2 Eje A). get-only: only deployments are patched.
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]

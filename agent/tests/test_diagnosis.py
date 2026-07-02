@@ -11,9 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from diagnosis import (
     build_alert_text,
     format_context_docs,
+    format_cluster_facts,
     generate_diagnosis,
     _clamp,
 )
+from enrichment import IncidentSnapshot
 
 
 # ── Test data ─────────────────────────────────────────────────────────────────
@@ -123,6 +125,45 @@ class TestFormatContextDocs:
         assert "doc2" in result
 
 
+# ── format_cluster_facts tests (v2 Eje A — grounding) ─────────────────────────
+
+class TestFormatClusterFacts:
+    """format_cluster_facts renders the cluster snapshot, or nothing when unusable."""
+
+    def test_none_snapshot_is_empty(self):
+        assert format_cluster_facts(None) == ""
+
+    def test_not_gathered_is_empty(self):
+        snap = IncidentSnapshot(namespace="arturo-x", pod="p", gather_ok=False)
+        assert format_cluster_facts(snap) == ""
+
+    def test_renders_observed_facts(self):
+        snap = IncidentSnapshot(
+            namespace="arturo-x", pod="p", gather_ok=True, container="app",
+            phase="Running", restart_count=7, last_state_reason="OOMKilled",
+            limits={"app": {"memory": "256Mi", "cpu": "250m"}},
+        )
+        out = format_cluster_facts(snap)
+        assert "CLUSTER FACTS" in out
+        assert "phase: Running" in out
+        assert "last termination reason: OOMKilled" in out
+        assert "restarts: 7" in out
+        assert "container 'app' limits: memory=256Mi, cpu=250m" in out
+
+    def test_zero_restarts_still_rendered(self):
+        """restart_count=0 is a real fact, not 'missing' — must not be dropped."""
+        snap = IncidentSnapshot(
+            namespace="arturo-x", pod="p", gather_ok=True, container="app",
+            restart_count=0,
+        )
+        assert "restarts: 0" in format_cluster_facts(snap)
+
+    def test_gathered_but_no_facts_is_empty(self):
+        """gather_ok but nothing populated (e.g. bare pod, no limits) → no empty block."""
+        snap = IncidentSnapshot(namespace="arturo-x", pod="p", gather_ok=True)
+        assert format_cluster_facts(snap) == ""
+
+
 # ── generate_diagnosis tests ──────────────────────────────────────────────────
 
 class TestGenerateDiagnosis:
@@ -139,6 +180,34 @@ class TestGenerateDiagnosis:
         assert result["risk"] == "low"
         assert result["duration_ms"] >= 0
         assert "rb-oom-001" in result["rag_sources"]
+
+    @pytest.mark.asyncio
+    async def test_snapshot_injected_into_prompt(self):
+        """A gathered snapshot puts an authoritative CLUSTER FACTS block in the prompt."""
+        client = mock_llm_client(GOOD_DIAGNOSIS_JSON)
+        snap = IncidentSnapshot(
+            namespace="arturo-llm-test", pod="nginx-7d4f8b-x2k", gather_ok=True,
+            container="nginx", phase="Running", restart_count=3, last_state_reason="OOMKilled",
+            limits={"nginx": {"memory": "256Mi"}},
+        )
+        await generate_diagnosis(
+            SAMPLE_LABELS, SAMPLE_ANNOTATIONS, "firing",
+            SAMPLE_RAG_CONTEXT, client, snapshot=snap,
+        )
+        prompt = client.post.call_args.kwargs["json"]["prompt"]
+        assert "CLUSTER FACTS" in prompt
+        assert "last termination reason: OOMKilled" in prompt
+
+    @pytest.mark.asyncio
+    async def test_no_snapshot_leaves_prompt_clean(self):
+        """Backward-compat: without a snapshot the prompt has no cluster block."""
+        client = mock_llm_client(GOOD_DIAGNOSIS_JSON)
+        await generate_diagnosis(
+            SAMPLE_LABELS, SAMPLE_ANNOTATIONS, "firing",
+            SAMPLE_RAG_CONTEXT, client,
+        )
+        prompt = client.post.call_args.kwargs["json"]["prompt"]
+        assert "CLUSTER FACTS" not in prompt
 
     @pytest.mark.asyncio
     async def test_generation_uses_configured_temperature(self):

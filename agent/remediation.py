@@ -345,6 +345,109 @@ def is_structured_remediation(diagnosis: dict) -> bool:
     return new_amount > current_amount
 
 
+def seal_proposed_action(diagnosis: dict, snapshot) -> None:
+    """Overwrite the LLM's action target with cluster-sourced truth (v2 Eje A / grounding).
+
+    "El cluster informa, el modelo razona, el motor dispone." The 1.5b hallucinates the
+    identity (name/container) and current_value of proposed_action; the enrichment snapshot
+    carries the real values. The LLM keeps what it does well — field (which resource) and
+    direction (new_value, still capped ≤2× by rule 4.6).
+
+    Contract (all in-place on diagnosis["proposed_action"]):
+    - No snapshot / gather failed / disabled → leave the LLM values untouched (fail-soft,
+      backward-compatible: dry-run and unit tests without a cluster keep working).
+    - Gathered but workload unresolved (existence gate: NotFound/bare pod) → drop
+      proposed_action → the structured auto path can't fire on a phantom target → escalate.
+    - Gathered + workload confirmed → seal name/namespace/container + current_value.
+    """
+    pa = diagnosis.get("proposed_action")
+    if not isinstance(pa, dict):
+        return
+    if snapshot is None or not getattr(snapshot, "gather_ok", False):
+        return  # no cluster truth → trust the LLM (fail-soft)
+
+    if not getattr(snapshot, "workload_name", None):
+        diagnosis["proposed_action"] = None  # unconfirmed target → no auto on a phantom
+        logger.info("seal_proposed_action: workload unresolved, dropping proposed_action")
+        return
+
+    pa["name"] = snapshot.workload_name
+    pa["namespace"] = snapshot.namespace
+    if getattr(snapshot, "container", None):
+        pa["container"] = snapshot.container
+
+    resource = _limit_resource(pa.get("field", ""))
+    cluster_current = snapshot.current_limit(snapshot.container, resource)
+    if cluster_current:
+        pa["current_value"] = cluster_current
+
+    # Real selector for post-patch health checks — replaces the app={name} guess in
+    # capture_pre_patch_value. Only set when confirmed (else the fallback applies).
+    if getattr(snapshot, "match_labels", None):
+        pa["match_labels"] = snapshot.match_labels
+
+    logger.info(
+        "seal_proposed_action: sealed from cluster snapshot",
+        extra={
+            "workload": snapshot.workload_name, "container": snapshot.container,
+            "current_value": pa.get("current_value"), "field": pa.get("field"),
+        },
+    )
+
+
+# Terminal/waiting reasons that mark a real crash/OOM-class incident (excludes "Completed").
+# restart_count is a signal for THIS class; CPU throttling doesn't restart pods (reason=None).
+_FAILURE_REASONS = frozenset({
+    "OOMKilled", "Error", "ContainerCannotRun", "CrashLoopBackOff", "DeadlineExceeded",
+})
+
+
+def derive_confidence(snapshot) -> float | None:
+    """Deterministic incident confidence from the cluster snapshot, or None (no override).
+
+    Grounding (v2 Eje A): the 1.5b's self-rated confidence is overconfident (backlog E5);
+    for the crash/OOM class the cluster gives a calibrated signal — a container that
+    terminated with a failure reason AND has restarted is a confirmed, recurring incident.
+
+    - No usable snapshot / no crash-class failure reason → None (don't override: keep the
+      model's confidence; covers dry-run, healthy pods, and CPU throttling with reason=None).
+    - Failure reason + restart_count ≥ remediation_auto_min_restarts → 1.0 (recurring → trust).
+    - Failure reason but fewer restarts → 0.5 (isolated event → below the auto gate → suggest).
+    """
+    if snapshot is None or not getattr(snapshot, "gather_ok", False):
+        return None
+    reason = getattr(snapshot, "last_state_reason", None)
+    if reason not in _FAILURE_REASONS:
+        return None
+    restarts = getattr(snapshot, "restart_count", None) or 0
+    return 1.0 if restarts >= settings.remediation_auto_min_restarts else 0.5
+
+
+def ground_confidence(diagnosis: dict, snapshot) -> None:
+    """Override diagnosis["confidence"] with the cluster-derived signal (in place).
+
+    "El cluster informa, el motor dispone": rule 6 then gates the auto path on a
+    deterministic metric, not the model's self-assessment. The model's original value is
+    preserved under "model_confidence" for audit. A None derivation leaves things untouched.
+    """
+    if not isinstance(diagnosis, dict):
+        return
+    derived = derive_confidence(snapshot)
+    if derived is None:
+        return
+    diagnosis["model_confidence"] = diagnosis.get("confidence")
+    diagnosis["confidence"] = derived
+    logger.info(
+        "ground_confidence: confidence grounded from cluster snapshot",
+        extra={
+            "model_confidence": diagnosis.get("model_confidence"),
+            "grounded_confidence": derived,
+            "last_state_reason": getattr(snapshot, "last_state_reason", None),
+            "restart_count": getattr(snapshot, "restart_count", None),
+        },
+    )
+
+
 def _set_resources_exception(reason_code: str, diagnosis: dict) -> bool:
     """True if a restart-implying command qualifies for the rule 4.5 exception.
 
@@ -651,7 +754,14 @@ async def capture_pre_patch_value(proposed_action: dict) -> PrePatchSnapshot | N
         logger.warning("capture_pre_patch_value: missing name/namespace/container")
         return None
 
-    selector = f"app={name}"
+    # Prefer the cluster's real selector (sealed from the enrichment snapshot's
+    # matchLabels); fall back to the app={name} guess when enrichment is absent
+    # (dry-run / legacy) so check_pod_health doesn't miss pods and force a false rollback.
+    match_labels = proposed_action.get("match_labels")
+    if isinstance(match_labels, dict) and match_labels:
+        selector = ",".join(f"{k}={v}" for k, v in match_labels.items())
+    else:
+        selector = f"app={name}"
 
     if settings.remediation_dry_run:
         value = proposed_action.get("current_value") or ""

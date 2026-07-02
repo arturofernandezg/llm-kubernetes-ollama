@@ -33,8 +33,12 @@ from remediation import (
     implies_pod_restart,
     is_structured_remediation,
     build_set_resources_command,
+    seal_proposed_action,
+    derive_confidence,
+    ground_confidence,
     _limit_resource,
 )
+from enrichment import IncidentSnapshot
 from tests.helpers import mock_diagnosis_auto_remediate, mock_diagnosis_escalate, mock_diagnosis_result
 
 
@@ -1044,6 +1048,23 @@ class TestCapturePrePatchValue:
             result = await capture_pre_patch_value(self._proposed())
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_selector_uses_match_labels_when_sealed(self, monkeypatch):
+        """Sealed match_labels build the real multi-label selector (no app={name} guess)."""
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        proposed = self._proposed(match_labels={"app": "engine", "tier": "backend"})
+        result = await capture_pre_patch_value(proposed)
+        assert result is not None
+        assert result.selector == "app=engine,tier=backend"
+
+    @pytest.mark.asyncio
+    async def test_selector_falls_back_to_app_name_without_match_labels(self, monkeypatch):
+        """No enrichment (dry-run/legacy) → keep the app={name} fallback (backward-compat)."""
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+        result = await capture_pre_patch_value(self._proposed())
+        assert result is not None
+        assert result.selector == "app=engine"
+
 
 # ── TestCheckPodHealth ────────────────────────────────────────────────────────
 
@@ -1691,3 +1712,171 @@ class TestLimitResource:
 
     def test_none_defaults_to_memory(self):
         assert _limit_resource(None) == "memory"
+
+
+# ── TestSealProposedAction (v2 Eje A — grounding) ─────────────────────────────
+
+def _snapshot(**kw) -> IncidentSnapshot:
+    base = dict(namespace="arturo-x", pod="p")
+    base.update(kw)
+    return IncidentSnapshot(**base)
+
+
+class TestSealProposedAction:
+    """seal_proposed_action overwrites the LLM's target with cluster truth (or drops it)."""
+
+    def _diagnosis(self) -> dict:
+        # name/container deliberately wrong (as the 1.5b hallucinates them)
+        return {"proposed_action": {
+            "kind": "Deployment", "name": "WRONG-podname", "namespace": "arturo-x",
+            "container": "WRONG", "field": "resources.limits.memory",
+            "current_value": "999Mi", "new_value": "512Mi",
+        }}
+
+    def test_no_snapshot_leaves_llm_values(self):
+        d = self._diagnosis()
+        seal_proposed_action(d, None)
+        assert d["proposed_action"]["name"] == "WRONG-podname"
+
+    def test_gather_failed_leaves_llm_values(self):
+        d = self._diagnosis()
+        seal_proposed_action(d, _snapshot(gather_ok=False))
+        assert d["proposed_action"]["name"] == "WRONG-podname"
+        assert d["proposed_action"]["current_value"] == "999Mi"
+
+    def test_seals_identity_and_current_value(self):
+        d = self._diagnosis()
+        snap = _snapshot(
+            gather_ok=True, container="app", workload_name="web", workload_kind="Deployment",
+            limits={"app": {"memory": "256Mi"}},
+        )
+        seal_proposed_action(d, snap)
+        pa = d["proposed_action"]
+        assert pa["name"] == "web"                # target sealed from cluster
+        assert pa["container"] == "app"
+        assert pa["current_value"] == "256Mi"     # real cluster value, not "999Mi"
+        assert pa["new_value"] == "512Mi"         # LLM direction preserved
+
+    def test_unresolved_workload_drops_action(self):
+        d = self._diagnosis()
+        # gathered the pod but couldn't confirm a patchable workload (existence gate)
+        snap = _snapshot(gather_ok=True, container="app", limits={"app": {"memory": "256Mi"}})
+        seal_proposed_action(d, snap)
+        assert d["proposed_action"] is None       # → escalate, no auto on a phantom target
+
+    def test_no_proposed_action_is_noop(self):
+        d = {"proposed_action": None}
+        seal_proposed_action(d, _snapshot(gather_ok=True, workload_name="web"))
+        assert d["proposed_action"] is None
+
+    def test_missing_cluster_limit_keeps_llm_current(self):
+        d = self._diagnosis()
+        snap = _snapshot(
+            gather_ok=True, container="app", workload_name="web", limits={"app": {}},
+        )
+        seal_proposed_action(d, snap)
+        assert d["proposed_action"]["current_value"] == "999Mi"  # no cluster value → keep LLM
+        assert d["proposed_action"]["name"] == "web"             # identity still sealed
+
+    def test_propagates_match_labels_for_health_check(self):
+        d = self._diagnosis()
+        snap = _snapshot(
+            gather_ok=True, container="app", workload_name="web",
+            limits={"app": {"memory": "256Mi"}},
+            match_labels={"app": "web", "tier": "backend"},
+        )
+        seal_proposed_action(d, snap)
+        # real selector threads through to capture_pre_patch_value → check_pod_health
+        assert d["proposed_action"]["match_labels"] == {"app": "web", "tier": "backend"}
+
+    def test_no_match_labels_leaves_key_absent(self):
+        d = self._diagnosis()
+        snap = _snapshot(
+            gather_ok=True, container="app", workload_name="web",
+            limits={"app": {"memory": "256Mi"}},
+        )
+        seal_proposed_action(d, snap)
+        assert "match_labels" not in d["proposed_action"]  # → app={name} fallback applies
+
+
+# ── TestDeriveConfidence / TestGroundConfidence (v2 Eje A — grounded gating) ──
+
+class TestDeriveConfidence:
+    """derive_confidence maps the cluster snapshot to a calibrated confidence, or None."""
+
+    def test_no_snapshot_is_none(self):
+        assert derive_confidence(None) is None
+
+    def test_not_gathered_is_none(self):
+        assert derive_confidence(_snapshot(gather_ok=False, last_state_reason="OOMKilled")) is None
+
+    def test_no_failure_reason_is_none(self):
+        # healthy / CPU throttling → reason=None → don't override, keep model confidence
+        assert derive_confidence(_snapshot(gather_ok=True, restart_count=5)) is None
+
+    def test_completed_reason_is_not_a_failure(self):
+        assert derive_confidence(_snapshot(gather_ok=True, last_state_reason="Completed", restart_count=3)) is None
+
+    def test_oom_with_restarts_is_full_confidence(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_auto_min_restarts", 1)
+        snap = _snapshot(gather_ok=True, last_state_reason="OOMKilled", restart_count=7)
+        assert derive_confidence(snap) == 1.0
+
+    def test_oom_zero_restarts_is_half_confidence(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_auto_min_restarts", 1)
+        snap = _snapshot(gather_ok=True, last_state_reason="OOMKilled", restart_count=0)
+        assert derive_confidence(snap) == 0.5
+
+    def test_respects_min_restarts_threshold(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_auto_min_restarts", 3)
+        below = _snapshot(gather_ok=True, last_state_reason="CrashLoopBackOff", restart_count=2)
+        at = _snapshot(gather_ok=True, last_state_reason="CrashLoopBackOff", restart_count=3)
+        assert derive_confidence(below) == 0.5
+        assert derive_confidence(at) == 1.0
+
+
+class TestGroundConfidence:
+    """ground_confidence overrides diagnosis['confidence'] with the cluster signal."""
+
+    def _diagnosis(self, confidence=0.9) -> dict:
+        return {**mock_diagnosis_auto_remediate(), "confidence": confidence}
+
+    def test_overrides_and_preserves_model_value(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_auto_min_restarts", 1)
+        d = self._diagnosis(confidence=0.95)
+        ground_confidence(d, _snapshot(gather_ok=True, last_state_reason="OOMKilled", restart_count=4))
+        assert d["confidence"] == 1.0
+        assert d["model_confidence"] == 0.95  # original kept for audit
+
+    def test_none_derivation_leaves_untouched(self):
+        d = self._diagnosis(confidence=0.9)
+        ground_confidence(d, _snapshot(gather_ok=True, restart_count=2))  # no failure reason
+        assert d["confidence"] == 0.9
+        assert "model_confidence" not in d
+
+    def test_non_dict_is_noop(self):
+        ground_confidence(None, _snapshot(gather_ok=True, last_state_reason="OOMKilled"))  # must not raise
+
+    def test_grounded_low_confidence_blocks_auto(self, monkeypatch):
+        """Overconfident model (0.95) but a single OOM event → grounded 0.5 → SUGGEST_ONLY."""
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        monkeypatch.setattr("remediation.settings.remediation_auto_min_restarts", 1)
+        d = self._diagnosis(confidence=0.95)
+        ground_confidence(d, _snapshot(gather_ok=True, last_state_reason="OOMKilled", restart_count=0))
+        validations = validate_commands(["kubectl describe pod engine-pod -n prod"])
+        assert decide_action(d, validations) == RemediationAction.SUGGEST_ONLY
+
+    def test_grounded_high_confidence_allows_auto(self, monkeypatch):
+        """A confirmed recurring OOM → grounded 1.0 → passes the gate."""
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        monkeypatch.setattr("remediation.settings.remediation_auto_min_restarts", 1)
+        d = self._diagnosis(confidence=0.3)  # model underconfident; cluster overrides
+        ground_confidence(d, _snapshot(gather_ok=True, last_state_reason="OOMKilled", restart_count=5))
+        validations = validate_commands([
+            "kubectl describe pod engine-pod -n prod",
+            "kubectl annotate deployment engine aiops-checked=true -n prod",
+        ])
+        assert decide_action(d, validations) == RemediationAction.AUTO_REMEDIATE
