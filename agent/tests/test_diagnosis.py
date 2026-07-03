@@ -9,6 +9,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from diagnosis import (
+    DIAGNOSIS_PROMPT,
     build_alert_text,
     format_context_docs,
     format_cluster_facts,
@@ -16,6 +17,7 @@ from diagnosis import (
     _clamp,
 )
 from enrichment import IncidentSnapshot
+from rag import INCIDENT_OUTCOME_ROLLED_BACK, INCIDENT_OUTCOME_ROLLBACK_FAILED
 
 
 # ── Test data ─────────────────────────────────────────────────────────────────
@@ -123,6 +125,50 @@ class TestFormatContextDocs:
         result = format_context_docs(docs)
         assert "doc1" in result
         assert "doc2" in result
+
+    # ── R2·3: incident outcome labeling ───────────────────────────────────────
+    def test_incident_outcome_labeled_in_header(self):
+        docs = [{
+            "document": "Past OOM, limit raised to 512Mi",
+            "distance": 0.1,
+            "metadata": {"error_class": "OOMKilled", "outcome": "cured"},
+        }]
+        result = format_context_docs(docs)
+        assert "[OOMKilled | outcome: cured]" in result
+
+    def test_rolled_back_incident_carries_failed_fix_warning(self):
+        docs = [{
+            "document": "Limit raised 2x, pod kept crashing, reverted",
+            "distance": 0.2,
+            "metadata": {"error_class": "OOMKilled", "outcome": INCIDENT_OUTCOME_ROLLED_BACK},
+        }]
+        result = format_context_docs(docs)
+        assert f"outcome: {INCIDENT_OUTCOME_ROLLED_BACK} — FAILED FIX (reverted, do not repeat)" in result
+
+    def test_rollback_failed_incident_carries_failed_fix_warning(self):
+        docs = [{
+            "document": "Patch applied, revert failed",
+            "distance": 0.2,
+            "metadata": {"error_class": "HighCPU", "outcome": INCIDENT_OUTCOME_ROLLBACK_FAILED},
+        }]
+        result = format_context_docs(docs)
+        assert "FAILED FIX" in result
+
+    def test_runbook_without_outcome_keeps_plain_header(self):
+        docs = [{
+            "document": "Runbook text",
+            "distance": 0.1,
+            "metadata": {"error_class": "OOMKilled", "service": "kubernetes"},
+        }]
+        result = format_context_docs(docs)
+        assert "[OOMKilled] (similarity" in result
+        assert "outcome" not in result
+
+    def test_prompt_instructs_model_about_failed_fixes(self):
+        # Contract guard: the prompt must explain the outcome semantics the
+        # labeled context relies on.
+        assert "rolled_back" in DIAGNOSIS_PROMPT
+        assert "NEVER propose a fix marked as failed" in DIAGNOSIS_PROMPT
 
 
 # ── format_cluster_facts tests (v2 Eje A — grounding) ─────────────────────────

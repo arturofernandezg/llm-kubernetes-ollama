@@ -535,6 +535,31 @@ class TestWebhookWithDiagnosis:
         assert "OOMKilled" in call_kwargs["text"]
         assert call_kwargs["metadata"]["outcome"] == "auto_remediate"
 
+    def test_pipeline_skips_ingest_for_zero_confidence_diagnosis(self, api_client):
+        """E4 quality gate: un diagnóstico con confidence 0.0 (parse failure del LLM)
+        NO se ingesta en ChromaDB — no contamina el retrieval — pero Mattermost
+        recibe el mensaje igual."""
+        alert_data = FIRING_PAYLOAD["alerts"][0]
+        alert = AlertItem(**alert_data)
+        bad_diagnosis = {**mock_diagnosis_result(), "confidence": 0.0}
+
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=bad_diagnosis), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value={
+                 "action": RemediationAction.SUGGEST_ONLY, "execution_log": "",
+                 "blocked_commands": [], "safe_commands": [],
+             }), \
+             patch("main.ingest_incident", new_callable=AsyncMock) as mock_ingest, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_mm:
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client())
+            )
+
+        mock_ingest.assert_not_called()
+        mock_mm.assert_called_once()
+
     def test_pipeline_feedback_failure_is_fail_open(self, api_client):
         """Si ingest_incident falla, Mattermost recibe el mensaje igual (fail-open)."""
         alert_data = FIRING_PAYLOAD["alerts"][0]

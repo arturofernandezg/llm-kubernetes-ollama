@@ -60,6 +60,15 @@ def _counter_value(outcome: str) -> float:
     return 0.0
 
 
+def _verdict_counter_value(outcome: str) -> float:
+    """Current FEEDBACK_VERDICT_COUNTER value for an outcome label (R2)."""
+    for metric in main.FEEDBACK_VERDICT_COUNTER.collect():
+        for sample in metric.samples:
+            if sample.labels.get("outcome") == outcome:
+                return sample.value
+    return 0.0
+
+
 # ── TestRollbackScheduling ────────────────────────────────────────────────────
 
 class TestRollbackScheduling:
@@ -327,6 +336,8 @@ class TestRollbackSerialization:
             alert_item=_make_alert(),
             diagnosis=mock_diagnosis_auto_remediate(),
             scheduled_at=datetime.now(timezone.utc),
+            doc_id="incident-KubePodOOMKilled-1700000000",
+            remediation={"execution_log": "patched", "safe_commands": ["kubectl patch ..."]},
         )
 
     def test_roundtrip_preserves_fields(self):
@@ -337,9 +348,152 @@ class TestRollbackSerialization:
         assert restored.alert_item.labels == ctx.alert_item.labels
         assert restored.scheduled_at == ctx.scheduled_at
 
+    def test_roundtrip_preserves_r2_fields(self):
+        # R2: doc_id + remediation summary must survive the Redis round-trip so the
+        # rollback verdict can re-upsert the same incident document after a restart.
+        ctx = self._make_ctx()
+        restored = _dict_to_rollback(_rollback_to_dict(ctx))
+        assert restored.doc_id == ctx.doc_id
+        assert restored.remediation == ctx.remediation
+
+    def test_backcompat_missing_r2_fields(self):
+        # A context persisted before R2 has no doc_id/remediation keys; deserialize
+        # must default them, not crash.
+        legacy = _rollback_to_dict(self._make_ctx())
+        del legacy["doc_id"]
+        del legacy["remediation"]
+        restored = _dict_to_rollback(legacy)
+        assert restored.doc_id == ""
+        assert restored.remediation == {}
+
     def test_to_dict_is_json_serializable(self):
         # Must survive json.dumps (the exact path store_rollback takes).
         json.dumps(_rollback_to_dict(self._make_ctx()))
+
+
+# ── TestRollbackVerdictReupsert (R2) ──────────────────────────────────────────
+
+class TestRollbackVerdictReupsert:
+    """R2 (real learning loop): the rollback verdict re-upserts the incident
+    document with the final outcome (cured / rolled_back / rollback_failed),
+    reusing ctx.doc_id so the same ChromaDB doc is updated in place. Fail-open."""
+
+    _DOC_ID = "incident-KubePodOOMKilled-1700000000"
+
+    def _setup_context(self, incident_id: str, doc_id: str = _DOC_ID):
+        IN_FLIGHT_ROLLBACKS[incident_id] = main.RollbackContext(
+            incident_id=incident_id,
+            snapshot=_make_snapshot(),
+            alert_item=_make_alert(),
+            diagnosis=mock_diagnosis_auto_remediate(),
+            scheduled_at=datetime.now(timezone.utc),
+            doc_id=doc_id,
+            remediation={"execution_log": "patched",
+                         "safe_commands": ["kubectl set resources ..."]},
+        )
+
+    def _prime_state(self, monkeypatch):
+        monkeypatch.setattr("main.settings.remediation_rollback_timeout", 0)
+        monkeypatch.setattr(main.app.state, "http_client", AsyncMock(), raising=False)
+        monkeypatch.setattr(main.app.state, "chroma_client", object(), raising=False)
+
+    @pytest.mark.asyncio
+    async def test_healthy_reupserts_cured(self, monkeypatch):
+        self._prime_state(monkeypatch)
+        IN_FLIGHT_ROLLBACKS.clear()
+        incident_id = "verdict-cured-001"
+        self._setup_context(incident_id)
+        before = _verdict_counter_value(main.INCIDENT_OUTCOME_CURED)
+
+        healthy = PodHealthStatus(healthy=True, reason="ok",
+                                  observed_phases=["Running"], observed_restarts=[0])
+        with patch("main.check_pod_health", new=AsyncMock(return_value=healthy)), \
+             patch("main.send_mattermost_alert", new=AsyncMock(return_value=True)), \
+             patch("main.ingest_incident", new=AsyncMock()) as mock_ingest:
+            await _evaluate_rollback(incident_id)
+
+        mock_ingest.assert_called_once()
+        assert mock_ingest.call_args.kwargs["doc_id"] == self._DOC_ID
+        assert mock_ingest.call_args.kwargs["metadata"]["outcome"] == main.INCIDENT_OUTCOME_CURED
+        assert _verdict_counter_value(main.INCIDENT_OUTCOME_CURED) == before + 1
+
+    @pytest.mark.asyncio
+    async def test_reverted_reupserts_rolled_back(self, monkeypatch):
+        self._prime_state(monkeypatch)
+        IN_FLIGHT_ROLLBACKS.clear()
+        incident_id = "verdict-rolled-001"
+        self._setup_context(incident_id)
+
+        unhealthy = PodHealthStatus(healthy=False, reason="pods_restarting: [2]",
+                                    observed_phases=["Running"], observed_restarts=[2])
+        ok_result = ExecuteResult(command="kubectl set resources ...", success=True,
+                                  stdout="updated", stderr="", exit_code=0, outcome="ok")
+        with patch("main.check_pod_health", new=AsyncMock(return_value=unhealthy)), \
+             patch("main.revert_patch", new=AsyncMock(return_value=ok_result)), \
+             patch("main.send_mattermost_alert", new=AsyncMock(return_value=True)), \
+             patch("main.ingest_incident", new=AsyncMock()) as mock_ingest:
+            await _evaluate_rollback(incident_id)
+
+        assert mock_ingest.call_args.kwargs["doc_id"] == self._DOC_ID
+        assert mock_ingest.call_args.kwargs["metadata"]["outcome"] == main.INCIDENT_OUTCOME_ROLLED_BACK
+
+    @pytest.mark.asyncio
+    async def test_revert_failed_reupserts_rollback_failed(self, monkeypatch):
+        self._prime_state(monkeypatch)
+        IN_FLIGHT_ROLLBACKS.clear()
+        incident_id = "verdict-failed-001"
+        self._setup_context(incident_id)
+
+        unhealthy = PodHealthStatus(healthy=False, reason="pods_not_running: ['Failed']",
+                                    observed_phases=["Failed"], observed_restarts=[0])
+        fail_result = ExecuteResult(command="kubectl set resources ...", success=False,
+                                    stdout="", stderr="forbidden", exit_code=1, outcome="failed")
+        with patch("main.check_pod_health", new=AsyncMock(return_value=unhealthy)), \
+             patch("main.revert_patch", new=AsyncMock(return_value=fail_result)), \
+             patch("main.send_mattermost_alert", new=AsyncMock(return_value=True)), \
+             patch("main.ingest_incident", new=AsyncMock()) as mock_ingest:
+            await _evaluate_rollback(incident_id)
+
+        assert mock_ingest.call_args.kwargs["metadata"]["outcome"] == main.INCIDENT_OUTCOME_ROLLBACK_FAILED
+
+    @pytest.mark.asyncio
+    async def test_no_doc_id_skips_reupsert(self, monkeypatch):
+        # Back-compat: a context persisted before R2 has no doc_id → no re-upsert,
+        # but the rollback flow still completes.
+        self._prime_state(monkeypatch)
+        IN_FLIGHT_ROLLBACKS.clear()
+        incident_id = "verdict-nodoc-001"
+        self._setup_context(incident_id, doc_id="")
+
+        healthy = PodHealthStatus(healthy=True, reason="ok",
+                                  observed_phases=["Running"], observed_restarts=[0])
+        with patch("main.check_pod_health", new=AsyncMock(return_value=healthy)), \
+             patch("main.send_mattermost_alert", new=AsyncMock(return_value=True)) as mock_mm, \
+             patch("main.ingest_incident", new=AsyncMock()) as mock_ingest:
+            await _evaluate_rollback(incident_id)
+
+        mock_ingest.assert_not_called()
+        mock_mm.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reupsert_failure_is_fail_open(self, monkeypatch):
+        # ingest_incident raising must not break the rollback flow already applied.
+        self._prime_state(monkeypatch)
+        IN_FLIGHT_ROLLBACKS.clear()
+        incident_id = "verdict-failopen-001"
+        self._setup_context(incident_id)
+        before = _counter_value("healthy")
+
+        healthy = PodHealthStatus(healthy=True, reason="ok",
+                                  observed_phases=["Running"], observed_restarts=[0])
+        with patch("main.check_pod_health", new=AsyncMock(return_value=healthy)), \
+             patch("main.send_mattermost_alert", new=AsyncMock(return_value=True)) as mock_mm, \
+             patch("main.ingest_incident", new=AsyncMock(side_effect=RuntimeError("chroma down"))):
+            await _evaluate_rollback(incident_id)  # must not raise
+
+        assert _counter_value("healthy") == before + 1
+        mock_mm.assert_called_once()
+        assert incident_id not in IN_FLIGHT_ROLLBACKS
 
 
 # ── TestRollbackStore ─────────────────────────────────────────────────────────

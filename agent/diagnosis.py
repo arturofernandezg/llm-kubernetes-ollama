@@ -12,6 +12,11 @@ import httpx
 
 from config import settings, logger
 from extraction import extract_json
+from rag import INCIDENT_OUTCOME_ROLLED_BACK, INCIDENT_OUTCOME_ROLLBACK_FAILED
+
+# Outcomes that mark a past fix as FAILED (applied but reverted) — surfaced with
+# an explicit warning in the prompt context so the model does not repeat them.
+FAILED_FIX_OUTCOMES = {INCIDENT_OUTCOME_ROLLED_BACK, INCIDENT_OUTCOME_ROLLBACK_FAILED}
 
 # ── Prompt template ───────────────────────────────────────────────────────────
 
@@ -25,6 +30,7 @@ RULES:
 - "confidence" must be a float between 0.0 and 1.0.
 - If context is insufficient, set confidence below 0.5 and risk to "high".
 - NEVER suggest destructive commands (delete namespace, delete pvc, rm -rf).
+- PAST INCIDENTS carry their final outcome: "cured" means the fix worked; "rolled_back" or "rollback_failed" means the fix was applied and FAILED (it was reverted). NEVER propose a fix marked as failed again — propose a different approach or lower your confidence.
 
 OUTPUT SCHEMA:
 {{
@@ -78,6 +84,13 @@ def format_context_docs(docs: list[dict]) -> str:
     for doc in docs:
         meta = doc.get("metadata", {})
         header = meta.get("error_class", "unknown")
+        # Incidents carry their final outcome (R2): label it so the model can
+        # tell a good precedent (cured) from a fix that failed and was reverted.
+        outcome = meta.get("outcome")
+        if outcome:
+            header = f"{header} | outcome: {outcome}"
+            if outcome in FAILED_FIX_OUTCOMES:
+                header += " — FAILED FIX (reverted, do not repeat)"
         distance = doc.get("distance", 0)
         parts.append(f"[{header}] (similarity: {1 - distance:.2f})\n{doc['document']}")
     return "\n\n".join(parts)

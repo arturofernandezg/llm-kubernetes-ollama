@@ -10,6 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from rag import (
     build_rag_query,
+    strip_pod_hash,
+    make_incident_doc_id,
+    incident_worth_ingesting,
+    INCIDENT_OUTCOME_PENDING,
+    INCIDENT_OUTCOME_CURED,
+    INCIDENT_OUTCOME_ROLLED_BACK,
+    INCIDENTS_RETRIEVAL_FILTER,
     generate_embedding,
     retrieve_context,
     ingest_runbook,
@@ -110,6 +117,54 @@ class TestBuildRagQuery:
         query = build_rag_query({"alertname": "HighCPU", "severity": "warning"}, "")
         assert "HighCPU" in query
         assert "warning" in query
+
+    def test_strips_deployment_pod_hash_in_query(self):
+        # Real k8s Deployment pod: 5-char rand suffix triggers the strip.
+        labels = {"alertname": "KubePodOOMKilled", "pod": "frontend-8d7c4b-xnq2p"}
+        query = build_rag_query(labels, "")
+        assert "pod frontend" in query
+        assert "8d7c4b" not in query
+        assert "xnq2p" not in query
+
+
+# ── strip_pod_hash tests (R3 — query hygiene) ─────────────────────────────────
+
+class TestStripPodHash:
+    def test_deployment_pod(self):
+        # <name>-<rs-hash>-<rand>
+        assert strip_pod_hash("frontend-8d7c4b-xnq2p") == "frontend"
+
+    def test_deployment_pod_10char_hash(self):
+        assert strip_pod_hash("api-6799fc88d8-2k4m9") == "api"
+
+    def test_multi_segment_workload_name_preserved(self):
+        assert strip_pod_hash("my-cool-app-8d7c4b-xnq2p") == "my-cool-app"
+
+    def test_statefulset_ordinal(self):
+        assert strip_pod_hash("postgres-0") == "postgres"
+        assert strip_pod_hash("redis-12") == "redis"
+
+    def test_bare_rand_suffix_with_digit(self):
+        # ReplicaSet/DaemonSet pod: single rand suffix containing a digit.
+        assert strip_pod_hash("frontend-x2k9p") == "frontend"
+
+    def test_real_word_suffix_not_stripped(self):
+        # No digit + not a hash pattern → keep it (avoid eating real names).
+        assert strip_pod_hash("my-redis") == "my-redis"
+
+    def test_short_suffix_not_stripped(self):
+        # 3-char suffix doesn't match the 5-char rand pattern.
+        assert strip_pod_hash("nginx-7d4f8b-x2k") == "nginx-7d4f8b-x2k"
+
+    def test_plain_name_unchanged(self):
+        assert strip_pod_hash("frontend") == "frontend"
+
+    def test_empty_string(self):
+        assert strip_pod_hash("") == ""
+
+    def test_never_returns_empty(self):
+        # Pathological input that would strip to nothing falls back to original.
+        assert strip_pod_hash("-0") == "-0"
 
 
 # ── generate_embedding tests ──────────────────────────────────────────────────
@@ -300,6 +355,61 @@ class TestMetadataFilteredRetrieval:
         )
 
         assert runbooks_col.query.call_count == 1
+
+
+# ── R2·3: outcome-aware incident retrieval ────────────────────────────────────
+
+class TestIncidentsOutcomeFilter:
+    def test_filter_excludes_pending_only(self):
+        # Guard the shape: pending is excluded; settled failures (rolled_back /
+        # rollback_failed) stay retrievable as labeled negative knowledge.
+        assert INCIDENTS_RETRIEVAL_FILTER == {"outcome": {"$ne": INCIDENT_OUTCOME_PENDING}}
+
+    @pytest.mark.asyncio
+    async def test_incident_query_carries_outcome_filter(self):
+        http_client = mock_ollama_embedding_client()
+        chroma, _, incidents_col = mock_chroma_client(
+            incident_docs=[{"id": "inc-001", "document": "past OOM cured", "distance": 0.2,
+                            "metadata": {"error_class": "OOMKilled", "outcome": "cured"}}],
+        )
+
+        await retrieve_context("OOMKilled pod nginx", http_client, chroma_client=chroma)
+
+        _, kwargs = incidents_col.query.call_args
+        assert kwargs["where"] == INCIDENTS_RETRIEVAL_FILTER
+
+    @pytest.mark.asyncio
+    async def test_all_pending_incidents_yield_empty_context(self):
+        """No semantic fallback on incidents: a filter miss returns an empty list."""
+        http_client = mock_ollama_embedding_client()
+        chroma, _, incidents_col = mock_chroma_client(
+            incident_docs=[{"id": "inc-pending", "document": "unverified fix", "distance": 0.1,
+                            "metadata": {"outcome": INCIDENT_OUTCOME_PENDING}}],
+        )
+        # count()=1 (collection has docs) but the where filter matches none.
+        incidents_col.query.return_value = {
+            "ids": [[]], "documents": [[]], "distances": [[]], "metadatas": [[]],
+        }
+
+        result = await retrieve_context("test", http_client, chroma_client=chroma)
+
+        assert result["incidents"] == []
+        incidents_col.query.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rolled_back_incident_is_still_retrieved(self):
+        """Settled failures are exposed (labeled in the prompt), not hidden."""
+        http_client = mock_ollama_embedding_client()
+        chroma, _, _ = mock_chroma_client(
+            incident_docs=[{"id": "inc-rb", "document": "fix reverted", "distance": 0.15,
+                            "metadata": {"error_class": "OOMKilled",
+                                         "outcome": INCIDENT_OUTCOME_ROLLED_BACK}}],
+        )
+
+        result = await retrieve_context("OOMKilled pod", http_client, chroma_client=chroma)
+
+        assert result["incidents"][0]["id"] == "inc-rb"
+        assert result["incidents"][0]["metadata"]["outcome"] == INCIDENT_OUTCOME_ROLLED_BACK
 
 
 # ── ingest_runbook tests ──────────────────────────────────────────────────────
@@ -539,7 +649,8 @@ class TestBuildIncidentDocument:
 
     def test_metadata_has_required_fields(self):
         _, _, metadata = build_incident_document(SAMPLE_ALERT, SAMPLE_DIAGNOSIS, SAMPLE_REMEDIATION)
-        assert metadata["error_class"] == "KubePodOOMKilled"
+        # error_class stores the MAPPED class (runbook vocabulary), not the raw alertname
+        assert metadata["error_class"] == "OOMKilled"
         assert metadata["outcome"] == "auto_remediate"
         assert metadata["confidence"] == 0.85
         assert metadata["risk"] == "low"
@@ -557,6 +668,80 @@ class TestBuildIncidentDocument:
         assert metadata["outcome"] == "no_remediation"
         assert metadata["fix_applied"] == "none"
         assert "none" in text
+
+    # ── R2 (real learning loop): doc_id reuse + outcome override ──────────────
+    def test_doc_id_override_is_reused(self):
+        # The rollback verdict re-upsert passes the original doc_id so it updates
+        # the same ChromaDB document instead of creating a new one.
+        fixed = "incident-KubePodOOMKilled-1700000000"
+        doc_id, _, _ = build_incident_document(
+            SAMPLE_ALERT, SAMPLE_DIAGNOSIS, SAMPLE_REMEDIATION, doc_id=fixed,
+        )
+        assert doc_id == fixed
+
+    def test_outcome_override_supersedes_action(self):
+        # A verdict outcome (cured/rolled_back) overrides the provisional action
+        # in both the metadata and the text.
+        _, text, metadata = build_incident_document(
+            SAMPLE_ALERT, SAMPLE_DIAGNOSIS, SAMPLE_REMEDIATION,
+            outcome=INCIDENT_OUTCOME_ROLLED_BACK,
+        )
+        assert metadata["outcome"] == INCIDENT_OUTCOME_ROLLED_BACK
+        assert f"Action: {INCIDENT_OUTCOME_ROLLED_BACK}" in text
+
+    def test_outcome_override_works_without_action_key(self):
+        # At verdict time the stored remediation summary has no "action" key
+        # (only execution_log + safe_commands); the outcome override must still work.
+        summary = {"execution_log": "patched to 512Mi", "safe_commands": ["kubectl patch ..."]}
+        _, text, metadata = build_incident_document(
+            SAMPLE_ALERT, SAMPLE_DIAGNOSIS, summary, outcome=INCIDENT_OUTCOME_CURED,
+        )
+        assert metadata["outcome"] == INCIDENT_OUTCOME_CURED
+        assert metadata["fix_applied"] == "kubectl patch ..."
+        assert "patched to 512Mi" in text
+
+    def test_no_override_preserves_provisional_outcome(self):
+        # Default (initial ingest) behaviour is unchanged: outcome = action value.
+        _, _, metadata = build_incident_document(SAMPLE_ALERT, SAMPLE_DIAGNOSIS, SAMPLE_REMEDIATION)
+        assert metadata["outcome"] == "auto_remediate"
+
+    def test_error_class_identity_for_unknown_alertname(self):
+        # An alertname outside the KubePod mapping is stored as-is (identity).
+        alert = {**SAMPLE_ALERT, "labels": {**SAMPLE_ALERT["labels"], "alertname": "PodEvicted"}}
+        _, _, metadata = build_incident_document(alert, SAMPLE_DIAGNOSIS, SAMPLE_REMEDIATION)
+        assert metadata["error_class"] == "PodEvicted"
+
+
+class TestIncidentWorthIngesting:
+    """E4 quality gate: zero/absent confidence (LLM parse failure) is not a precedent."""
+
+    def test_parsed_diagnosis_is_worth_ingesting(self):
+        assert incident_worth_ingesting(SAMPLE_DIAGNOSIS) is True
+
+    def test_low_but_nonzero_confidence_is_kept(self):
+        assert incident_worth_ingesting({**SAMPLE_DIAGNOSIS, "confidence": 0.1}) is True
+
+    def test_zero_confidence_is_rejected(self):
+        # generate_diagnosis sets confidence=0.0 when the LLM output is unparseable.
+        assert incident_worth_ingesting({**SAMPLE_DIAGNOSIS, "confidence": 0.0}) is False
+
+    def test_missing_confidence_is_rejected(self):
+        assert incident_worth_ingesting({"diagnosis": "x"}) is False
+
+    def test_non_numeric_confidence_is_rejected(self):
+        assert incident_worth_ingesting({**SAMPLE_DIAGNOSIS, "confidence": "high"}) is False
+        assert incident_worth_ingesting({**SAMPLE_DIAGNOSIS, "confidence": None}) is False
+
+
+class TestMakeIncidentDocId:
+    def test_format_and_prefix(self):
+        doc_id = make_incident_doc_id("KubePodOOMKilled")
+        assert doc_id.startswith("incident-KubePodOOMKilled-")
+        assert doc_id.rsplit("-", 1)[1].isdigit()
+
+    def test_pending_constant_value(self):
+        # Guard the wire value the retrieval filter (R2·3) will key on.
+        assert INCIDENT_OUTCOME_PENDING == "auto_pending"
 
 
 # ── ingest_incident tests ─────────────────────────────────────────────────────

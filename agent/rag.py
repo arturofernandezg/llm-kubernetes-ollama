@@ -10,6 +10,7 @@ Manages two ChromaDB collections:
 Embeddings are generated in-cluster via Ollama (nomic-embed-text).
 """
 
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -222,10 +223,44 @@ async def ingest_incident(
 
 # ── Incident document builder (feedback loop) ─────────────────────────────────
 
+# Final incident outcomes recorded once the rollback verdict is known (R2 —
+# real learning loop). At diagnosis time the incident is provisional
+# (INCIDENT_OUTCOME_PENDING); the verdict re-upserts the same doc with the true
+# result so retrieval never cites a rolled-back fix as a good precedent.
+INCIDENT_OUTCOME_PENDING = "auto_pending"       # patch applied, verdict not yet known
+INCIDENT_OUTCOME_CURED = "cured"                # pod healthy after the wait window
+INCIDENT_OUTCOME_ROLLED_BACK = "rolled_back"    # still failing → reverted
+INCIDENT_OUTCOME_ROLLBACK_FAILED = "rollback_failed"  # unhealthy AND revert failed
+
+
+def make_incident_doc_id(alertname: str) -> str:
+    """Build an incident document id. Shared between the initial ingest and the
+    rollback verdict re-upsert (R2) so both write the same ChromaDB document."""
+    return f"incident-{alertname}-{int(time.time())}"
+
+
+def incident_worth_ingesting(diagnosis: dict) -> bool:
+    """Quality gate for the feedback-loop ingest (E4 — RAG contamination).
+
+    A diagnosis the LLM failed to produce (unparseable output → confidence 0.0)
+    or that the model itself scored at zero confidence carries no precedent
+    value — archiving it would feed garbage back into future retrievals.
+    Deterministic, no tunable threshold: only zero/absent/invalid confidence is
+    rejected; a low-but-parsed confidence is still legitimate history.
+    """
+    try:
+        return float(diagnosis.get("confidence", 0.0)) > 0.0
+    except (TypeError, ValueError):
+        return False
+
+
 def build_incident_document(
     alert: dict,
     diagnosis: dict,
     remediation: dict | None,
+    *,
+    doc_id: str | None = None,
+    outcome: str | None = None,
 ) -> tuple[str, str, dict]:
     """
     Build (doc_id, text, metadata) for incident persistence in ChromaDB.
@@ -251,20 +286,30 @@ def build_incident_document(
     description = annotations.get("description", "")
 
     now = int(time.time())
-    doc_id = f"incident-{alertname}-{now}"
+    # doc_id is reused on the rollback-verdict re-upsert (R2); generate a fresh one
+    # only for the initial ingest.
+    doc_id = doc_id or make_incident_doc_id(alertname)
 
-    # Determine outcome from remediation action
+    # Determine the provisional outcome from the remediation action.
     if remediation is None:
-        outcome = "no_remediation"
+        outcome_value = "no_remediation"
         action_str = "none"
         execution_str = ""
         fix_applied = "none"
     else:
-        outcome = remediation["action"].value  # "auto_remediate" | "escalate" | "suggest_only"
-        action_str = outcome
+        action = remediation.get("action")
+        outcome_value = action.value if action is not None else "unknown"
+        action_str = outcome_value
         execution_str = remediation.get("execution_log", "")
         safe_cmds = remediation.get("safe_commands", [])
         fix_applied = ", ".join(safe_cmds) if safe_cmds else "none"
+
+    # R2: an explicit verdict (cured / rolled_back / ...) supersedes the provisional
+    # action recorded at diagnosis time. The re-upsert passes it; the initial ingest
+    # leaves it None so behaviour is unchanged.
+    if outcome is not None:
+        outcome_value = outcome
+        action_str = outcome
 
     confidence_pct = int(diagnosis["confidence"] * 100)
     commands = diagnosis.get("commands", [])
@@ -288,8 +333,11 @@ def build_incident_document(
     text = "\n".join(text_parts)
 
     metadata = {
-        "error_class": alertname,
-        "outcome": outcome,
+        # Store the mapped class (not the raw Prometheus alertname) so incidents
+        # share the runbooks' error_class vocabulary (R1) — enables class-filtered
+        # incident retrieval later and correct class headers in the prompt.
+        "error_class": error_class_for_alertname(alertname) or alertname,
+        "outcome": outcome_value,
         "fix_applied": fix_applied,
         "confidence": diagnosis["confidence"],
         "risk": diagnosis["risk"],
@@ -300,6 +348,34 @@ def build_incident_document(
 
 
 # ── Query construction ────────────────────────────────────────────────────────
+
+# Kubernetes suffixes controller names to make pod names unique:
+#   Deployment            → <name>-<replicaset-hash>-<rand>  (frontend-8d7c4b-xnq2p)
+#   ReplicaSet/DaemonSet  → <name>-<rand>                    (frontend-xnq2p)
+#   StatefulSet           → <name>-<ordinal>                 (postgres-0)
+# The hash/rand/ordinal carries no semantic signal for retrieval and drags the
+# embedding toward wrong near-neighbours on sparse descriptions (R3 — query
+# hygiene). Reduce the pod name to its workload name for the query only; the
+# incident document keeps the real pod name for forensics.
+_POD_HASH_RE = re.compile(
+    r"(?:"
+    r"-[a-z0-9]{5,10}-[a-z0-9]{5}"      # Deployment pod: <rs-hash>-<rand>
+    r"|-\d+"                            # StatefulSet ordinal: <name>-0
+    r"|-(?=[a-z0-9]*\d)[a-z0-9]{5}"     # bare RS/DS rand suffix (has a digit)
+    r")$"
+)
+
+
+def strip_pod_hash(pod: str) -> str:
+    """Reduce a pod name to its workload name by stripping k8s-generated suffixes.
+
+    Conservative: only strips the standard Deployment/StatefulSet/DaemonSet
+    patterns, and never returns empty (falls back to the original pod name).
+    """
+    if not pod:
+        return pod
+    return _POD_HASH_RE.sub("", pod) or pod
+
 
 def build_rag_query(alert_labels: dict, description: str) -> str:
     """
@@ -314,7 +390,7 @@ def build_rag_query(alert_labels: dict, description: str) -> str:
 
     parts = [alertname]
     if pod:
-        parts.append(f"pod {pod}")
+        parts.append(f"pod {strip_pod_hash(pod)}")
     if namespace:
         parts.append(f"namespace {namespace}")
     if container:
@@ -368,6 +444,14 @@ def runbook_filter_for_alert(alert_labels: dict) -> Optional[dict]:
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
+# R2·3: never cite an in-flight (unverified) fix as precedent — an auto_pending
+# incident becomes cured/rolled_back only when the rollback verdict lands.
+# Settled failures (rolled_back / rollback_failed) stay retrievable ON PURPOSE:
+# they are negative knowledge ("this fix did not cure"), surfaced with their
+# outcome label in the prompt (diagnosis.format_context_docs) so the model
+# avoids repeating a fix that already failed.
+INCIDENTS_RETRIEVAL_FILTER = {"outcome": {"$ne": INCIDENT_OUTCOME_PENDING}}
+
 async def retrieve_context(
     query_text: str,
     http_client: httpx.AsyncClient,
@@ -419,11 +503,14 @@ async def retrieve_context(
             "metadata": runbook_results["metadatas"][0][i],
         })
 
-    # Query incidents (may be empty initially)
+    # Query incidents (may be empty initially). Pending (unverified) incidents are
+    # excluded — no semantic fallback here: an empty incident context is a normal
+    # state, and falling back would defeat the filter (R2·3).
     if incidents_col.count() > 0:
         incident_results = incidents_col.query(
             query_embeddings=[query_embedding],
             n_results=min(top_k_incidents, incidents_col.count()),
+            where=INCIDENTS_RETRIEVAL_FILTER,
             include=["documents", "metadatas", "distances"],
         )
         for i in range(len(incident_results["ids"][0])):

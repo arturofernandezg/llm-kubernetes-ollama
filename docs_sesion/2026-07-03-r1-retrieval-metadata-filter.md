@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-03
 slug: r1-retrieval-metadata-filter
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

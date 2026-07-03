@@ -7,7 +7,7 @@ natural, usando un LLM local (Ollama) como motor de inferencia.
 
 import asyncio
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, timezone
 import hmac
 from typing import Annotated
@@ -35,7 +35,9 @@ from mattermost import send_mattermost_alert, send_escalation_with_buttons, make
 from rag import (
     build_rag_query, retrieve_context, get_chroma_client, ensure_collections,
     build_incident_document, ingest_incident, runbook_filter_for_alert,
-    COLLECTION_INCIDENTS,
+    make_incident_doc_id, incident_worth_ingesting, COLLECTION_INCIDENTS,
+    INCIDENT_OUTCOME_PENDING, INCIDENT_OUTCOME_CURED,
+    INCIDENT_OUTCOME_ROLLED_BACK, INCIDENT_OUTCOME_ROLLBACK_FAILED,
 )
 from diagnosis import generate_diagnosis
 from remediation import (
@@ -75,7 +77,15 @@ REMEDIATION_COUNTER = Counter(
 FEEDBACK_COUNTER = Counter(
     "aiops_feedback_total",
     "Incident persistence attempts",
-    ["outcome"],  # "persisted" | "skipped" | "failed"
+    ["outcome"],  # "persisted" | "skipped" | "failed" | "verdict_failed"
+)
+
+# R2 (real learning loop): distribution of final rollback verdicts re-written into
+# the incident collection — the narrable "did the auto-fix actually hold?" signal.
+FEEDBACK_VERDICT_COUNTER = Counter(
+    "aiops_feedback_verdict_total",
+    "Incident outcomes re-upserted after the rollback verdict",
+    ["outcome"],  # "cured" | "rolled_back" | "rollback_failed"
 )
 
 # ── Métricas Chaos Engineering ───────────────────────────────────────────────
@@ -149,6 +159,12 @@ class RollbackContext:
     alert_item: AlertItem
     diagnosis: dict
     scheduled_at: datetime
+    # R2 (real learning loop): the ChromaDB incident doc_id + a serializable
+    # remediation summary, so the rollback verdict can re-upsert the same document
+    # with the true outcome (cured / rolled_back). Defaulted for back-compat with
+    # contexts persisted before R2.
+    doc_id: str = ""
+    remediation: dict = field(default_factory=dict)
 
 
 IN_FLIGHT_ROLLBACKS: dict[str, RollbackContext] = {}
@@ -193,6 +209,47 @@ def _dict_to_escalation(data: dict) -> PendingEscalation:
     )
 
 
+def _remediation_summary(remediation_result: dict | None) -> dict:
+    """JSON-serializable subset of a remediation result, enough to regenerate the
+    incident document's text at rollback-verdict time (R2). Excludes the action
+    (the verdict outcome supersedes it) and non-serializable objects (enums,
+    dataclasses) so it survives the Redis round-trip."""
+    if not remediation_result:
+        return {}
+    return {
+        "execution_log": remediation_result.get("execution_log", ""),
+        "safe_commands": list(remediation_result.get("safe_commands", [])),
+    }
+
+
+async def _reupsert_incident_outcome(ctx: RollbackContext, outcome: str) -> None:
+    """R2 (real learning loop): re-write the incident document with the final rollback
+    verdict so retrieval reflects reality — a rolled-back fix stops being a positive
+    precedent. Reuses ctx.doc_id (shared with the diagnosis-time ingest) so the upsert
+    updates the same ChromaDB document in place. Fail-open: a persistence error never
+    affects the rollback outcome already applied."""
+    if not ctx.doc_id:
+        return
+    try:
+        alert_data = {
+            "labels": ctx.alert_item.labels,
+            "annotations": ctx.alert_item.annotations,
+        }
+        doc_id, text, metadata = build_incident_document(
+            alert_data, ctx.diagnosis, ctx.remediation,
+            doc_id=ctx.doc_id, outcome=outcome,
+        )
+        await ingest_incident(
+            doc_id=doc_id, text=text, metadata=metadata,
+            http_client=app.state.http_client,
+            chroma_client=app.state.chroma_client,
+        )
+        FEEDBACK_VERDICT_COUNTER.labels(outcome=outcome).inc()
+    except Exception as exc:
+        logger.warning("Failed to re-upsert incident verdict %s: %s", ctx.doc_id, exc)
+        FEEDBACK_COUNTER.labels(outcome="verdict_failed").inc()
+
+
 def _rollback_to_dict(ctx: RollbackContext) -> dict:
     """Serialize a RollbackContext to a JSON-serializable dict for Redis storage."""
     return {
@@ -201,6 +258,8 @@ def _rollback_to_dict(ctx: RollbackContext) -> dict:
         "alert_item": ctx.alert_item.model_dump(mode="json"),
         "diagnosis": ctx.diagnosis,
         "scheduled_at": ctx.scheduled_at.isoformat(),
+        "doc_id": ctx.doc_id,
+        "remediation": ctx.remediation,
     }
 
 
@@ -212,6 +271,8 @@ def _dict_to_rollback(data: dict) -> RollbackContext:
         alert_item=AlertItem(**data["alert_item"]),
         diagnosis=data["diagnosis"],
         scheduled_at=datetime.fromisoformat(data["scheduled_at"]),
+        doc_id=data.get("doc_id", ""),
+        remediation=data.get("remediation", {}),
     )
 
 
@@ -230,6 +291,8 @@ async def _schedule_rollback_evaluation(
     snapshot: PrePatchSnapshot,
     alert_item: AlertItem,
     diagnosis: dict,
+    doc_id: str = "",
+    remediation: dict | None = None,
 ) -> None:
     """Register a rollback context and schedule the evaluation task."""
     ctx = RollbackContext(
@@ -238,6 +301,8 @@ async def _schedule_rollback_evaluation(
         alert_item=alert_item,
         diagnosis=diagnosis,
         scheduled_at=datetime.now(timezone.utc),
+        doc_id=doc_id,
+        remediation=remediation or {},
     )
     async with _ROLLBACK_LOCK:
         IN_FLIGHT_ROLLBACKS[incident_id] = ctx
@@ -287,6 +352,7 @@ async def _evaluate_rollback(incident_id: str) -> None:
 
         if health.healthy:
             ROLLBACK_COUNTER.labels(outcome="healthy").inc()
+            await _reupsert_incident_outcome(ctx, INCIDENT_OUTCOME_CURED)
             msg = (
                 f"✅ **Remediation healthy** — `{alert_name}`\n"
                 f"Pod(s) running normally {settings.remediation_rollback_timeout}s after patch. "
@@ -299,6 +365,7 @@ async def _evaluate_rollback(incident_id: str) -> None:
             resource = _limit_resource(ctx.snapshot.field)
             if result.success:
                 ROLLBACK_COUNTER.labels(outcome="reverted").inc()
+                await _reupsert_incident_outcome(ctx, INCIDENT_OUTCOME_ROLLED_BACK)
                 msg = (
                     f"🔄 **Rollback executed** — `{alert_name}`\n"
                     f"Pod(s) still failing after {settings.remediation_rollback_timeout}s "
@@ -308,6 +375,7 @@ async def _evaluate_rollback(incident_id: str) -> None:
                 )
             else:
                 ROLLBACK_COUNTER.labels(outcome="revert_failed").inc()
+                await _reupsert_incident_outcome(ctx, INCIDENT_OUTCOME_ROLLBACK_FAILED)
                 msg = (
                     f"⚠️ **Rollback FAILED** — `{alert_name}`\n"
                     f"Pod(s) unhealthy (reason: `{health.reason}`) AND revert command failed.\n"
@@ -864,7 +932,16 @@ async def _process_alert_with_diagnosis(
                 logger.warning("Remediation processing failed for %s: %r", alert_name, exc)
                 REMEDIATION_COUNTER.labels(action="skipped").inc()
 
+        # R2 (real learning loop): one incident doc_id shared between the feedback-loop
+        # ingest below and the rollback verdict re-upsert, so both write the same
+        # ChromaDB document (the verdict updates the provisional outcome in place).
+        incident_doc_id = (
+            make_incident_doc_id(alert.labels.get("alertname", "UnknownAlert"))
+            if diagnosis is not None else None
+        )
+
         # Rollback scheduling: if AUTO_REMEDIATE executed at least one command, schedule health check
+        rollback_scheduled = False
         if (
             settings.remediation_rollback_enabled
             and remediation_result is not None
@@ -874,16 +951,32 @@ async def _process_alert_with_diagnosis(
             snapshot: PrePatchSnapshot | None = remediation_result.get("pre_patch_snapshot")
             if snapshot is not None:
                 incident_id = str(uuid.uuid4())
-                await _schedule_rollback_evaluation(incident_id, snapshot, alert, diagnosis)
+                await _schedule_rollback_evaluation(
+                    incident_id, snapshot, alert, diagnosis,
+                    doc_id=incident_doc_id or "",
+                    remediation=_remediation_summary(remediation_result),
+                )
+                rollback_scheduled = True
             else:
                 ROLLBACK_COUNTER.labels(outcome="skipped_no_snapshot").inc()
 
-        # Feedback loop: persist incident in ChromaDB (fail-open)
-        if diagnosis is not None:
+        # Feedback loop: persist incident in ChromaDB (fail-open). R2: when a rollback
+        # verdict is pending, the incident is provisional (auto_pending) — the verdict
+        # re-upsert later flips it to cured/rolled_back so retrieval never cites an
+        # unverified (or reverted) fix as a good precedent.
+        if diagnosis is None:
+            FEEDBACK_COUNTER.labels(outcome="skipped").inc()
+        elif not incident_worth_ingesting(diagnosis):
+            # E4 quality gate: an unparseable/zero-confidence diagnosis is not a
+            # precedent — archiving it would contaminate future retrievals.
+            logger.info("Skipping incident ingest for %s: zero-confidence diagnosis", alert_name)
+            FEEDBACK_COUNTER.labels(outcome="skipped_low_quality").inc()
+        else:
             try:
                 alert_data = {"labels": alert.labels, "annotations": alert.annotations}
                 doc_id, text, metadata = build_incident_document(
-                    alert_data, diagnosis, remediation_result,
+                    alert_data, diagnosis, remediation_result, doc_id=incident_doc_id,
+                    outcome=INCIDENT_OUTCOME_PENDING if rollback_scheduled else None,
                 )
                 await ingest_incident(
                     doc_id=doc_id, text=text, metadata=metadata,
@@ -893,8 +986,6 @@ async def _process_alert_with_diagnosis(
             except Exception as exc:
                 logger.warning("Failed to persist incident for %s: %s", alert_name, exc)
                 FEEDBACK_COUNTER.labels(outcome="failed").inc()
-        else:
-            FEEDBACK_COUNTER.labels(outcome="skipped").inc()
 
         chaos_outcome = remediation_result["action"].value if remediation_result else "no_diagnosis"
 

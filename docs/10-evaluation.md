@@ -7,6 +7,27 @@
 
 ---
 
+## Actualización 2026-07-03 — R1: retrieval guiado por metadata (`error_class`)
+
+> Realiza la mejora que este mismo doc anticipaba (§"Distancias RAG comprimidas": *"añadir filtrado por metadata (`error_class`) en las queries"*). En vez de pelear la separabilidad del embedding, se **ancla la clase de error que la propia alerta ya nombra**. `retrieve_context` ya aceptaba `metadata_filter` pero producción nunca lo pasaba. Nuevo en `rag.py`: `ALERTNAME_TO_ERROR_CLASS` + `error_class_for_alertname()` + `runbook_filter_for_alert()`; `main.py` construye el filtro una vez y lo pasa a las dos llamadas de retrieval. **Two-stage**: query filtrada por clase; si el filtro no matchea ningún runbook (clase desconocida/mismatch) cae a query semántica sin filtro → nunca devuelve contexto vacío por un filtro que erró.
+
+**A/B en cluster (`eval_retrieval.py`, N=15, toggle `EVAL_NO_FILTER=1` para el baseline):**
+
+| | precision@1 | precision@3 |
+|---|---|---|
+| Baseline semántico | 73.3% (11/15) | 86.7% (13/15) |
+| **R1 (filtro `error_class`)** | **100% (15/15)** | **100% (15/15)** |
+| Gain | **+26.7 pp** | **+13.3 pp** |
+
+Ficheros: `evaluation_results/retrieval_2026-07-03_{baseline,r1filter}.json`.
+
+**Hallazgos:**
+- **Gotcha que bloqueaba el filtro**: el `alertname` de Prometheus **no** es el `error_class`. Los pod-level llevan prefijo `KubePod` (`KubePodOOMKilled`→`OOMKilled`, `KubePodCrashLoopBackOff`→`CrashLoopBackOff`, `KubePodImagePullBackOff`→`ImagePullBackOff`), mientras `HighCPU`/`HighMemory`/`TargetDown` son 1:1. Un `where={"error_class": alertname}` naive fallaba justo para los 3 prefijados. El mapping determinista lo traduce.
+- **Los 4 misses residuales del baseline desaparecen**: eran confusiones entre clases próximas (imagepull↔podnotready, oom↔highmemory) sobre descripciones pobres — exactamente lo que el embedding no discrimina y el filtro por clase resuelve de raíz.
+- **Coherente con la tesis v2** ("determinista donde se puede, semántico como fallback"): el ancla es determinista, el semántico queda como red de seguridad para clases desconocidas (p.ej. futuras alertas KSM del Eje C).
+
+---
+
 ## Actualización 2026-06-30 — Re-medición F3/F4 (CPU + enriquecimiento de contexto)
 
 > Contexto: en cluster, `qwen2.5:1.5b` no proponía `set resources cpu` ante HighCPU. En vez de saltar a un modelo mayor, se midió **offline** primero. **Nuevo script** `eval_model_compare.py` (recorre `--models` × `--alerts`, inyecta el runbook como contexto **sin ChromaDB**, pasa el diagnóstico por el motor real `validate_commands`+`decide_action` con `remediation_auto_cpu_enabled` off/on). **Nuevos datasets** `alerts_highcpu.json` + `alerts_highmemory.json` (variantes mínima vs enriquecida con el límite). Ficheros: `evaluation_results/retrieval_2026-06-30.json`, `model_compare_2026-06-30.json`.

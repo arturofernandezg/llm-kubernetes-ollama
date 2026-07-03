@@ -1,3 +1,5 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
 <title>Review Senior — AIOps Auto-Remediación</title>
 <style>
   :root{
@@ -112,6 +114,16 @@
   .finding .fix{background:var(--accent-soft);padding:10px 14px;margin-top:12px;font-size:14.5px}
   .finding .fix::before{content:"FIX → ";font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--accent);font-weight:700}
   .finding .where{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:8px}
+
+  /* resolved-since-review status overlay (update 2026-07-03) */
+  .chip.done{background:var(--ok-bg);color:var(--ok)}
+  .chip.prog{background:var(--info-bg);color:var(--info)}
+  .finding.done{border-left-color:var(--ok)}
+  .finding.done h4{color:var(--muted)}
+  .done-note{background:var(--ok-bg);color:#1F5A38;padding:10px 14px;margin-top:12px;font-size:14.5px}
+  .done-note::before{content:"RESUELTO 07-03 → ";font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--ok);font-weight:700}
+  .prog-note{background:var(--info-bg);color:#1B4D66;padding:10px 14px;margin-top:12px;font-size:14.5px}
+  .prog-note::before{content:"EN CURSO → ";font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--info);font-weight:700}
 
   /* strengths */
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:24px 0}
@@ -995,12 +1007,24 @@
       <div><div class="n" style="color:var(--warn)">7</div><div class="t" style="color:var(--warn)">Media</div></div>
       <div><div class="n" style="color:var(--low)">5</div><div class="t" style="color:var(--low)">Baja</div></div>
       <div><div class="n" style="color:var(--ok)">3</div><div class="t" style="color:var(--ok)">P0 previos cerrados</div></div>
+      <div><div class="n" style="color:var(--ok)">4</div><div class="t" style="color:var(--ok)">Alta resueltos 07-03</div></div>
+    </div>
+
+    <div class="box" style="border-left-color:var(--ok)">
+      <h4>Actualización 2026-07-03 — estado vivo de los hallazgos</h4>
+      <p style="max-width:none">Desde la review (<code>cb2d1db</code>) se han cerrado los <strong>4 Alta testeables con mocks</strong>:
+      <strong>F-01</strong> (cooldown por workload, SETNX TTL 600s fail-closed), <strong>F-02</strong> (gate <code>kind==Deployment</code> en el seal),
+      <strong>F-04</strong> (<code>mattermost_timeout=10s</code> propio) y <strong>F-05</strong> (compensación de la dedup-key si el XADD falla) —
+      además del guard anti-placeholder en <code>secrets-setup.sh</code> y CI en GitHub Actions. Quedan abiertos <strong>F-03</strong> y
+      <strong>F-06</strong> (ambos requieren infra/cluster). En la capa RAG, <strong>F-12</strong> (feedback loop sin gate de calidad)
+      está <em>en curso</em>: R1 (retrieval por metadata, p@1 73%→100%) y R3 (higiene de query) hechos, y R2·1 aterriza el fundamento del
+      bucle real (outcome provisional → veredicto). Los detalles por hallazgo van marcados abajo.</p>
     </div>
 
     <!-- ALTA -->
-    <article class="finding crit">
+    <article class="finding crit done">
       <header><span class="fid">F-01</span><h4>Sin cooldown por workload: episodios encadenados pueden duplicar límites en espiral</h4>
-        <span class="chip crit">Alta</span><span class="chip cat">Corrección / Seguridad</span></header>
+        <span class="chip crit">Alta</span><span class="chip cat">Corrección / Seguridad</span><span class="chip done">Resuelto</span></header>
       <div class="body">
         <p><strong>Escenario:</strong> OOM en un deployment → auto-bump a 2× → el <code>set resources</code> hace rollout →
         pods con <em>nombre nuevo</em> → si sigue OOM, la nueva alerta tiene fingerprint distinto (<code>alertname:ns:pod</code>)
@@ -1012,12 +1036,13 @@
         <div class="fix">Clave Redis <code>cooldown:{ns}/{deployment}</code> (SETNX + TTL ≥ ventana de rollback): segunda remediación
         del mismo workload dentro de la ventana → ESCALATE con reason <code>workload_cooldown</code>. ~30 líneas + tests; reutiliza el patrón de la dedup-key.</div>
         <div class="where">remediation.py:decide_action · main.py:1031 (fingerprint) · sin estado por workload en ningún módulo</div>
+        <div class="done-note"><code>acquire_workload_cooldown()</code> en <code>remediation.py</code>: SETNX <code>aiops:cooldown:{ns}/{name}</code> TTL 600s (&gt; ventana de rollback), gate en la rama auto estructurada de <code>process_remediation</code>. Segundo episodio dentro de la ventana o Redis no verificable → ESCALATE fail-closed con el comando determinista para el humano. Gate fuera de <code>decide_action</code> para mantenerla pura/sin I/O.</div>
       </div>
     </article>
 
-    <article class="finding crit">
+    <article class="finding crit done">
       <header><span class="fid">F-02</span><h4>El kind del workload se resuelve pero no se aplica: StatefulSet/DaemonSet generan un comando inválido</h4>
-        <span class="chip crit">Alta</span><span class="chip cat">Corrección</span></header>
+        <span class="chip crit">Alta</span><span class="chip cat">Corrección</span><span class="chip done">Resuelto</span></header>
       <div class="body">
         <p><code>enrichment._resolve_workload</code> resuelve correctamente <code>workload_kind</code> (Deployment | StatefulSet | DaemonSet),
         pero <code>seal_proposed_action</code> solo copia el <em>nombre</em>, <code>is_structured_remediation</code> no comprueba el kind, y
@@ -1028,6 +1053,7 @@
         <div class="fix">Corto plazo: gate <code>workload_kind == "Deployment"</code> en el seal (kind ≠ Deployment → <code>target_unresolved</code> → R4.7 escala).
         Medio plazo: sintetizar kind-aware — <code>set resources</code> soporta sts/ds; el snapshot/health/revert ya son casi agnósticos.</div>
         <div class="where">remediation.py:206-222 (build_set_resources_command) · :857 (get deployment) · enrichment.py:158,199</div>
+        <div class="done-note">Gate estricto <code>workload_kind == "Deployment"</code> en <code>seal_proposed_action</code> (STS/DS/None → marker <code>target_unresolved</code> → regla 4.7 escala con razón visible). En el seal y no en <code>is_structured_remediation</code> porque el seal es el dueño del contrato "target confirmado". Camino corto elegido; el kind-aware synth queda a medio plazo.</div>
       </div>
     </article>
 
@@ -1047,9 +1073,9 @@
       </div>
     </article>
 
-    <article class="finding crit">
+    <article class="finding crit done">
       <header><span class="fid">F-04</span><h4>Mattermost hereda http_timeout=360s: un chat colgado bloquea la cola ~18 min por alerta</h4>
-        <span class="chip crit">Alta</span><span class="chip cat">Resiliencia</span></header>
+        <span class="chip crit">Alta</span><span class="chip cat">Resiliencia</span><span class="chip done">Resuelto</span></header>
       <div class="body">
         <p><code>_post_with_retry</code> abre su propio cliente con <code>settings.http_timeout</code> — el timeout dimensionado para el
         <em>LLM</em> (300s default, <strong>360s en el deployment</strong>). Con un Mattermost que acepta TCP pero no responde:
@@ -1059,12 +1085,13 @@
         <div class="fix">Timeout propio para Mattermost (p. ej. <code>mattermost_timeout: 10s</code>) + reutilizar el cliente compartido de
         <code>app.state</code>. Regla general: el timeout de cada dependencia se dimensiona por esa dependencia, nunca heredado del peor caso global.</div>
         <div class="where">mattermost.py:38 · config.py:30 · deployment-agent.yaml:75-76 (HTTP_TIMEOUT=360)</div>
+        <div class="done-note">Setting propio <code>mattermost_timeout=10.0</code> en <code>config.py</code>; el cliente de Mattermost deja de heredar el timeout del LLM. Corta el escenario de 18 min de bloqueo de la cola con un chat colgado.</div>
       </div>
     </article>
 
-    <article class="finding crit">
+    <article class="finding crit done">
       <header><span class="fid">F-05</span><h4>Dedup marcada antes del XADD: si el XADD falla, la alerta se pierde de verdad</h4>
-        <span class="chip crit">Alta</span><span class="chip cat">Corrección</span></header>
+        <span class="chip crit">Alta</span><span class="chip cat">Corrección</span><span class="chip done">Resuelto</span></header>
       <div class="body">
         <p>En <code>enqueue_alert</code> el SETNX de la dedup-key ocurre <strong>antes</strong> del XADD. Si el XADD falla
         (Redis OOM, red parpadea), el webhook devuelve 503 y Alertmanager reintenta… pero el reintento choca con la dedup-key
@@ -1074,6 +1101,7 @@
         <div class="fix">En el <code>except</code> del XADD, borrar la dedup-key antes de propagar (compensación), o invertir el orden
         (XADD primero, SETNX después — un duplicado raro es más barato que una pérdida). Test: mock de Redis con XADD que lanza.</div>
         <div class="where">streams.py:115-127</div>
+        <div class="done-note">Compensación en el <code>except</code> del XADD: la dedup-key se borra antes de propagar el error, así el retry de Alertmanager reencola en vez de chocar con una clave huérfana. Elegida sobre invertir el orden SETNX/XADD (que abriría ventana de duplicados en ráfagas).</div>
       </div>
     </article>
 
@@ -1167,7 +1195,7 @@
 
     <article class="finding warn">
       <header><span class="fid">F-12</span><h4>Feedback loop RAG sin gate de calidad: envenenamiento a fuego lento</h4>
-        <span class="chip warn">Media</span><span class="chip cat">ML / Datos</span></header>
+        <span class="chip warn">Media</span><span class="chip cat">ML / Datos</span><span class="chip prog">En curso</span></header>
       <div class="body">
         <p>Cada incidente se persiste en ChromaDB con el diagnóstico <em>del LLM</em> como contenido, incluidos los fallidos y los
         de baja confianza, y ese corpus alimenta los diagnósticos futuros. Sin gate, el sistema aprende de sus propios errores en
@@ -1176,6 +1204,7 @@
         <div class="fix">Gate mínimo inmediato: persistir solo outcomes verificados (auto con health-check sano, o approve humano) y
         etiquetar el resto como <code>unverified</code> excluido del retrieval. El bucle de aprendizaje completo sigue siendo F4.</div>
         <div class="where">main.py:875-891 (persiste todo diagnóstico) · rag.py:build_incident_document</div>
+        <div class="prog-note">F4/RAG en marcha (07-03). <strong>R1</strong>: retrieval guiado por metadata (filtro por <code>error_class</code>, p@1 73%→100%). <strong>R3</strong>: higiene de query (strip del hash de pod). <strong>R2·1</strong> (fundamento del bucle real): la ingesta hoy escribe el <em>outcome provisional</em> (<code>action</code>) antes de saber si el fix curó; ahora <code>build_incident_document</code> acepta <code>doc_id</code> reusable + <code>outcome</code> override, y el <code>RollbackContext</code> lleva el <code>doc_id</code> + resumen de remediación (con round-trip en Redis). Siguiente: <strong>R2·2</strong> re-upsert del mismo doc con el veredicto (<code>cured</code>/<code>rolled_back</code>) + <strong>R2·3</strong> excluir del retrieval lo no verificado — cierra este hallazgo.</div>
       </div>
     </article>
 
@@ -1222,7 +1251,7 @@
 
     <article class="finding low">
       <header><span class="fid">F-15</span><h4>main.py de 1.368 líneas: orquestador, formateador y endpoints en el mismo fichero</h4>
-        <span class="chip low">Baja</span><span class="chip cat">Mantenibilidad</span></header>
+        <span class="chip low">Baja</span><span class="chip cat">Mantenibilidad</span><span class="chip prog">Backlog aceptado</span></header>
       <div class="body">
         <p><code>_process_alert_with_diagnosis</code> son ~200 líneas que mezclan retrieval, enrichment, diagnóstico, remediación,
         rollback, feedback y notificación; el formato Mattermost (6 funciones <code>_format_*</code>) y el ciclo de vida del rollback
@@ -1231,6 +1260,7 @@
         <div class="fix">Extraer <code>pipeline.py</code> (orquestación) y <code>formatting.py</code>; validar la salida del LLM contra
         <code>ProposedAction</code> en <code>diagnosis.py</code> y tipar <code>diagnosis</code> como modelo. Refactor sin cambio de comportamiento, con la suite como red.</div>
         <div class="where">main.py:770-971 · schemas.py:38-46 (ProposedAction huérfano)</div>
+        <div class="prog-note">Decisión 07-03: <strong>modularización asumida como deuda a pagar</strong> (backlog transversal de <code>docs/07</code>). <code>main.py</code> sigue creciendo (R2 le añade wiring); antes de F5/nuevas features toca extraer <code>pipeline.py</code> + <code>formatting.py</code> y tipar <code>diagnosis</code> con <code>ProposedAction</code>. Refactor sin cambio de comportamiento, con la suite (600+ tests) como red. No bloquea el chapter; sí antes de seguir apilando lógica.</div>
       </div>
     </article>
 
@@ -1298,11 +1328,13 @@
       <div class="what">
         <h4>Cerrar los hallazgos altos de esta review</h4>
         <ul>
-          <li><strong>F-01</strong> cooldown por workload · <strong>F-02</strong> gate kind==Deployment · <strong>F-05</strong> compensar dedup-key si XADD falla — los tres son pequeños y testeables con mocks.</li>
-          <li><strong>F-03</strong> chroma vía <code>asyncio.to_thread</code> · <strong>F-04</strong> timeout dedicado Mattermost — aislamiento de dependencias.</li>
+          <li><s><strong>F-01</strong> cooldown por workload · <strong>F-02</strong> gate kind==Deployment · <strong>F-05</strong> compensar dedup-key si XADD falla</s> — <span style="color:var(--ok);font-weight:600">✓ hechos 07-03</span>, testeables con mocks.</li>
+          <li><s><strong>F-04</strong> timeout dedicado Mattermost</s> <span style="color:var(--ok);font-weight:600">✓</span> · <strong>F-03</strong> chroma vía <code>asyncio.to_thread</code> — aislamiento de dependencias (F-03 requiere validar en cluster).</li>
           <li><strong>F-06</strong> decidir la historia de Redis: AOF+PVC, o degradar el claim de durabilidad en docs.</li>
           <li><strong>F-11</strong> incident_id desde la ingesta, propagado por logs/métricas/ChromaDB.</li>
           <li><strong>F-17</strong> logs + events en el enrichment — el primer uso nuevo del LLM (§3.3 #1): solo lenguaje, cero riesgo, valor inmediato en cada mensaje.</li>
+          <li><strong>F-12</strong> gate de calidad del feedback loop — <span style="color:var(--info);font-weight:600">en curso</span> (R1/R3 hechos, R2 fundamento 07-03).</li>
+          <li><strong>F-15</strong> modularizar <code>main.py</code> (<code>pipeline.py</code> + <code>formatting.py</code>) — <span style="color:var(--info);font-weight:600">backlog aceptado</span>, antes de apilar F5.</li>
         </ul>
       </div>
     </div>
