@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # En K8s se usa el FQDN cross-namespace:
     #   http://mattermost-svc.arturo-mattermost.svc.cluster.local:8065/hooks/<token>
     mattermost_webhook_url: str | None = None
+    mattermost_timeout: float = 10.0  # F-04: chat webhook responds in ms; inheriting http_timeout (LLM-sized) held retries hostage for minutes
 
     # ChromaDB (Fase 2 - RAG)
     chromadb_host: str = "chromadb-svc"
@@ -64,6 +65,7 @@ class Settings(BaseSettings):
     remediation_rollback_enabled: bool = True
     remediation_rollback_timeout: int = 300  # seconds to wait before evaluating rollback
     remediation_rollback_grace: int = 30     # seconds for pod rollout before health check
+    remediation_cooldown_seconds: int = 600  # per-workload auto-remediation cooldown (> rollback window: one auto patch per workload per window, breaks patch loops)
 
     # Enrichment (v2 Eje A / P0·1 — grounding) — gather de estado K8s ANTES del LLM.
     # "El cluster informa, el modelo razona": current_value/target salen del snapshot,

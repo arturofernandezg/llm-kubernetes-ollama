@@ -1,0 +1,43 @@
+# CI — test gate + Docker build validation on every push/PR.
+#
+# Mirrors step 1 of cloudbuild.yaml (same python image, same install, same
+# pytest invocation) so a red check here means Cloud Build would have failed
+# its gate too. Image build/push to Artifact Registry stays in Cloud Build
+# (needs GCP credentials); the docker job here only validates the Dockerfile.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            agent/requirements.txt
+            agent/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: agent
+        run: pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        working-directory: agent
+        run: python -m pytest tests/ -v --tb=short
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (no push)
+        run: docker build -t aiops-agent:ci ./agent

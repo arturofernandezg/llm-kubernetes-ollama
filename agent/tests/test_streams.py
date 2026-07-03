@@ -6,6 +6,7 @@ así que se mockea Redis con AsyncMock (patrón del diseño F2).
 
 Comportamiento bajo test:
 - enqueue_alert: encola OK / dedup skip / fail-closed (propaga si Redis cae)
+  / compensación de la dedup-key si el XADD falla (F-05)
 - ensure_group: BUSYGROUP idempotente / otros errores se propagan
 - consume_loop: procesa+XACK / handler que lanza no hace XACK y sigue
 - consumer_name: lee HOSTNAME
@@ -73,6 +74,33 @@ class TestEnqueueAlert:
 
         with pytest.raises(Exception, match="Connection refused"):
             await enqueue_alert(r, '{"payload": "x"}', "OOM:prod:pod-1")
+
+    @pytest.mark.asyncio
+    async def test_xadd_failure_deletes_dedup_key_and_propagates(self):
+        # F-05: sin la compensación, la dedup-key huérfana convertiría el retry
+        # de Alertmanager en un 200 "duplicado benigno" sin encolar nada.
+        r = AsyncMock()
+        r.set.return_value = True
+        r.xadd.side_effect = Exception("XADD failed")
+
+        with pytest.raises(Exception, match="XADD failed"):
+            await enqueue_alert(r, '{"payload": "x"}', "OOM:prod:pod-1")
+
+        r.delete.assert_awaited_once_with("aiops:seen:OOM:prod:pod-1")
+
+    @pytest.mark.asyncio
+    async def test_compensation_delete_failure_warns_and_propagates_xadd_error(self, caplog):
+        r = AsyncMock()
+        r.set.return_value = True
+        r.xadd.side_effect = Exception("XADD failed")
+        r.delete.side_effect = Exception("delete failed too")
+
+        with pytest.raises(Exception, match="XADD failed"):
+            await enqueue_alert(r, '{"payload": "x"}', "OOM:prod:pod-1")
+
+        assert any(
+            "compensation failed" in rec.message for rec in caplog.records
+        )
 
 
 # ── ensure_group ────────────────────────────────────────────────────────────

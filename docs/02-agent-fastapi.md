@@ -20,8 +20,9 @@ Versión actual: 0.6.0
 | `tf_generator.py` | `safe_name()`, `generate_terraform()`, template Terraform | 0 (legacy) |
 | `mattermost.py` | Cliente HTTP async para Mattermost con retry/backoff | 1 |
 | `rag.py` | Cliente ChromaDB, ingesta (runbooks + incidents), query con embedding, construcción de queries enriquecidas | 2 |
-| `diagnosis.py` | Prompt AIOps contextual, `generate_diagnosis()`, parsing JSON estructurado del LLM, `_clamp()` | 2 |
-| `remediation.py` | Validation layer (classify/validate commands), decision engine (9 reglas cascada), executor dual-mode + rollback | 3 |
+| `diagnosis.py` | Prompt AIOps contextual, `generate_diagnosis(..., snapshot=None)`, sección "CLUSTER FACTS" vía `format_cluster_facts()` (fail-soft), parsing JSON estructurado del LLM, `_clamp()` | 2 |
+| `enrichment.py` | Grounding v2 (Eje A): `gather_incident_context(labels)` → `IncidentSnapshot` (container/limits/phase/restart_count/last_state_reason + identidad del workload vía **ownerReferences** pod→RS→Deployment con gate de existencia + `match_labels` del selector real). `_kubectl_json` argv sin shell, timeout corto + `proc.kill()`, nunca raisea. Fail-soft: jamás bloquea el pipeline; kill-switch `enrichment_enabled` | v2 P0·1 |
+| `remediation.py` | Validation layer (classify/validate commands), decision engine (9 reglas cascada + 4.7 target fantasma), sellado (`seal_proposed_action`, síntesis `new_value=2×current`), confidence grounded (`derive/ground_confidence`), cooldown por workload (`acquire_workload_cooldown`, F-01), executor dual-mode + rollback | 3 · v2 |
 | `escalation_store.py` | Store/get/delete/count async de escalaciones sobre `redis.asyncio`. Serializa a JSON con TTL nativo. Fail-open. | Mini-Fase 4 |
 | `rollback_store.py` | Backstop durable de rollbacks en Redis (`store`/`delete`/`list_rollbacks`, clave `rollback:{id}`, TTL nativo, fail-open). Espejo de `escalation_store`. Permite recovery al arranque si el pod reinicia a mitad de ventana. | v2 P0·3 |
 | `utils.py` | `backoff_delay()` helper (exponential backoff compartido) | 3 |
@@ -284,6 +285,11 @@ ExtractResponse:
 | `CHROMADB_HOST` | `chromadb-svc` | Host de ChromaDB | 2 |
 | `CHROMADB_PORT` | `8000` | Puerto de ChromaDB | 2 |
 | `MATTERMOST_WEBHOOK_URL` | `None` | URL del webhook entrante de Mattermost | 1 |
+| `MATTERMOST_TIMEOUT` | `10.0` | Timeout dedicado del cliente Mattermost (F-04). Antes heredaba `HTTP_TIMEOUT` (300s, tamaño LLM) → con MM caído, 3 retries bloqueaban minutos | review F-04 |
+| `ENRICHMENT_ENABLED` | `true` | Kill-switch del grounding (Eje A). Off → snapshot vacío → pipeline LLM-only (retrocompat) | v2 P0·1 |
+| `ENRICHMENT_TIMEOUT` | `10` | Timeout (s) de cada `kubectl get` del gather | v2 P0·1 |
+| `REMEDIATION_AUTO_MIN_RESTARTS` | `1` | Restarts mínimos observados en el cluster para que `derive_confidence` trate un crash/OOM como recurrente (grounded `1.0`); por debajo → `0.5` (SUGGEST_ONLY). Sin señal de crash → confidence del modelo | v2 P0·1 |
+| `REMEDIATION_COOLDOWN_SECONDS` | `600` | Cooldown por workload (F-01): un solo patch auto por `{ns}/{name}` por ventana (SETNX en Redis; > ventana de rollback 300s). Bloqueado o Redis no verificable → ESCALATE fail-closed | review F-01 |
 | `WEBHOOK_SECRET` | `""` | Secreto HMAC-SHA256 para verificar callbacks de botones Mattermost. Vacío = fail-open **solo en dry-run**; con `REMEDIATION_DRY_RUN=false` vacío ⇒ **fail-closed** (401). En K8s via Secret `agent-secrets.webhook-secret` (`optional: true`) | 3 · v2 P0·2 |
 | `MM_COMMAND_TOKEN` | `""` | Token del slash command `/aiops`. Vacío = fail-open **solo en dry-run**; con `REMEDIATION_DRY_RUN=false` vacío ⇒ **fail-closed** (401, simétrico a `WEBHOOK_SECRET`). En K8s via Secret `agent-secrets.mm-command-token` (`optional: true`) | Mini-Fase 4 · v2 P0·2 |
 | `REMEDIATION_AUTO_CPU_ENABLED` | `false` | Gate: extiende la excepción 4.5 (auto-remediación de `set resources`) a `resources.limits.cpu`. Off = escalate-first para CPU hasta validar en cluster; memoria siempre elegible (tutor-approved) | F3 |
@@ -344,6 +350,7 @@ Endpoint `GET /metrics` expuesto via `prometheus-fastapi-instrumentator`:
 - `aiops_escalation_store_total{outcome}` — persistencia de escalaciones en Redis (`stored` = con botones / `redis_down` = degradado sin botones). Incrementa de forma visible durante el chaos de Redis (PR-06)
 
 - `aiops_remediation_rollback_total{outcome}` — resultado del rollback post-patch (`scheduled` / `skipped_no_snapshot` / `healthy` / `reverted` / `revert_failed` / `evaluation_error`)
+- `aiops_enrichment_total{outcome}` — etapa de grounding (v2 Eje A): `gathered` (snapshot con workload confirmado) / `workload_unresolved` (pod visto pero controller sin confirmar → la PA se anula y la 4.7 escala) / `skipped` (enrichment off o sin labels) / `error`. Clasifica por `workload_name` — mide el *gather*, no la decisión posterior del seal. En cluster: si el RBAC de replicasets no está aplicado, TODO cae en `workload_unresolved`
 
 **Contadores de la cola (F2, definidos en `streams.py`)**:
 - `aiops_queue_enqueued_total` — alertas encoladas (`XADD` exitoso); no incrementa en dedup

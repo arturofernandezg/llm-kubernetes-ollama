@@ -1,4 +1,15 @@
-# CI/CD — Cloud Build + Artifact Registry
+# CI/CD — Cloud Build + Artifact Registry + GitHub Actions
+
+## CI en push/PR — GitHub Actions (2026-07-03)
+
+Archivo: `.github/workflows/ci.yml`. Corre en cada push a `main` y en cada PR:
+
+| Job | Qué hace | Por qué |
+|---|---|---|
+| `tests` | python 3.11 + pip cache + `pip install -r requirements.txt -r requirements-dev.txt` + `python -m pytest tests/ -v --tb=short` desde `agent/` | **Espejo literal del Step 1 de Cloud Build**: un check rojo aquí = el gate de Cloud Build habría fallado. Señal barata sin gastar builds |
+| `docker-build` | `docker build ./agent` sin push | Valida el Dockerfile antes de que Cloud Build lo intente |
+
+El build/push de imagen a Artifact Registry **sigue siendo Cloud Build** (necesita credenciales GCP, que no están en GitHub) y lo lanza Jay a mano. GitHub Actions es la señal continua; Cloud Build es el pipeline de entrega.
 
 ## Pipeline de build
 

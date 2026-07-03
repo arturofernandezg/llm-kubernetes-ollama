@@ -31,7 +31,8 @@
 | `alertmanager.yaml` | Deployment + ConfigMap + Service para Alertmanager | Routing de alertas a webhook del agente |
 | `grafana.yaml` | Deployment stateless + ConfigMaps provisioning + Service + Secret ref | Datasource Prometheus, dashboards "AIOps Agent — Overview" + "AIOps — Chaos", contact point webhook |
 | `job-ingest-runbooks.yaml` | K8s Job `runbooks-ingest` en `arturo-llm-test` | Ingesta idempotente (upsert) de 16 runbooks en ChromaDB |
-| `rbac.yaml` | Role + RoleBinding en `arturo-llm-test` y `arturo-chaos` | RBAC para remediación autónoma del agente; RoleBinding cross-namespace permite al SA de `arturo-llm-test` remediar workloads en `arturo-chaos` |
+| `rbac.yaml` | Role + RoleBinding en `arturo-llm-test` y `arturo-chaos` | RBAC para remediación autónoma del agente; RoleBinding cross-namespace permite al SA de `arturo-llm-test` remediar workloads en `arturo-chaos`. Ampliado (v2 Eje A) con lectura de `replicasets`/`statefulsets`/`daemonsets` para la resolución de identidad por ownerReferences — sin esto, TODO el enrichment cae en `workload_unresolved` y el auto nunca dispara |
+| `secrets-setup.sh` | Script de creación de `mattermost-webhook` + `agent-secrets` | Plantilla con placeholders `<...>`. **Guard anti-placeholder** (2026-07-02): `abort_if_placeholder` aborta ANTES de tocar kubectl si algún valor sigue sin sustituir — ejecutarlo sin editar pisó el secret real del webhook (dijo `configured`, no `created`). Recuperación: la URL vive en el env del pod arrancado pre-pisotón (`kubectl exec deploy/agent -- printenv MATTERMOST_WEBHOOK_URL` ANTES de reiniciar); el token del slash está en MM UI → Integrations → Slash Commands |
 
 ## Prometheus standalone
 

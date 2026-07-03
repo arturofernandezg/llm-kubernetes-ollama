@@ -13,12 +13,29 @@
 
 set -euo pipefail
 
+# --- Guard anti-placeholder (incidente 2026-07-02) ---------------------------
+# Ejecutar este script con placeholders sin sustituir SOBREESCRIBE los secrets
+# reales del cluster (kubectl apply pisa el valor existente). Abortamos antes
+# de tocar nada si detectamos cualquier "<...>" sin rellenar.
+abort_if_placeholder() {
+  local name="$1" value="$2"
+  case "${value}" in
+    *"<"*">"*)
+      echo "[ABORT] ${name} contiene un placeholder sin sustituir: ${value}" >&2
+      echo "        Edita el script con los valores reales antes de ejecutarlo." >&2
+      exit 1
+      ;;
+  esac
+}
+
 echo "=== Creando secrets para AIOps Agent ==="
 
 # --- 1a. Secret del webhook URL de Mattermost (namespace: arturo-llm-test) ---
 # El deployment lo lee de: Secret `mattermost-webhook`, clave `url` (MATTERMOST_WEBHOOK_URL).
 # Obtener el token desde: Mattermost → Integrations → Incoming Webhooks
 MATTERMOST_WEBHOOK_URL="http://mattermost-svc.arturo-mattermost.svc.cluster.local:8065/hooks/<TU-TOKEN-AQUI>"
+
+abort_if_placeholder "MATTERMOST_WEBHOOK_URL" "${MATTERMOST_WEBHOOK_URL}"
 
 kubectl create secret generic mattermost-webhook --from-literal=url="${MATTERMOST_WEBHOOK_URL}" -n arturo-llm-test --dry-run=client -o yaml | kubectl apply -f -
 
@@ -32,6 +49,8 @@ echo "[OK] mattermost-webhook creado en arturo-llm-test"
 # rechaza los callbacks (fail-closed) — NO se puede aprobar ni ejecutar sin ellas.
 WEBHOOK_SECRET="$(openssl rand -hex 32)"
 MM_COMMAND_TOKEN="<TOKEN-DEL-SLASH-COMMAND-AQUI>"
+
+abort_if_placeholder "MM_COMMAND_TOKEN" "${MM_COMMAND_TOKEN}"
 
 kubectl create secret generic agent-secrets --from-literal=webhook-secret="${WEBHOOK_SECRET}" --from-literal=mm-command-token="${MM_COMMAND_TOKEN}" -n arturo-llm-test --dry-run=client -o yaml | kubectl apply -f -
 

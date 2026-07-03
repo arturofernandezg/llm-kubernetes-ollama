@@ -110,6 +110,11 @@ async def enqueue_alert(redis_client, alert_json: str, fingerprint: str) -> str 
        existe (otro pod / reenvío de Alertmanager dentro de la ventana) → None.
     2. `XADD <stream> MAXLEN ~ <maxlen> * {"payload": alert_json}` → devuelve el id.
 
+    Si el XADD falla tras marcar la dedup-key, la clave se borra antes de
+    propagar (compensación): sin ella, el retry de Alertmanager chocaría con la
+    dedup-key huérfana → 200 "duplicado benigno" sin encolar nada → la alerta
+    se perdería de verdad hasta el repeat_interval.
+
     Devuelve el id del stream, o None si fue deduplicado. Lanza si Redis cae.
     """
     is_new = await redis_client.set(
@@ -118,12 +123,23 @@ async def enqueue_alert(redis_client, alert_json: str, fingerprint: str) -> str 
     if not is_new:
         return None
 
-    entry_id = await redis_client.xadd(
-        settings.queue_stream_key,
-        {"payload": alert_json},
-        maxlen=settings.queue_maxlen,
-        approximate=True,
-    )
+    try:
+        entry_id = await redis_client.xadd(
+            settings.queue_stream_key,
+            {"payload": alert_json},
+            maxlen=settings.queue_maxlen,
+            approximate=True,
+        )
+    except Exception:
+        try:
+            await redis_client.delete(_seen_key(fingerprint))
+        except Exception:
+            logger.warning(
+                "Dedup-key compensation failed after XADD error; alert %s "
+                "may be suppressed until the dedup window expires",
+                fingerprint,
+            )
+        raise
     QUEUE_ENQUEUED.inc()
     logger.info(
         "Alert enqueued",

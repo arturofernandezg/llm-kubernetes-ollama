@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-02
 slug: v2-eje-a-enrichment-grounding
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

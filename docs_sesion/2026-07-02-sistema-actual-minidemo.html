@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>El sistema, hoy — mini-demo narrada · AIOps Agent v2 · 2026-07-02</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1d222c; --ink: #e7ecf3;
+    --muted: #9aa6b8; --line: #2a3240; --accent: #ff6a00; --accent2: #4aa3ff;
+    --red: #ff5f56; --amber: #ffbd2e; --green: #35c46a; --grey: #8391a3;
+    --code: #0b0d11;
+    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--serif); font-size: 18px; line-height: 1.7; }
+  .wrap { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+  nav { position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 28px 22px; font-family: var(--sans); font-size: 14px; }
+  nav h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--muted); margin: 22px 0 8px; }
+  nav h2:first-child { margin-top: 0; }
+  nav a { display: block; color: var(--muted); text-decoration: none;
+    padding: 4px 8px; border-radius: 6px; border-left: 2px solid transparent; }
+  nav a:hover { color: var(--ink); background: var(--panel2); }
+  nav .brand { font-family: var(--serif); font-size: 20px; color: var(--ink); font-weight: 700; }
+  nav .brand span { color: var(--accent); }
+  nav .meta { color: var(--grey); font-size: 12px; margin-top: 4px; }
+  main { padding: 60px 8vw 120px; max-width: 900px; }
+  h1 { font-size: 40px; line-height: 1.15; margin: 0 0 8px; }
+  h1 small { display:block; font-size: 15px; font-family: var(--sans);
+    color: var(--muted); font-weight: 400; letter-spacing: .5px; margin-top: 14px; }
+  h2.sec { font-size: 30px; margin: 68px 0 6px; padding-top: 20px;
+    border-top: 1px solid var(--line); }
+  h2.sec .num { color: var(--accent); font-family: var(--mono); font-size: 22px; margin-right: 12px; }
+  h3 { font-size: 22px; margin: 34px 0 10px; color: #f2f5fa; }
+  p { margin: 14px 0; }
+  em { color: #f0d9c4; font-style: italic; }
+  strong { color: #fff; }
+  code { font-family: var(--mono); font-size: 14px; background: var(--code);
+    padding: 2px 6px; border-radius: 5px; color: #d6e2f0; border: 1px solid var(--line); }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; overflow-x: auto; font-family: var(--mono);
+    font-size: 13.5px; line-height: 1.55; color: #d6e2f0; }
+  pre code { background: none; border: none; padding: 0; }
+  blockquote { border-left: 3px solid var(--accent); margin: 20px 0; padding: 6px 20px;
+    background: var(--panel); border-radius: 0 8px 8px 0; color: #d8dee8; }
+  table { border-collapse: collapse; width: 100%; margin: 20px 0;
+    font-family: var(--sans); font-size: 15px; }
+  th, td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); font-weight: 600; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .acto { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px 24px; margin: 22px 0; }
+  .acto .k { font-family: var(--mono); color: var(--accent); font-size: 14px;
+    letter-spacing: 1px; text-transform: uppercase; }
+  .acto h3 { margin-top: 6px; }
+  .tag { display: inline-block; font-family: var(--sans); font-size: 12px; font-weight: 600;
+    padding: 2px 10px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+  .tag.nuevo { background: rgba(53,196,106,.15); color: var(--green); border: 1px solid rgba(53,196,106,.4); }
+  .tag.demo { background: rgba(74,163,255,.12); color: var(--accent2); border: 1px solid rgba(74,163,255,.4); }
+  .mantra { text-align: center; font-size: 24px; font-style: italic; color: #f0d9c4;
+    margin: 34px 0; }
+  .mantra b { color: var(--accent); font-style: normal; }
+  .num-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px; margin: 24px 0; font-family: var(--sans); }
+  .num-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; }
+  .num-card .big { font-size: 30px; font-weight: 700; color: #fff; font-family: var(--serif); }
+  .num-card .lbl { font-size: 13px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+  .ok { color: var(--green); } .warn { color: var(--amber); } .bad { color: var(--red); }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } nav { position: static; height: auto; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <div class="brand">AIOps <span>v2</span></div>
+  <div class="meta">Mini-demo narrada · 2026-07-02<br>imagen cb2d1db · ~535 tests</div>
+  <h2>Capítulos</h2>
+  <a href="#tesis">1 · La tesis</a>
+  <a href="#viaje">2 · El viaje de una alerta</a>
+  <a href="#momentos">3 · Los 5 momentos demoables</a>
+  <a href="#defensas">4 · Las capas de defensa</a>
+  <a href="#numeros">5 · Los números</a>
+  <a href="#guion">6 · El guion de 90 segundos</a>
+</nav>
+<main>
+
+<h1>El sistema, hoy
+<small>Mini-demo narrada para memorizar · Sistema de Remediación Automática en Kubernetes ·
+estado real del código en la imagen <code>cb2d1db</code> (v2 grounding completa)</small></h1>
+
+<h2 class="sec" id="tesis"><span class="num">1</span>La tesis</h2>
+
+<p>Un LLM pequeño corriendo <em>dentro</em> del cluster (sin coste por token, sin que un solo
+dato salga fuera) no es de fiar para los <strong>hechos</strong>: alucina nombres, inventa valores,
+se autoevalúa con un 95% de confianza cuando se equivoca. La v1 lo trataba como un oráculo.
+La v2 lo trata como lo que es: <strong>un razonador barato al que no se le deja tocar nada</strong>.</p>
+
+<p class="mantra">«El <b>cluster</b> informa, el <b>modelo</b> razona, el <b>motor</b> dispone.»</p>
+
+<p>Cada hecho que importa (qué workload es, qué límite tiene ahora, cuántas veces ha reventado)
+se lee de la API de Kubernetes <em>antes</em> de preguntar al modelo, y se vuelve a imponer
+<em>después</em>, pisando cualquier dato que el modelo haya fabricado. El modelo solo conserva
+lo que hace bien: clasificar el problema y proponer la <em>dirección</em> del arreglo.
+El comando que se ejecuta lo escribe el motor, siempre, con una plantilla determinista.</p>
+
+<h2 class="sec" id="viaje"><span class="num">2</span>El viaje de una alerta (memoriza esto)</h2>
+
+<p>Escenario canónico: un pod en <code>arturo-chaos</code> revienta por OOM.
+Nueve actos, siempre en el mismo orden.</p>
+
+<div class="acto"><span class="k">Acto 1 · Detección</span>
+<h3>Prometheus ve el OOM</h3>
+<p>La regla <code>KubePodOOMKilled</code> (via kube-state-metrics) dispara. La anotación va
+<strong>enriquecida</strong>: una query embebida inyecta el límite de memoria actual en el texto
+de la alerta — el modelo nunca tiene que adivinarlo. Todo acotado a namespaces
+<code>arturo-*</code> (cluster compartido: ni leemos ni alertamos sobre workloads ajenos).</p></div>
+
+<div class="acto"><span class="k">Acto 2 · Ingesta durable</span>
+<h3>El webhook encola, no procesa</h3>
+<p>Alertmanager entrega al agente FastAPI y este responde en milisegundos: solo <strong>encola</strong>
+en Redis Streams (<code>aiops:alerts</code>), con dedup cluster-wide por fingerprint. Si Redis está
+caído → <strong>503 fail-closed</strong> y Alertmanager reintenta: ninguna alerta se pierde jamás.
+Un consumidor drena de una en una (el LLM serializa); si el pod muere a mitad, el
+<em>reclaim</em> del PEL la reprocesa; un mensaje envenenado acaba en dead-letter con forense
+tras 3 intentos.</p></div>
+
+<div class="acto"><span class="k">Acto 3 · Memoria</span>
+<h3>RAG busca en los runbooks</h3>
+<p>ChromaDB (16 runbooks + incidentes históricos, embeddings de <code>nomic-embed-text</code>)
+devuelve el contexto relevante. Triple fail-open: sin ChromaDB, sin Ollama o sin ambos, el
+pipeline sigue degradado — pero un RAG degradado <strong>prohíbe el auto</strong> (regla 7.5:
+sin grounding documental no se actúa solo).</p></div>
+
+<div class="acto"><span class="k">Acto 4 · Grounding</span><span class="tag nuevo">v2</span>
+<h3>El cluster informa</h3>
+<p>Antes de molestar al modelo, <code>enrichment.py</code> hace un <code>kubectl get pod</code> y
+camina la cadena de <code>ownerReferences</code> (pod → ReplicaSet → Deployment, o STS/DS directo).
+Sale un <code>IncidentSnapshot</code> con los hechos: límites reales por container, fase,
+<code>restart_count</code>, causa de la última muerte (<code>OOMKilled</code>), workload
+<strong>confirmado que existe</strong> y su selector real. Fail-soft: si algo falla, snapshot
+parcial y el pipeline continúa en modo LLM-only. Observable en
+<code>aiops_enrichment_total{outcome}</code>.</p></div>
+
+<div class="acto"><span class="k">Acto 5 · Razonamiento</span>
+<h3>El modelo razona (con los hechos delante)</h3>
+<p><code>qwen2.5:1.5b</code> a <strong>temperature 0</strong> (determinista) recibe: la alerta
+enriquecida + los runbooks + un bloque <em>CLUSTER FACTS — observed, authoritative</em> con el
+snapshot. Devuelve JSON estructurado: diagnóstico, confianza, riesgo, comandos sugeridos y una
+<code>proposed_action</code> (campo + valor). Prompt anti-alucinación: si no conoce el límite
+actual, debe omitir la propuesta, nunca fabricarla.</p></div>
+
+<div class="acto"><span class="k">Acto 6 · Sellado</span><span class="tag nuevo">v2</span>
+<h3>La verdad del cluster pisa al modelo</h3>
+<p><code>seal_proposed_action</code> sobreescribe identidad (<code>name/namespace/container</code>),
+<code>current_value</code> y selector con lo que dice el snapshot. Si el valor propuesto es
+inusable (falta, no parsea, no sube), el motor <strong>sintetiza 2×current</strong> y guarda el del
+modelo como <code>model_new_value</code> para auditoría. Si el workload no se pudo confirmar →
+la propuesta se <strong>anula</strong> y queda marcada (<code>target_unresolved</code>): jamás se
+actúa sobre un target fantasma. Después, <code>ground_confidence</code>: para la clase crash/OOM,
+la confianza que gobierna la decisión sale de los <strong>restarts observados</strong>
+(recurrente → 1.0; aislado → 0.5), no de la autoevaluación del modelo — que se conserva como
+<code>model_confidence</code> y se enseña en Mattermost.</p></div>
+
+<div class="acto"><span class="k">Acto 7 · Decisión</span>
+<h3>El motor dispone (cascada de reglas)</h3>
+<p>Validation layer clasifica cada comando (BLOCKED &gt; SAFE &gt; MUTATING) y la cascada decide:
+destructivo → escala; reinicia pods sin excepción autorizada → escala; subida &gt;2× del límite
+→ escala (regla del tutor, sin excepciones); <strong>target sin confirmar → escala (regla 4.7,
+v2)</strong>; confianza bajo el umbral → solo sugiere; RAG degradado → escala. Si la propuesta es
+<em>estructurada</em> (campo elegible, target confirmado, solo-subir, ≤2×, namespace
+<code>arturo-*</code>), el motor <strong>ignora el risk autoevaluado del modelo</strong> — su
+propio bound determinista lo sustituye — y sintetiza el comando él mismo:</p>
+<pre><code>kubectl set resources deployment chaos-oom-target -n arturo-chaos --containers=stress --limits=memory=128Mi</code></pre></div>
+
+<div class="acto"><span class="k">Acto 8 · Acción con red</span>
+<h3>Auto-remediación reversible — o humano con el mismo poder</h3>
+<p><strong>AUTO</strong>: snapshot del valor previo → ejecuta el comando sintetizado → programa un
+rollback que persiste en <strong>Redis</strong> (sobrevive reinicios del agente: al arrancar,
+<code>_recover_rollbacks</code> re-arma lo que quedó a mitad de ventana). Pasados ~5 min comprueba
+la salud del pod con el <strong>selector real</strong> (adiós rollbacks falsos): si no sanó,
+revierte y escala.<br>
+<strong>ESCALATE</strong>: mensaje a Mattermost con botones firmados HMAC (fail-closed: sin secret
+no hay aprobación posible con ejecución real) enseñando <em>el mismo comando determinista</em>
+<span class="tag nuevo">v2</span>. El approve humano ejecuta exactamente eso, con el mismo snapshot
+y el mismo rollback que el auto. Lo que apruebas es lo que corre.</p></div>
+
+<div class="acto"><span class="k">Acto 9 · Aprendizaje</span>
+<h3>El incidente se recuerda</h3>
+<p>Diagnóstico + decisión + resultado se ingestan en ChromaDB como incidente: la próxima alerta
+parecida recupera también lo que pasó esta vez. El operador puede consultar estado y pendientes
+con <code>/aiops</code> desde el chat.</p></div>
+
+<h2 class="sec" id="momentos"><span class="num">3</span>Los 5 momentos demoables</h2>
+
+<table>
+<tr><th>#</th><th>Momento</th><th>Qué se ve</th></tr>
+<tr><td>1</td><td><strong>El auto que cura</strong> <span class="tag demo">estrella</span></td>
+<td><code>bash scripts/chaos.sh oom</code> → en ~4 min el límite del deployment sube solo al doble,
+el pod deja de morir, y en el log: <code>seal_proposed_action: sealed from cluster snapshot</code> +
+<code>Rule 5 bypassed</code>. Sin un solo <code>NotFound</code>.</td></tr>
+<tr><td>2</td><td><strong>El grounding visible</strong></td>
+<td>El mensaje de Mattermost dice: <em>Confidence: 100% (grounded del cluster; el modelo dijo
+65%)</em>. La diapositiva se cuenta sola: no nos fiamos del modelo, medimos el cluster.</td></tr>
+<tr><td>3</td><td><strong>El humano con botones</strong></td>
+<td>Un incidente no elegible escala con Aprobar/Rechazar mostrando el comando determinista.
+Click en Aprobar → se ejecuta eso exacto, con rollback programado igual que el auto.</td></tr>
+<tr><td>4</td><td><strong>La red de seguridad</strong></td>
+<td>Rollback en vivo: si el patch no cura (p. ej. CrashLoop que no es de memoria), a los 5 min
+el sistema revierte él solo y escala. El fallo del auto también está gestionado.</td></tr>
+<tr><td>5</td><td><strong>Nada se cae del todo</strong></td>
+<td>Matar Redis → webhook 503, Alertmanager reintenta, cero pérdida. Matar ChromaDB → diagnóstico
+zero-shot pero sin auto. Matar el agente a mitad → replay desde la cola. Grafana lo cuenta con
+<code>aiops_queue_*</code> y <code>aiops_enrichment_total</code>.</td></tr>
+</table>
+
+<h2 class="sec" id="defensas"><span class="num">4</span>Las capas de defensa (para las preguntas incómodas)</h2>
+
+<p>«¿Y si el modelo propone una barbaridad?» — la respuesta tiene <strong>ocho capas</strong>, en orden:</p>
+
+<table>
+<tr><th>Capa</th><th>Qué para</th></tr>
+<tr><td>1 · Blacklist + validation layer</td><td>Comandos destructivos (delete/drain/scale 0…): jamás se ejecutan, ni aprobados.</td></tr>
+<tr><td>2 · Sellado v2</td><td>Identidad y valores alucinados: los pisa el snapshot del cluster.</td></tr>
+<tr><td>3 · Regla 4.7 (target fantasma)</td><td>Workload sin confirmar (o RBAC roto) → escala siempre, pase lo que pase con risk/confianza.</td></tr>
+<tr><td>4 · Reglas del tutor (4.5/4.6)</td><td>Nada que reinicie pods salvo la excepción autorizada; nada por encima de 2× el límite actual.</td></tr>
+<tr><td>5 · Confianza grounded + regla 7.5</td><td>Evento aislado o RAG degradado → no hay auto.</td></tr>
+<tr><td>6 · Allow-list de namespace</td><td>El auto solo toca <code>arturo-*</code>. Cluster compartido protegido.</td></tr>
+<tr><td>7 · Rollback durable</td><td>Si el patch no cura, se revierte solo — incluso si el agente reinició en medio.</td></tr>
+<tr><td>8 · Auth fail-closed</td><td>Con ejecución real, sin secrets no se aprueba nada: 401.</td></tr>
+</table>
+
+<blockquote>La frase que lo resume: <em>«el modelo nunca ha ejecutado un comando en este sistema;
+ejecuta el motor, y el motor solo sabe escribir una cosa: subidas de límite acotadas y
+reversibles sobre un target que ha verificado que existe».</em></blockquote>
+
+<h2 class="sec" id="numeros"><span class="num">5</span>Los números</h2>
+
+<div class="num-grid">
+  <div class="num-card"><div class="big">~535</div><div class="lbl">tests, gate obligatorio en Cloud Build (verde en cb2d1db)</div></div>
+  <div class="num-card"><div class="big">~4 min</div><div class="lbl">MTTR chaos OOM (205 s), acotado por la inferencia del 1.5b en CPU</div></div>
+  <div class="num-card"><div class="big">100% <span class="warn">vs 25%</span></div><div class="lbl">seguridad de comandos con RAG vs zero-shot (medido, docs/10)</div></div>
+  <div class="num-card"><div class="big">p@1 73%</div><div class="lbl">retrieval baseline (86,7% p@3); contexto &gt; tamaño de modelo (eval comparativa)</div></div>
+  <div class="num-card"><div class="big">0</div><div class="lbl">alertas perdidas: cola fail-closed + replay validados en cluster</div></div>
+  <div class="num-card"><div class="big">0 €</div><div class="lbl">coste por token y cero datos fuera: Ollama in-cluster</div></div>
+</div>
+
+<p>Y el número honesto: la auditoría senior puntuó la v1 con un <strong>5,9/10</strong> y tres
+bloqueantes P0. Los tres están cerrados en esta imagen — auth fail-closed (P0·2), rollback durable
+(P0·3) y el grounding completo (P0·1). Enseñar la auditoría y su cierre <em>es</em> parte de la
+historia: así se endurece un sistema de verdad.</p>
+
+<h2 class="sec" id="guion"><span class="num">6</span>El guion de 90 segundos</h2>
+
+<blockquote>
+<p>«Esto es un SRE junior que no duerme. Prometheus detecta que un pod muere por memoria.
+La alerta cae en una cola durable — si algo está caído, se reintenta, nunca se pierde.
+Antes de pensar, el sistema <strong>mira</strong>: pregunta a la API de Kubernetes qué workload es,
+qué límite tiene y cuántas veces ha muerto. Con esos hechos delante, un LLM que corre dentro del
+cluster —ni un dato sale fuera— diagnostica y propone. Pero no le dejamos ejecutar: un motor de
+reglas pisa cualquier dato que haya inventado con la verdad del cluster, y solo si el arreglo es
+acotado —subir un límite, máximo al doble, en nuestro namespace, sobre un target verificado—
+lo ejecuta él mismo con un comando que escribe el motor, no el modelo. Programa su propio
+rollback: si en cinco minutos el pod no está sano, revierte y llama a un humano por Mattermost,
+con botones, enseñando el comando exacto. En la demo lo veréis curarse solo en cuatro minutos.
+Y cuando dudamos de la confianza del modelo, no le creemos: la medimos en el cluster —
+ahí en el mensaje: <em>el modelo decía 65%, los restarts dicen 100%</em>.»</p>
+</blockquote>
+
+<p style="color:var(--muted); font-family:var(--sans); font-size:13px; margin-top:60px;">
+Generado 2026-07-02 · sesión v2-hardening-review-deploy · fuente: código en <code>cb2d1db</code>.
+Deck completo: <code>demo/demo.html</code> (pendiente de actualizar a la narrativa v2).</p>
+
+</main>
+</div>
+</body>
+</html>

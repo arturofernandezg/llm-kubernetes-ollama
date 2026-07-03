@@ -34,7 +34,8 @@ from validation import validate_params
 from mattermost import send_mattermost_alert, send_escalation_with_buttons, make_hmac_token
 from rag import (
     build_rag_query, retrieve_context, get_chroma_client, ensure_collections,
-    build_incident_document, ingest_incident, COLLECTION_INCIDENTS,
+    build_incident_document, ingest_incident, runbook_filter_for_alert,
+    COLLECTION_INCIDENTS,
 )
 from diagnosis import generate_diagnosis
 from remediation import (
@@ -782,6 +783,9 @@ async def _process_alert_with_diagnosis(
     try:
         description = alert.annotations.get("description", "")
         query = build_rag_query(alert.labels, description)
+        # R1: filter the runbook query by error_class (alertname → class, deterministic).
+        # The retrieval falls back to an unfiltered semantic query if the filter misses.
+        runbook_filter = runbook_filter_for_alert(alert.labels)
 
         # RAG retrieval (fail-open: empty context if ChromaDB down).
         # Lazy reconnect: a cached client goes stale if the ChromaDB StatefulSet pod
@@ -790,13 +794,13 @@ async def _process_alert_with_diagnosis(
         # recover without restarting the agent.
         rag_degraded = False
         try:
-            rag_context = await retrieve_context(query, http_client, chroma_client)
+            rag_context = await retrieve_context(query, http_client, chroma_client, metadata_filter=runbook_filter)
             DIAGNOSIS_COUNTER.labels(outcome="rag_ok").inc()
         except Exception as exc:
             logger.warning("RAG retrieval failed for %s, attempting ChromaDB reconnect: %r", alert_name, exc)
             try:
                 chroma_client = get_chroma_client()
-                rag_context = await retrieve_context(query, http_client, chroma_client)
+                rag_context = await retrieve_context(query, http_client, chroma_client, metadata_filter=runbook_filter)
                 app.state.chroma_client = chroma_client
                 DIAGNOSIS_COUNTER.labels(outcome="rag_reconnect").inc()
                 logger.info("ChromaDB reconnect succeeded for %s", alert_name)
@@ -852,7 +856,9 @@ async def _process_alert_with_diagnosis(
             except Exception as exc:
                 logger.warning("Seal/ground failed for %s, proceeding LLM-only: %r", alert_name, exc)
             try:
-                remediation_result = await process_remediation(diagnosis, rag_degraded=rag_degraded)
+                remediation_result = await process_remediation(
+                    diagnosis, rag_degraded=rag_degraded, redis_client=redis_client,
+                )
                 REMEDIATION_COUNTER.labels(action=remediation_result["action"].value).inc()
             except Exception as exc:
                 logger.warning("Remediation processing failed for %s: %r", alert_name, exc)

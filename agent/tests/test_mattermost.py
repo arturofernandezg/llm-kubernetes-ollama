@@ -70,6 +70,19 @@ class TestMattermostClient:
         assert kwargs["json"]["channel"] == "admin-channel"
 
     @pytest.mark.asyncio
+    async def test_uses_dedicated_mattermost_timeout(self):
+        """F-04: el cliente usa mattermost_timeout (~10s), no el http_timeout del LLM
+        (300s) — con MM caído, 3 retries heredando el gordo bloqueaban minutos."""
+        settings.mattermost_webhook_url = FAKE_URL
+        mock_client = make_mock_client([make_ok_response()])
+
+        with patch("httpx.AsyncClient", return_value=mock_client) as client_cls:
+            await send_mattermost_alert("Test")
+
+        assert client_cls.call_args.kwargs["timeout"] == settings.mattermost_timeout
+        assert client_cls.call_args.kwargs["timeout"] != settings.http_timeout
+
+    @pytest.mark.asyncio
     @patch("mattermost.MATTERMOST_BASE_DELAY", 0.0)
     async def test_retry_on_timeout(self):
         """Timeout en el primer intento → reintenta → True."""

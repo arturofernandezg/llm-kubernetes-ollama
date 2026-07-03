@@ -1,0 +1,1486 @@
+<title>Review Senior — AIOps Auto-Remediación</title>
+<style>
+  :root{
+    --paper:#F6F7F6; --ink:#1C2422; --muted:#5A6663; --hair:#D8DEDC;
+    --accent:#0E6B64; --accent-soft:#E3EEEC;
+    --panel:#121B19; --panel-ink:#D7E2DE; --panel-dim:#7E938D;
+    --crit:#B3402F; --crit-bg:#F6E7E4;
+    --warn:#B26E14; --warn-bg:#F7EEDE;
+    --low:#5A6663;  --low-bg:#EAEDEC;
+    --ok:#2E7D4F;   --ok-bg:#E4F0E8;
+    --info:#33608F; --info-bg:#E5ECF4;
+    --serif:"Charter","Iowan Old Style","Palatino",Georgia,serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--serif);font-size:17px;line-height:1.65}
+
+  /* ── Nav ─────────────────────────────── */
+  nav{position:sticky;top:0;z-index:50;background:rgba(246,247,246,.94);backdrop-filter:blur(6px);
+      border-bottom:1px solid var(--hair);padding:0 20px}
+  nav .row{max-width:1080px;margin:0 auto;display:flex;gap:18px;align-items:center;height:46px;overflow-x:auto}
+  nav .brand{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);white-space:nowrap;font-weight:700}
+  nav a{font-family:var(--mono);font-size:11.5px;color:var(--muted);text-decoration:none;white-space:nowrap;padding:4px 2px;border-bottom:2px solid transparent}
+  nav a:hover,nav a:focus-visible{color:var(--ink);border-bottom-color:var(--accent);outline:none}
+
+  /* ── Layout ──────────────────────────── */
+  .wrap{max-width:760px;margin:0 auto;padding:0 20px}
+  .wide{max-width:1080px;margin:0 auto;padding:0 20px}
+  section{padding:56px 0 8px;scroll-margin-top:52px}
+  h1,h2,h3{text-wrap:balance;line-height:1.15}
+  h1{font-size:clamp(30px,5vw,46px);margin:.3em 0 .35em;font-weight:700}
+  h2{font-size:clamp(23px,3.4vw,30px);margin:0 0 .6em;border-bottom:2px solid var(--ink);padding-bottom:.35em}
+  h3{font-size:19px;margin:2em 0 .5em}
+  p{margin:.85em 0;max-width:72ch}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  .lede{font-size:19.5px;line-height:1.6;color:#2A3532}
+  code,.mono{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);padding:.08em .35em;border-radius:3px}
+  a{color:var(--accent)}
+  ul{padding-left:1.2em}
+  li{margin:.4em 0}
+  strong{font-weight:700}
+
+  /* header */
+  header{padding:64px 0 34px;border-bottom:1px solid var(--hair)}
+  .meta-strip{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--hair);background:#fff;margin-top:26px}
+  .meta-strip div{padding:12px 18px;border-right:1px solid var(--hair);flex:1 1 130px}
+  .meta-strip div:last-child{border-right:none}
+  .meta-strip .k{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .meta-strip .v{font-family:var(--mono);font-size:14px;margin-top:3px;font-variant-numeric:tabular-nums}
+
+  /* verdict */
+  .verdict{display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center;background:var(--panel);color:var(--panel-ink);
+           padding:26px 28px;margin:30px 0 6px}
+  .verdict .score{font-family:var(--serif);font-size:56px;font-weight:700;line-height:1;color:#fff}
+  .verdict .score small{font-size:20px;color:var(--panel-dim);font-weight:400}
+  .verdict p{margin:.3em 0;color:var(--panel-ink);font-size:15.5px;max-width:none}
+  .verdict .tag{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+                border:1px solid #3E5450;padding:3px 9px;color:#9FD8CE;margin-bottom:8px}
+  @media(max-width:560px){.verdict{grid-template-columns:1fr}}
+
+  /* score bars */
+  .bars{margin:26px 0;border:1px solid var(--hair);background:#fff;padding:20px 22px}
+  .bar-row{display:grid;grid-template-columns:170px 1fr 44px;gap:12px;align-items:center;margin:9px 0}
+  .bar-row .lbl{font-family:var(--mono);font-size:12px;color:var(--ink)}
+  .bar-row .num{font-family:var(--mono);font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+  .track{height:10px;background:var(--low-bg);position:relative}
+  .fill{position:absolute;inset:0 auto 0 0;background:var(--accent)}
+  .fill.bad{background:var(--crit)}
+  .fill.mid{background:var(--warn)}
+  @media(max-width:560px){.bar-row{grid-template-columns:110px 1fr 40px}}
+
+  /* figures */
+  figure{margin:34px 0;background:var(--panel);border:1px solid #0B1312;padding:0}
+  figure .scroll{overflow-x:auto;padding:22px 22px 12px}
+  figure svg{display:block;min-width:880px;width:100%;height:auto}
+  figcaption{font-family:var(--mono);font-size:11.5px;color:var(--muted);padding:10px 22px 14px;background:var(--paper);
+             border-top:1px solid var(--hair);line-height:1.6}
+  figcaption b{color:var(--ink)}
+  .fig-svg text{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+
+  /* tables */
+  .tbl-wrap{overflow-x:auto;margin:24px 0;border:1px solid var(--hair)}
+  table{border-collapse:collapse;width:100%;background:#fff;font-size:14.5px}
+  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;text-align:left;
+     color:var(--muted);padding:10px 14px;border-bottom:2px solid var(--ink);background:#fff;white-space:nowrap}
+  td{padding:9px 14px;border-bottom:1px solid var(--hair);vertical-align:top}
+  td code{white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+
+  /* findings */
+  .sev-summary{display:flex;gap:0;margin:22px 0;border:1px solid var(--hair);overflow:hidden}
+  .sev-summary div{padding:14px 18px;flex:1;background:#fff;border-right:1px solid var(--hair)}
+  .sev-summary div:last-child{border-right:none}
+  .sev-summary .n{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+  .sev-summary .t{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;margin-top:5px}
+  .finding{border:1px solid var(--hair);background:#fff;margin:18px 0;border-left-width:4px}
+  .finding.crit{border-left-color:var(--crit)}
+  .finding.warn{border-left-color:var(--warn)}
+  .finding.low{border-left-color:var(--low)}
+  .finding header{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;padding:14px 20px 0;border:none}
+  .finding h4{margin:0;font-size:17.5px;flex:1 1 320px}
+  .finding .fid{font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:700}
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;font-weight:700;white-space:nowrap}
+  .chip.crit{background:var(--crit-bg);color:var(--crit)}
+  .chip.warn{background:var(--warn-bg);color:var(--warn)}
+  .chip.low{background:var(--low-bg);color:var(--low)}
+  .chip.cat{background:var(--info-bg);color:var(--info);font-weight:400}
+  .finding .body{padding:8px 20px 16px;font-size:15.5px}
+  .finding .body p{margin:.6em 0;max-width:none}
+  .finding .fix{background:var(--accent-soft);padding:10px 14px;margin-top:12px;font-size:14.5px}
+  .finding .fix::before{content:"FIX → ";font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--accent);font-weight:700}
+  .finding .where{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:8px}
+
+  /* strengths */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:24px 0}
+  @media(max-width:700px){.grid2{grid-template-columns:1fr}}
+  .card{background:#fff;border:1px solid var(--hair);padding:18px 20px}
+  .card h4{margin:0 0 .4em;font-size:16.5px}
+  .card h4::before{content:"✓ ";color:var(--ok);font-weight:700}
+  .card p{font-size:14.5px;margin:.4em 0;color:#333D3A;max-width:none}
+
+  /* callouts */
+  .box{border:1px solid var(--hair);border-left:4px solid var(--accent);background:#fff;padding:16px 22px;margin:26px 0}
+  .box.warn-box{border-left-color:var(--warn)}
+  .box h4{margin:.2em 0 .4em;font-size:16px}
+  .box p{font-size:15px;max-width:none}
+
+  /* roadmap */
+  .horizon{display:grid;grid-template-columns:150px 1fr;gap:0;border:1px solid var(--hair);border-top:none;background:#fff}
+  .horizon:first-of-type{border-top:1px solid var(--hair)}
+  .horizon .when{padding:18px;border-right:1px solid var(--hair);background:var(--accent-soft)}
+  .horizon .when .h{font-family:var(--mono);font-weight:700;font-size:15px;color:var(--accent)}
+  .horizon .when .d{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px;line-height:1.5}
+  .horizon .what{padding:16px 22px}
+  .horizon .what h4{margin:0 0 .4em;font-size:16.5px}
+  .horizon .what ul{margin:.3em 0;font-size:14.8px}
+  .horizon .what li{margin:.35em 0}
+  @media(max-width:620px){.horizon{grid-template-columns:1fr}.horizon .when{border-right:none;border-bottom:1px solid var(--hair)}}
+
+  .dod{background:var(--panel);color:var(--panel-ink);padding:24px 28px;margin:30px 0}
+  .dod h3{color:#fff;margin:0 0 .6em}
+  .dod ul{columns:2;gap:34px;font-size:14.5px;font-family:var(--mono);padding-left:1.1em}
+  .dod li{margin:.5em 0;break-inside:avoid}
+  @media(max-width:640px){.dod ul{columns:1}}
+
+  /* glossary + Q&A */
+  dl{margin:20px 0}
+  dt{font-family:var(--mono);font-size:13.5px;font-weight:700;color:var(--accent);margin-top:14px}
+  dd{margin:.25em 0 0 0;font-size:15px}
+  details{border:1px solid var(--hair);background:#fff;margin:10px 0}
+  summary{cursor:pointer;padding:13px 18px;font-weight:700;font-size:15.5px;list-style-position:inside}
+  summary:focus-visible{outline:2px solid var(--accent)}
+  details .ans{padding:0 18px 16px;font-size:15px;border-top:1px solid var(--hair)}
+  details .ans p{max-width:none}
+
+  footer{margin-top:70px;border-top:1px solid var(--hair);padding:26px 0 44px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .fig-note{font-size:14px;color:var(--muted);font-style:italic}
+</style>
+
+<nav>
+  <div class="row">
+    <span class="brand">AIOps · Review v2</span>
+    <a href="#veredicto">§1 Veredicto</a>
+    <a href="#negocio">§2 Negocio</a>
+    <a href="#llm">§3 El LLM</a>
+    <a href="#sota">§4 Estado del arte</a>
+    <a href="#arquitectura">§5 Arquitectura</a>
+    <a href="#fortalezas">§6 Fortalezas</a>
+    <a href="#hallazgos">§7 Hallazgos</a>
+    <a href="#roadmap">§8 Roadmap</a>
+    <a href="#junior">§9 Apéndice</a>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <div class="eyebrow">Review técnica en profundidad · Nivel panel senior de empresa</div>
+    <h1>Auto-remediación en Kubernetes con LLM local: qué aguanta, qué atacarían y qué falta</h1>
+    <p class="lede">Revisión brutal del código del <strong>AIOps Infrastructure Agent</strong> — ~4.500 líneas de Python,
+    16 módulos, 18 manifiestos K8s — con el objetivo puesto en su misión real: <strong>remediar incidentes solos, sin romper nada</strong>.
+    Incluye la arquitectura explicada para que un junior la entienda, los puntos débiles que un panel técnico atacaría,
+    y el roadmap hasta dejarlo como tendría que quedar.</p>
+  </div>
+  <div class="wide">
+    <div class="meta-strip">
+      <div><span class="k">Fecha</span><div class="v">2026-07-02</div></div>
+      <div><span class="k">Commit revisado</span><div class="v">cb2d1db (main)</div></div>
+      <div><span class="k">Código agente</span><div class="v">4.504 LOC / 16 mód.</div></div>
+      <div><span class="k">Tests</span><div class="v">~535 (mock, gate CI)</div></div>
+      <div><span class="k">Imagen en cluster</span><div class="v">da7aafb (cb2d1db pdte. deploy)</div></div>
+      <div><span class="k">Auditoría previa</span><div class="v">5.9/10 (07-01)</div></div>
+      <div><span class="k">Versión de la review</span><div class="v">v2 · 2026-07-02</div></div>
+    </div>
+  </div>
+</header>
+
+<!-- ══════════════ §1 VEREDICTO ══════════════ -->
+<section id="veredicto">
+  <div class="wrap">
+    <div class="eyebrow">§1</div>
+    <h2>Veredicto ejecutivo</h2>
+
+    <div class="verdict">
+      <div class="score">7.1<small>/10</small></div>
+      <div>
+        <span class="tag">Aprobado con condiciones</span>
+        <p><strong>Es un buen proyecto y es defendible ante un chapter técnico.</strong> El núcleo — la doctrina
+        <em>"el cluster informa, el modelo razona, el motor dispone"</em> — es exactamente la arquitectura correcta para
+        auto-remediación con un LLM pequeño, y está implementada de verdad, no como slide. Sube desde el 5.9 de la
+        auditoría del 07-01 porque los tres P0 están cerrados en código (grounding, auth fail-closed, rollback durable).
+        Lo que le falta para "nivel empresa" no es inteligencia: es <strong>aislamiento de fallos entre dependencias,
+        idempotencia por workload y validación E2E continua</strong>.</p>
+      </div>
+    </div>
+
+    <div class="bars">
+      <div class="bar-row"><span class="lbl">Diseño de seguridad</span><div class="track"><div class="fill" style="width:80%"></div></div><span class="num">8.0</span></div>
+      <div class="bar-row"><span class="lbl">Arquitectura</span><div class="track"><div class="fill" style="width:75%"></div></div><span class="num">7.5</span></div>
+      <div class="bar-row"><span class="lbl">Observabilidad</span><div class="track"><div class="fill" style="width:80%"></div></div><span class="num">8.0</span></div>
+      <div class="bar-row"><span class="lbl">Documentación</span><div class="track"><div class="fill" style="width:90%"></div></div><span class="num">9.0</span></div>
+      <div class="bar-row"><span class="lbl">Testing</span><div class="track"><div class="fill mid" style="width:70%"></div></div><span class="num">7.0</span></div>
+      <div class="bar-row"><span class="lbl">Resiliencia runtime</span><div class="track"><div class="fill mid" style="width:60%"></div></div><span class="num">6.0</span></div>
+      <div class="bar-row"><span class="lbl">Escalabilidad</span><div class="track"><div class="fill bad" style="width:45%"></div></div><span class="num">4.5</span></div>
+    </div>
+
+    <h3>Los cuatro titulares de esta review</h3>
+    <ul>
+      <li><strong>La historia de ingeniería es excelente.</strong> El arco "el modelo alucinaba el target → el motor
+      sella identidad y valores desde el cluster → el LLM queda reducido a <em>field + dirección</em>" es un caso de
+      diseño honesto que pocos proyectos con LLM pueden contar. Es la diapositiva central de la charla.</li>
+      <li><strong>El riesgo real hoy no es que ejecute algo peligroso — es que se pare o se repita.</strong> Los guardrails
+      de ejecución (cap 2×, only-raise, allow-list de namespace, rollback) están bien. Los agujeros están en los bordes:
+      un Mattermost colgado bloquea la cola minutos (F-04), ChromaDB síncrono puede tumbar el liveness (F-03), y no hay
+      cooldown por workload — dos episodios seguidos pueden encadenar duplicaciones "legales" de 2× cada una (F-01).</li>
+      <li><strong>Nada de esto está validado E2E en el cluster todavía.</strong> <code>cb2d1db</code> está buildeado con
+      los tests en verde, pero el chaos OOM del arco completo (enrichment → seal → auto sin NotFound → rollback) está
+      pendiente, y hay un incidente de secrets a medio recuperar. Hasta que eso pase, el 7.1 es sobre papel.</li>
+      <li><strong>La pregunta "¿y el LLM para qué?" hay que responderla antes de que la hagan.</strong> Para el happy path OOM,
+      el modelo es hoy casi sustituible por un motor de reglas (o por el VPA) — y esa honestidad es la mejor defensa: el LLM
+      está donde el problema es de lenguaje (generalizar por runbook, elegir el campo, explicar al humano), no de números.
+      §3 hace de abogado del diablo y §4 posiciona el proyecto frente a K8sGPT, HolmesGPT y VPA.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════════ §2 CASO DE NEGOCIO ══════════════ -->
+<section id="negocio">
+  <div class="wrap">
+    <div class="eyebrow">§2</div>
+    <h2>El caso de negocio: qué resuelve, por qué y cuánto vale</h2>
+    <p class="lede">Un chapter no compra arquitectura: compra tiempo de ingeniero recuperado y servicio degradado menos minutos.
+    Esta sección traduce el sistema a ese idioma — y señala dónde el proyecto aún no se mide a sí mismo en términos de negocio.</p>
+
+    <h3>2.1 — El problema que ataca</h3>
+    <p>El toil de la guardia. Una fracción grande de las alertas de infraestructura son <strong>incidentes repetitivos con runbook
+    conocido</strong> (OOMKilled, crash-loops, límites mal dimensionados): despiertan a un ingeniero para ejecutar los mismos tres
+    comandos de siempre. Cada uno cuesta el tiempo del diagnóstico, el cambio de contexto de quien estaba haciendo otra cosa, y
+    — de madrugada — calidad de vida del equipo. El sistema convierte esa clase de incidente en: <em>diagnóstico ya masticado en el
+    canal de ops en ~4 minutos, y para el subconjunto acotado y seguro, arreglado antes de que nadie mire el móvil</em>.</p>
+
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Métrica</th><th>Proceso manual (guardia)</th><th>Con el agente (medido en chaos)</th></tr></thead>
+      <tbody>
+        <tr><td>Detección → humano enterado (MTTD)</td><td>1–15 min (según canal y hora)</td><td><strong>~5 s</strong> (webhook, medido)</td></tr>
+        <tr><td>Detección → diagnóstico con contexto</td><td>15–45 min (abrir laptop, kubectl, buscar el runbook)</td><td><strong>205–252 s</strong>, con runbook y estado real del pod ya en el mensaje</td></tr>
+        <tr><td>Detección → remediación aplicada</td><td>20–60 min (y depende de quién esté de guardia)</td><td><strong>~4 min</strong> auto (clase OOM/limits) · 1 clic si requiere aprobación</td></tr>
+        <tr><td>Coste variable por incidente</td><td>Horas de ingeniero (las más caras: las nocturnas)</td><td>≈ 0 — LLM local en CPU, sin coste por token ni API externa</td></tr>
+      </tbody>
+    </table></div>
+    <p class="fig-note">Los tiempos del agente son medidos (chaos engineering, docs/12); los manuales son rangos honestos de industria —
+    conviene sustituirlos por el baseline real del equipo antes del chapter si existe histórico de incidencias.</p>
+
+    <h3>2.2 — Por qué esta solución y no otra</h3>
+    <ul>
+      <li><strong>LLM local (Ollama in-cluster), no API externa.</strong> Dos razones de negocio, no de moda: los datos de
+      infraestructura de una telco no salen del cluster (compliance sin abogados), y el coste es <em>fijo y minúsculo</em>
+      (un nodo e2-standard-2, sin GPU) en vez de variable por token — el coste no crece con las tormentas de alertas, que es
+      exactamente cuando más se usa.</li>
+      <li><strong>RAG con runbooks propios, no un modelo entrenado.</strong> El conocimiento operativo del equipo se vuelve
+      ejecutable escribiendo YAML, no entrenando nada. Onboarding de un servicio nuevo = escribir sus runbooks. Y está medido:
+      con el runbook correcto el modelo pequeño rinde (RAG safety 100% vs 25% sin contexto) — la inversión va al conocimiento,
+      que se queda en casa, no al modelo, que es intercambiable.</li>
+      <li><strong>Confianza gradual, no big-bang.</strong> El mismo sistema opera en cuatro marchas: dry-run → solo sugiere →
+      escala con botón de aprobación → auto en namespaces propios. Eso es una <em>estrategia de adopción</em>: cualquier equipo
+      puede empezar en la marcha 1 con riesgo cero e ir subiendo cuando los números le den confianza.</li>
+    </ul>
+
+    <h3>2.3 — La cuenta, en prudente</h3>
+    <p>Con supuestos conservadores: si el equipo recibe ~40 alertas accionables/mes y un 25–30% son de la clase que el sistema
+    ya cubre (limits/OOM), son <strong>10–12 incidentes/mes × 30–60 min de ingeniero ≈ 5–12 horas/mes recuperadas</strong>,
+    más la reducción de minutos de servicio degradado (el fix llega en 4 min, no en 40) y el valor no-lineal de las guardias
+    sin despertar. El coste marginal de operarlo es ~0 (corre en el cluster existente). La inversión real ya está hecha:
+    es el desarrollo. <em>El punto débil de esta cuenta no es el sistema, es que hoy nadie la está midiendo</em> — ver 2.4.</p>
+
+    <h3>2.4 — Mejoras con mentalidad empresarial (lo que falta para "vender" esto por dentro)</h3>
+    <div class="grid2">
+      <div class="card"><h4>KPIs de negocio en Grafana, no solo técnicos</h4>
+        <p>Hoy el dashboard cuenta colas y outcomes. Faltan las tres cifras que un manager entiende: <strong>% de incidentes resueltos
+        sin humano</strong>, <strong>minutos de ingeniero ahorrados/mes</strong> (proxy: incidentes auto-resueltos × tiempo medio manual)
+        y <strong>MTTR humano vs auto</strong>. Todas derivables de métricas que ya existen — es un panel, no una feature.</p></div>
+      <div class="card"><h4>Informe mensual de auditoría automático</h4>
+        <p>"Qué tocó el sistema, cuándo, por qué, con qué resultado, qué revirtió." Un resumen periódico al canal (los datos ya están
+        en ChromaDB + métricas) convierte al agente de caja mágica en empleado auditable — la condición para que management
+        autorice ampliar su autonomía.</p></div>
+      <div class="card"><h4>Baseline antes/después con datos reales</h4>
+        <p>La comparativa de 2.1 usa rangos de industria. Con el histórico de incidencias del equipo (aunque sean 3 meses de Mattermost)
+        se sustituye por <em>vuestros</em> números — el argumento pasa de plausible a irrefutable. Depende de F-11 (incident_id E2E)
+        para atribuir bien.</p></div>
+      <div class="card"><h4>Backlog dirigido por frecuencia real</h4>
+        <p>La siguiente acción a automatizar no debería elegirse por interés técnico sino por <strong>volumen × coste</strong>:
+        exportar la distribución real de alertname del último trimestre y priorizar el catálogo (H3) por ahí. El sistema ya
+        recoge estos datos; falta usarlos para decidir.</p></div>
+      <div class="card"><h4>Plan de piloto replicable</h4>
+        <p>El activo más vendible al chapter no es la demo: es que adoptarlo cuesta "10 runbooks YAML + dry-run 2 semanas + revisar
+        números", cero código. Empaquetar ese onboarding como checklist de una página lo convierte en producto interno, no en
+        proyecto personal.</p></div>
+      <div class="card"><h4>Coste total transparente</h4>
+        <p>Una tabla de una fila: nodos + almacenamiento ≈ coste fijo mensual del stack completo, comparado con el precio de
+        una sola hora de guardia. Cuando el coste de operar el sistema es menor que el de UN incidente manual al mes, la
+        conversación de ROI se acaba sola.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ §3 EL PAPEL DEL LLM ══════════════ -->
+<section id="llm">
+  <div class="wrap">
+    <div class="eyebrow">§3</div>
+    <h2>¿El LLM vale para algo aquí? Abogado del diablo</h2>
+    <p class="lede">Es la pregunta más peligrosa que puede hacer el chapter, así que la respondemos nosotros primero,
+    sin anestesia: <strong>en el camino automático actual, para la clase OOM/limits, el LLM es casi sustituible por un
+    motor de reglas.</strong> Y aun así el LLM es la apuesta correcta — pero por razones distintas de las que sugiere la demo.
+    Esta sección separa lo que el LLM hace hoy, lo que podría hacer, y lo que nunca debería hacer.</p>
+
+    <h3>3.1 — La auditoría incómoda: quién decide qué en una remediación</h3>
+    <p>La v2 fue quitándole responsabilidades al modelo cada vez que se midió que las hacía mal. El resultado es este reparto —
+    y leído en frío, deja al LLM con muy poco en el <em>happy path</em>:</p>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Dato de la remediación</th><th>Fuente hoy</th><th>Qué quedó del LLM</th></tr></thead>
+      <tbody>
+        <tr><td>Workload objetivo (name/namespace)</td><td><strong>Cluster</strong> (ownerReferences, sellado)</td><td>Nada — su propuesta se sobrescribe</td></tr>
+        <tr><td>Container objetivo</td><td><strong>Cluster</strong> (selección determinista, prioriza OOMKilled)</td><td>Nada</td></tr>
+        <tr><td>Valor actual del límite</td><td><strong>Cluster</strong> (snapshot)</td><td>Nada</td></tr>
+        <tr><td>Valor nuevo</td><td>LLM <em>si es una subida válida</em>; si no, <strong>el motor sintetiza 2×</strong></td><td>Un número, con red y sustituto</td></tr>
+        <tr><td>Confianza del diagnóstico</td><td><strong>Cluster</strong> (reason + restarts) para la clase crash/OOM</td><td>Solo cuando el cluster no da señal</td></tr>
+        <tr><td>Riesgo de la acción</td><td><strong>Motor</strong> (bound determinista; el rating del modelo se ignora si es estructurado)</td><td>Nada en el camino estructurado</td></tr>
+        <tr><td>Comando ejecutado</td><td><strong>Motor</strong> (síntesis, nunca el texto del modelo)</td><td>Nada</td></tr>
+        <tr><td>Campo a tocar (memoria vs CPU)</td><td><strong>LLM</strong> (con el runbook: 5/5 medido)</td><td>La elección semántica real</td></tr>
+        <tr><td>Diagnóstico + explicación en Mattermost</td><td><strong>LLM</strong></td><td>Todo el lenguaje que lee el humano</td></tr>
+      </tbody>
+    </table></div>
+    <p>Conclusión honesta: para un OOMKilled con runbook, la cadena
+    <code>last_state_reason=OOMKilled → subir memoria 2× → rollback si no cura</code> es <strong>escribible sin LLM en ~50 líneas</strong>.
+    De hecho Kubernetes ya trae esa pieza: el <a href="https://kubernetes.io/docs/concepts/workloads/autoscaling/vertical-pod-autoscale/">Vertical Pod Autoscaler</a>
+    reacciona a un OOM subiendo la recomendación de memoria (+20% o 100MB) de forma puramente determinista. Si el proyecto se
+    presentara como "un LLM que arregla OOMs", perdería el debate. No es eso — y la defensa se construye en 3.2 y §4.</p>
+
+    <h3>3.2 — Dónde el LLM aporta valor real HOY (medible)</h3>
+    <ul>
+      <li><strong>La generalización sin código nuevo.</strong> El motor de reglas hipotético de 50 líneas cubre OOM. El sistema real
+      procesa <em>cualquier</em> alerta — CrashLoop, BadImage, HighCPU, las 6 reglas actuales y las que se añadan — con el mismo
+      pipeline: retrieval del runbook + diagnóstico + clasificación de comandos. Añadir una clase de incidente = escribir un runbook
+      YAML, no una rama de código. El LLM es el <em>generalizador</em>; el motor es el <em>limitador</em>.</li>
+      <li><strong>La elección semántica campo/dirección.</strong> Decidir si la señal "pod reiniciando con throttling alto" es un
+      problema de CPU o de memoria requiere leer la descripción de la alerta, el runbook y los hechos del cluster juntos. Medido:
+      con el runbook inyectado, 5/5 de acierto en el campo. Es poco glamuroso, pero es matching semántico genuino.</li>
+      <li><strong>El lenguaje para el humano.</strong> En toda escalación, el operador decide en segundos porque el mensaje llega con
+      diagnóstico, explicación y comando propuesto ya redactados. El valor no es la remediación — es <em>comprimir el tiempo de decisión
+      humana</em>. Ese uso no tiene alternativa determinista.</li>
+      <li><strong>El embedder también es "el LLM".</strong> El retrieval alerta→runbook funciona por embeddings semánticos
+      (nomic-embed-text), no por keywords: "container killed due to memory" encuentra el runbook de OOMKilled aunque no comparta
+      palabras. p@1=73% medido. Sin esa pieza, el sistema necesitaría un mapeo alertname→runbook mantenido a mano.</li>
+    </ul>
+
+    <h3>3.3 — Brainstorm: los usos con más palanca (ordenados por valor/esfuerzo)</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>#</th><th>Uso</th><th>Por qué encaja</th><th>Esfuerzo</th><th>Horizonte</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><strong>Resumir logs + events en el enrichment</strong></td><td>El RBAC ya concede <code>pods/log</code> y <code>events</code> y el gather no los usa (F-17). Un resumen de 3 líneas de los últimos logs en el mensaje de Mattermost es EL uso de LLM sin riesgo: solo lenguaje, cero ejecución, valor inmediato para el operador.</td><td>Bajo</td><td>H1</td></tr>
+        <tr><td>2</td><td><strong>Postmortem automático por incidente</strong></td><td>Todos los datos ya existen (alerta, snapshot, diagnóstico, acción, outcome del rollback). El LLM los redacta como narrativa con timeline → el doc que hoy nadie escribe. Alimenta además el informe mensual de auditoría (§2.4).</td><td>Bajo</td><td>H2</td></tr>
+        <tr><td>3</td><td><strong>Generar runbooks candidatos desde incidentes resueltos</strong></td><td>Cierra F4 con humano en el loop: tras N incidentes similares auto-resueltos, el LLM propone el runbook YAML y un humano lo aprueba antes de ingestar. El corpus crece curado, no envenenado (F-12).</td><td>Medio</td><td>H2</td></tr>
+        <tr><td>4</td><td><strong>Correlación de tormentas de alertas</strong></td><td>15 alertas en cola tras caer un nodo son UN incidente. Agrupar semánticamente y diagnosticar la raíz una vez ataca a la vez el throughput (F-10) y el ruido para el humano. Es un problema de lenguaje puro — terreno natural del LLM.</td><td>Medio</td><td>H3</td></tr>
+        <tr><td>5</td><td><strong>ChatOps conversacional sobre el histórico</strong></td><td><code>/aiops explica &lt;incidente&gt;</code>, "¿por qué remediaste esto ayer?", "¿cuántos OOM llevó este deployment este mes?" — RAG sobre la colección de incidentes que ya existe. Convierte la memoria del sistema en un activo consultable.</td><td>Medio</td><td>H3</td></tr>
+        <tr><td>6</td><td><strong>Triage de alertas sin runbook</strong></td><td>Para lo nunca visto: clasificar, resumir qué se sabe, y proponer el siguiente paso <em>investigativo</em> (no ejecutarlo). Es donde un humano pierde más tiempo y donde el modelo no necesita tener razón — solo orientar.</td><td>Bajo</td><td>H2</td></tr>
+        <tr><td>7</td><td><strong>"Qué cambió" antes del diagnóstico</strong></td><td>Correlacionar el incidente con el último rollout/cambio de imagen (kubectl rollout history ya es legible con el RBAC actual). El 70% de los incidentes reales siguen a un deploy; hoy el sistema no mira.</td><td>Medio</td><td>H3</td></tr>
+        <tr><td>8</td><td><strong>Alerta→PromQL para el modo proactivo (F5)</strong></td><td>El loop predictivo necesita consultas de tendencia por workload; el LLM traduce la intención ("memoria de X creciendo sostenida") a PromQL verificable. El humano/motor valida la query, no la prosa.</td><td>Alto</td><td>H3</td></tr>
+      </tbody>
+    </table></div>
+    <p class="fig-note">Patrón común de los 8: el LLM produce <em>lenguaje o candidatos</em>; nunca produce la acción final.
+    Es el mismo contrato que ya gobierna la remediación.</p>
+  </div>
+
+  <div class="wide">
+    <figure>
+      <div class="scroll">
+      <svg class="fig-svg" viewBox="0 0 1040 420" role="img" aria-label="Mapa de valor del LLM por tipo de incidente">
+        <!-- axes -->
+        <line x1="120" y1="360" x2="980" y2="360" stroke="#3B534E" stroke-width="1.5"/>
+        <line x1="120" y1="40"  x2="120" y2="360" stroke="#3B534E" stroke-width="1.5"/>
+        <line x1="550" y1="40"  x2="550" y2="360" stroke="#243430" stroke-width="1" stroke-dasharray="4 4"/>
+        <line x1="120" y1="200" x2="980" y2="200" stroke="#243430" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="550" y="392" fill="#8FA6A0" font-size="11" text-anchor="middle">CONOCIMIENTO DEL INCIDENTE →  (runbook exacto ⟶ nunca visto)</text>
+        <text x="52" y="200" fill="#8FA6A0" font-size="11" text-anchor="middle" transform="rotate(-90 52 200)">FIX →  (mecánico ⟶ requiere juicio)</text>
+
+        <!-- quadrant labels + content -->
+        <g font-size="12" text-anchor="middle">
+          <rect x="150" y="240" width="360" height="96" fill="#1F3527" stroke="#4E8A62"/>
+          <text x="330" y="266" fill="#9FD8AE" font-weight="bold">Conocido + mecánico</text>
+          <text x="330" y="288" fill="#C9DCD5">OOM/limits · aquí vive el AUTO hoy</text>
+          <text x="330" y="308" fill="#8FA6A0" font-size="10.5">LLM casi sustituible: motor de reglas o VPA</text>
+          <text x="330" y="324" fill="#8FA6A0" font-size="10.5">→ su papel: field + dirección + explicación</text>
+
+          <rect x="590" y="240" width="360" height="96" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="770" y="266" fill="#E8F1EE" font-weight="bold">Nuevo + mecánico</text>
+          <text x="770" y="288" fill="#C9DCD5">variantes de alertas conocidas · workloads nuevos</text>
+          <text x="770" y="308" fill="#8FA6A0" font-size="10.5">LLM valioso: matching semántico al runbook</text>
+          <text x="770" y="324" fill="#8FA6A0" font-size="10.5">→ generaliza sin escribir código</text>
+
+          <rect x="150" y="64" width="360" height="96" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="330" y="90" fill="#E8F1EE" font-weight="bold">Conocido + con juicio</text>
+          <text x="330" y="112" fill="#C9DCD5">scale, restart, patch de config</text>
+          <text x="330" y="132" fill="#8FA6A0" font-size="10.5">LLM útil como redactor de la escalación</text>
+          <text x="330" y="148" fill="#8FA6A0" font-size="10.5">→ el humano decide más rápido con contexto</text>
+
+          <rect x="590" y="64" width="360" height="96" fill="#3A2E20" stroke="#6B5A3E"/>
+          <text x="770" y="90" fill="#E8C88F" font-weight="bold">Nuevo + con juicio</text>
+          <text x="770" y="112" fill="#C9DCD5">incidentes compuestos · tormentas · lo raro</text>
+          <text x="770" y="132" fill="#8FA6A0" font-size="10.5">Máximo valor del LLM, mínima autonomía:</text>
+          <text x="770" y="148" fill="#8FA6A0" font-size="10.5">→ triage, correlación, investigación asistida</text>
+        </g>
+        <text x="550" y="30" fill="#5FA79C" font-size="10" letter-spacing="2" text-anchor="middle">EL VALOR DEL LLM CRECE HACIA ARRIBA-DERECHA · LA AUTONOMÍA SEGURA CRECE HACIA ABAJO-IZQUIERDA</text>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 1 — Mapa de valor del LLM.</b> La paradoja que el chapter debe entender: el cuadrante donde hoy actúa el
+      automatismo (abajo-izquierda) es donde el LLM aporta menos — y eso es <i>correcto</i>: solo ahí la acción es acotable y reversible.
+      El roadmap mueve el valor del LLM hacia arriba-derecha (triage, correlación, redacción) sin moverle jamás la autonomía.</figcaption>
+    </figure>
+  </div>
+
+  <div class="wrap">
+    <h3>3.4 — Anti-usos: dónde el LLM no debe volver a entrar</h3>
+    <ul>
+      <li><strong>Decidir números.</strong> current_value, targets, caps — ya se le quitó y se midió por qué (alucinaba 3/3 corridas).
+      Cualquier feature nueva que le devuelva un número al modelo es una regresión de diseño.</li>
+      <li><strong>Evaluar su propia confianza o riesgo.</strong> Autoevaluación de un 1.5b = ruido con formato de métrica (backlog E5).
+      La señal viene del cluster o de un eval, nunca del propio modelo.</li>
+      <li><strong>Clasificar la seguridad de comandos.</strong> Eso es un problema de parsing/tipado (API de K8s, F-07), no de comprensión.
+      Pedírselo al LLM sería usar la pieza probabilística para el trabajo del compilador.</li>
+      <li><strong>Estar en el hot path de ejecución.</strong> Todo uso nuevo del LLM debe poder fallar/tardar sin bloquear nada — como el
+      enrichment: fail-soft, en paralelo, con timeout corto.</li>
+    </ul>
+
+    <h3>3.5 — Cómo diseñaría el uso del LLM quien trabaja con LLMs a diario</h3>
+    <p>Perspectiva de practicante (esta review la escribe un LLM, así que tómese como testimonio de parte interesada pero informada):
+    los sistemas que usan bien un modelo comparten cinco patrones, y este proyecto ya tiene tres a medias.</p>
+    <ul>
+      <li><strong>Forzar el formato en el decoder, no arreglarlo en el parser.</strong> El agente mantiene 3 estrategias de extracción
+      de JSON (<code>extraction.py</code>) para limpiar lo que el modelo escupe. Ollama soporta <em>salida estructurada</em>
+      (<code>format</code> con JSON schema): la gramática restringe la generación y el JSON malformado deja de existir como clase de error.
+      Una línea en la llamada, y <code>extract_json</code> queda solo como cinturón. Es el fix de mayor ratio del documento.</li>
+      <li><strong>Pedir evidencia, no conclusiones.</strong> Hoy el modelo devuelve <code>field=memory</code> y el motor confía si el resto
+      cuadra. Mejor contrato: cada campo llega con su cita — <code>{"field":"memory","porque":"last_state_reason=OOMKilled"}</code> —
+      y el motor <em>verifica la cita contra el snapshot</em>. Un claim sin hecho que lo respalde se trata como abstención. Convierte el
+      grounding de "sobrescribo lo que dijiste" a "demuéstrame de dónde lo sacaste": más barato que un juez y mecánicamente verificable.</li>
+      <li><strong>Abstención de primera clase.</strong> El prompt ya dice "omite proposed_action si no tienes el current_value" — bien,
+      pero la abstención debe estar en el <em>esquema</em> (p. ej. <code>"action":"insufficient_context"</code> + qué falta) y debe
+      <em>puntuar positivo en los evals</em>. Los modelos pequeños fabrican porque el formato no les da una salida digna para dudar.</li>
+      <li><strong>Dos presupuestos de latencia, no dos modelos.</strong> El mismo 1.5b puede servir el camino síncrono (clasificar,
+      field+dirección: segundos con poco contexto) y, en tareas de cola aparte SIN bloquear alertas, el trabajo narrativo que tolera
+      minutos (postmortems, resúmenes de logs, runbooks candidatos). La regla: la criticidad de la tarea decide su presupuesto,
+      y ningún uso narrativo comparte carril con la ingesta.</li>
+      <li><strong>Evals como gate de CI, no como experimento.</strong> Ya existen (<code>eval_model_compare.py</code>, datasets highcpu/highmemory)
+      pero corren a mano. Todo cambio de prompt, modelo o temperatura debería pasar el eval en Cloud Build igual que los 535 tests pasan
+      el gate — un prompt es código con varianza, y la varianza sin regresión-test es deuda invisible.</li>
+    </ul>
+    <p class="fig-note">Lo que NO recomendaría todavía con un 1.5b en CPU: bucles agénticos de tool-use libre (el modelo pidiendo
+    kubectl a discreción, estilo HolmesGPT). La fiabilidad del function-calling a este tamaño no lo sostiene, y el patrón actual —
+    gather determinista primero, modelo después — es más predecible y más barato. Si algún día hay GPU y un 7B+, es la evolución natural (§4.2).</p>
+
+    <div class="box">
+      <h4>La frase para la charla</h4>
+      <p>«El LLM no está aquí para ejecutar — para eso sobra. Está aquí porque el 80% del coste de un incidente es <em>entenderlo y
+      contarlo</em>: qué pasa, a qué se parece, qué se hizo la última vez, qué conviene mirar. Ese es un problema de lenguaje, y por eso
+      la arquitectura le da al modelo todo el lenguaje y ningún número.»</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ §4 ESTADO DEL ARTE ══════════════ -->
+<section id="sota">
+  <div class="wrap">
+    <div class="eyebrow">§4</div>
+    <h2>Estado del arte: contra qué se compara esto</h2>
+    <p class="lede">Un panel serio preguntará "¿esto no lo hace ya X?". Respuesta corta: cada pieza existe por separado en
+    herramientas maduras; la combinación <em>diagnóstico explicado + ejecución acotada con rollback + aprobación ChatOps +
+    memoria de incidentes, todo local</em> es lo que no viene de serie en ninguna. Y hay que saberse las tres de memoria.</p>
+
+    <div class="tbl-wrap"><table>
+      <thead><tr><th></th><th>Este proyecto</th><th>K8sGPT (CNCF)</th><th>HolmesGPT / Robusta</th><th>VPA (K8s nativo)</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Qué es</strong></td><td>Agente de remediación event-driven con LLM local</td><td>Analizadores de cluster + explicación LLM (CLI y Operator)</td><td>Agente de investigación de alertas multi-fuente</td><td>Ajuste automático de requests/limits por consumo histórico</td></tr>
+        <tr><td><strong>Diagnóstico explicado</strong></td><td>Sí, con RAG de runbooks propios + hechos del cluster</td><td>Sí (analizadores predefinidos + varios backends LLM)</td><td>Sí, el más profundo (logs, métricas, toolsets externos)</td><td>No — recomienda cifras, no explica</td></tr>
+        <tr><td><strong>Ejecución autónoma</strong></td><td>Sí, acotada (≤2×, only-raise, allow-list, rollback 300s)</td><td>Parcial (Operator con Mutation CRs, umbrales de riesgo)</td><td>No — sugiere, humano ejecuta</td><td>Sí, total en su dominio (evict/recreate o in-place)</td></tr>
+        <tr><td><strong>Human-in-the-loop</strong></td><td>Botones Mattermost con HMAC + paridad humano/auto</td><td>No como flujo central</td><td>Sí (UI Robusta)</td><td>No</td></tr>
+        <tr><td><strong>Memoria / aprendizaje</strong></td><td>Incidentes en ChromaDB realimentan el retrieval</td><td>No</td><td>Parcial (contexto por toolsets)</td><td>Histórico de consumo (~8 días)</td></tr>
+        <tr><td><strong>Datos salen del cluster</strong></td><td><strong>Nunca</strong> (Ollama in-cluster)</td><td>Depende del backend (anonimiza antes de enviar)</td><td>Depende del modelo configurado</td><td>Nunca (no usa LLM)</td></tr>
+        <tr><td><strong>Cubre crashloop/badimage/etc.</strong></td><td>Sí (diagnóstico general; auto solo limits)</td><td>Sí (diagnóstico)</td><td>Sí (investigación)</td><td>No — solo dimensionamiento</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>4.1 — La comparación que más duele: VPA</h3>
+    <p>Para la clase OOM/limits, el VPA es el rival directo y hay que nombrarlo antes de que lo nombre el panel: reacciona a un
+    OOMKill subiendo la recomendación de memoria de forma inmediata y determinista, y con <code>InPlaceOrRecreate</code> puede incluso
+    aplicar sin reiniciar el pod. La defensa honesta tiene tres patas: (1) el VPA <strong>no explica, no notifica y no escala a un humano</strong>
+    — optimiza en silencio, que es otra misión; (2) su dominio es <em>solo</em> dimensionamiento continuo (necesita histórico, no convive
+    bien con HPA sobre las mismas métricas, y no toca crashloop/badimage/imagen rota); (3) este sistema es <strong>event-driven de incidentes</strong>:
+    diagnóstico + decisión auditada + rollback + memoria — con el bump de límites como <em>primera acción</em> del catálogo, no como el producto.
+    Dicho lo cual: la review recomienda añadir "¿por qué no VPA para esto?" a la demo <em>proactivamente</em> — es mejor diapositiva propia que pregunta ajena.</p>
+
+    <h3>4.2 — Qué copiar de cada uno (robar bien es de seniors)</h3>
+    <ul>
+      <li><strong>De K8sGPT</strong>: la anonimización de datos antes del LLM (aquí es irrelevante hoy por ser local, pero se vuelve
+      obligatoria si algún día se prueba un backend externo) y el concepto de <em>analyzers</em> declarativos como catálogo de clases de incidente.</li>
+      <li><strong>De HolmesGPT</strong>: los <em>toolsets</em> — el LLM investiga llamando a herramientas de solo-lectura (logs, métricas,
+      historial de rollouts). Es exactamente la evolución natural del enrichment (usos #1 y #7 del brainstorm de §3.3).</li>
+      <li><strong>Del VPA</strong>: la reacción proporcional al evento (+20% / 100MB en vez de 2× fijo) como refinamiento futuro del
+      cap — y su humildad de dominio: hace UNA cosa, medible, y nada más.</li>
+    </ul>
+  </div>
+
+  <div class="wide">
+    <figure>
+      <div class="scroll">
+      <svg class="fig-svg" viewBox="0 0 1040 430" role="img" aria-label="Posicionamiento frente al estado del arte">
+        <line x1="140" y1="370" x2="980" y2="370" stroke="#3B534E" stroke-width="1.5"/>
+        <line x1="140" y1="40"  x2="140" y2="370" stroke="#3B534E" stroke-width="1.5"/>
+        <text x="560" y="404" fill="#8FA6A0" font-size="11" text-anchor="middle">AUTONOMÍA DE EJECUCIÓN →  (solo lee ⟶ ejecuta cambios con red de seguridad)</text>
+        <text x="66" y="205" fill="#8FA6A0" font-size="11" text-anchor="middle" transform="rotate(-90 66 205)">PROFUNDIDAD DE DIAGNÓSTICO / EXPLICACIÓN →</text>
+
+        <!-- grid hints -->
+        <line x1="140" y1="205" x2="980" y2="205" stroke="#243430" stroke-dasharray="4 4"/>
+        <line x1="560" y1="40" x2="560" y2="370" stroke="#243430" stroke-dasharray="4 4"/>
+
+        <!-- points -->
+        <g text-anchor="middle" font-size="12">
+          <circle cx="850" cy="330" r="9" fill="#4A576B"/>
+          <text x="850" y="308" fill="#A9C4E8" font-weight="bold">VPA</text>
+          <text x="850" y="352" fill="#8FA6A0" font-size="10.5">ejecuta todo, no explica nada</text>
+
+          <circle cx="300" cy="95" r="9" fill="#6B5A3E"/>
+          <text x="300" y="73" fill="#E8C88F" font-weight="bold">HolmesGPT / Robusta</text>
+          <text x="300" y="118" fill="#8FA6A0" font-size="10.5">investiga hondo, no ejecuta</text>
+
+          <circle cx="480" cy="185" r="9" fill="#3B534E"/>
+          <text x="480" y="163" fill="#C9DCD5" font-weight="bold">K8sGPT</text>
+          <text x="480" y="208" fill="#8FA6A0" font-size="10.5">explica bien, remediación emergente (Operator)</text>
+
+          <circle cx="700" cy="110" r="11" fill="#0E6B64" stroke="#9FD8CE" stroke-width="2"/>
+          <text x="700" y="86" fill="#9FD8CE" font-weight="bold">ESTE PROYECTO</text>
+          <text x="700" y="134" fill="#8FA6A0" font-size="10.5">explica + ejecuta acotado + rollback + aprende</text>
+        </g>
+
+        <text x="920" y="60" fill="#5A716B" font-size="10" text-anchor="end">La esquina superior-derecha solo es defendible</text>
+        <text x="920" y="74" fill="#5A716B" font-size="10" text-anchor="end">si la autonomía viene con red: cap + rollback + allow-list</text>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 2 — Posicionamiento.</b> Nadie ocupa la esquina "explica mucho Y ejecuta con red de seguridad" — ese es el
+      claim del proyecto, y también su carga de la prueba: la autonomía solo se sostiene mientras cada acción del catálogo tenga cap
+      determinista, rollback y confinamiento de blast-radius. Posiciones cualitativas, elaboradas de la documentación pública de cada herramienta (referencias al pie).</figcaption>
+    </figure>
+  </div>
+
+  <div class="wrap">
+    <p class="fig-note">Referencias consultadas (2026-07):
+    <a href="https://github.com/k8sgpt-ai/k8sgpt">K8sGPT (GitHub)</a> ·
+    <a href="https://k8sgpt.ai/">k8sgpt.ai</a> ·
+    <a href="https://www.cncf.io/blog/2026/04/21/auto-diagnosing-kubernetes-alerts-with-holmesgpt-and-cncf-tools/">CNCF: auto-diagnosing alerts con HolmesGPT</a> ·
+    <a href="https://docs.robusta.dev/master/configuration/holmesgpt/index.html">Robusta/HolmesGPT docs</a> ·
+    <a href="https://kubernetes.io/docs/concepts/workloads/autoscaling/vertical-pod-autoscale/">Kubernetes VPA</a> ·
+    <a href="https://docs.cloud.google.com/kubernetes-engine/docs/concepts/verticalpodautoscaler">GKE VPA (reacción a OOM)</a> ·
+    <a href="https://docs.ollama.com/faq">Ollama FAQ (OLLAMA_NUM_PARALLEL)</a>.</p>
+  </div>
+</section>
+
+<!-- ══════════════ §5 ARQUITECTURA ══════════════ -->
+<section id="arquitectura">
+  <div class="wrap">
+    <div class="eyebrow">§5</div>
+    <h2>La arquitectura, explicada desde cero</h2>
+    <p class="lede">Esta sección está escrita para que alguien que llega nuevo al repo entienda el sistema en 15 minutos:
+    qué hace, por dónde fluye una alerta y por qué cada pieza existe.</p>
+
+    <h3>5.1 — La idea en una frase</h3>
+    <p>Cuando Prometheus detecta que un pod está mal (se queda sin memoria, entra en crash-loop…), el sistema
+    <strong>diagnostica el incidente con un LLM local</strong> (nada sale del cluster), decide con
+    <strong>reglas deterministas</strong> si puede arreglarlo solo, y si puede, aplica un parche acotado
+    (<code>kubectl set resources</code>, nunca más de 2× el límite actual), <strong>vigila el resultado 5 minutos
+    y revierte solo</strong> si no curó. Si no puede, pide permiso a un humano en Mattermost con botones.
+    Todo el razonamiento peligroso está fuera del LLM.</p>
+
+    <div class="box">
+      <h4>La doctrina de tres planos</h4>
+      <p><strong>El cluster informa</strong> (<code>enrichment.py</code> consulta la API de K8s ANTES del LLM: límites reales,
+      restarts, razón de la última muerte, workload dueño del pod) · <strong>el modelo razona</strong>
+      (<code>diagnosis.py</code>: el LLM solo aporta diagnóstico, <em>qué campo</em> tocar y <em>en qué dirección</em>) ·
+      <strong>el motor dispone</strong> (<code>remediation.py</code>: 10 reglas en cascada deciden, y si se ejecuta,
+      el comando lo sintetiza el motor con datos del cluster — el texto libre del LLM jamás se ejecuta en el camino auto).</p>
+    </div>
+
+    <h3>5.2 — El pipeline de extremo a extremo</h3>
+  </div>
+  <div class="wide">
+    <figure>
+      <div class="scroll">
+      <svg class="fig-svg" viewBox="0 0 1040 400" role="img" aria-label="Diagrama del pipeline E2E">
+        <!-- swim bands -->
+        <rect x="0" y="36" width="1040" height="108" fill="#16221F"/>
+        <rect x="0" y="152" width="1040" height="108" fill="#121B19"/>
+        <rect x="0" y="268" width="1040" height="108" fill="#16221F"/>
+        <text x="14" y="58" fill="#5FA79C" font-size="10" letter-spacing="2">DETECCIÓN + INGESTA DURABLE</text>
+        <text x="14" y="174" fill="#5FA79C" font-size="10" letter-spacing="2">EL CLUSTER INFORMA · EL MODELO RAZONA</text>
+        <text x="14" y="290" fill="#5FA79C" font-size="10" letter-spacing="2">EL MOTOR DISPONE</text>
+
+        <!-- arrow marker -->
+        <defs>
+          <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L8,4 L0,8 z" fill="#6FBFB2"/>
+          </marker>
+        </defs>
+
+        <!-- Row 1: detection -->
+        <g font-size="12" fill="#E8F1EE" text-anchor="middle">
+          <rect x="30"  y="72" width="128" height="48" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="94" y="92">Prometheus</text><text x="94" y="108" fill="#8FA6A0" font-size="10">6 reglas arturo-*</text>
+
+          <rect x="196" y="72" width="128" height="48" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="260" y="92">Alertmanager</text><text x="260" y="108" fill="#8FA6A0" font-size="10">webhook + retry</text>
+
+          <rect x="362" y="72" width="150" height="48" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="437" y="92">FastAPI /webhook/alert</text><text x="437" y="108" fill="#8FA6A0" font-size="10">503 si Redis cae</text>
+
+          <rect x="550" y="72" width="170" height="48" fill="#233A2E" stroke="#3E6B52"/>
+          <text x="635" y="92">Redis Streams</text><text x="635" y="108" fill="#8FA6A0" font-size="10">dedup · PEL · dead-letter</text>
+
+          <rect x="758" y="72" width="150" height="48" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="833" y="92">consume_loop</text><text x="833" y="108" fill="#8FA6A0" font-size="10">1 a 1, in-process</text>
+        </g>
+        <g stroke="#6FBFB2" stroke-width="1.5" fill="none">
+          <line x1="158" y1="96" x2="192" y2="96" marker-end="url(#arr)"/>
+          <line x1="324" y1="96" x2="358" y2="96" marker-end="url(#arr)"/>
+          <line x1="512" y1="96" x2="546" y2="96" marker-end="url(#arr)"/>
+          <line x1="720" y1="96" x2="754" y2="96" marker-end="url(#arr)"/>
+          <path d="M908 96 L950 96 L950 212 L920 212" marker-end="url(#arr)"/>
+        </g>
+
+        <!-- Row 2: reasoning -->
+        <g font-size="12" fill="#E8F1EE" text-anchor="middle">
+          <rect x="700" y="188" width="216" height="48" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="808" y="208">RAG — ChromaDB</text><text x="808" y="224" fill="#8FA6A0" font-size="10">16 runbooks + incidentes</text>
+
+          <rect x="470" y="188" width="190" height="48" fill="#233A2E" stroke="#3E6B52"/>
+          <text x="565" y="208">enrichment — gather K8s</text><text x="565" y="224" fill="#8FA6A0" font-size="10">límites · restarts · workload dueño</text>
+
+          <rect x="240" y="188" width="190" height="48" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="335" y="208">LLM — qwen2.5:1.5b</text><text x="335" y="224" fill="#8FA6A0" font-size="10">temp=0 · JSON estructurado</text>
+
+          <rect x="30" y="188" width="170" height="48" fill="#233A2E" stroke="#3E6B52"/>
+          <text x="115" y="208">seal + ground</text><text x="115" y="224" fill="#8FA6A0" font-size="10">target/valores ← cluster</text>
+        </g>
+        <g stroke="#6FBFB2" stroke-width="1.5" fill="none">
+          <line x1="696" y1="212" x2="664" y2="212" marker-end="url(#arr)"/>
+          <line x1="466" y1="212" x2="434" y2="212" marker-end="url(#arr)"/>
+          <line x1="236" y1="212" x2="204" y2="212" marker-end="url(#arr)"/>
+          <path d="M115 236 L115 300 L146 300" marker-end="url(#arr)"/>
+        </g>
+
+        <!-- Row 3: engine -->
+        <g font-size="12" fill="#E8F1EE" text-anchor="middle">
+          <rect x="150" y="276" width="200" height="48" fill="#233A2E" stroke="#3E6B52"/>
+          <text x="250" y="296">Motor: 10 reglas</text><text x="250" y="312" fill="#8FA6A0" font-size="10">decide_action()</text>
+
+          <rect x="410" y="276" width="170" height="48" fill="#1F3527" stroke="#3E6B52"/>
+          <text x="495" y="296" fill="#9FD8AE">AUTO-REMEDIA</text><text x="495" y="312" fill="#8FA6A0" font-size="10">kubectl + rollback 300s</text>
+
+          <rect x="620" y="276" width="180" height="48" fill="#3A2E20" stroke="#6B5A3E"/>
+          <text x="710" y="296" fill="#E8C88F">ESCALA</text><text x="710" y="312" fill="#8FA6A0" font-size="10">Mattermost + botones HMAC</text>
+
+          <rect x="840" y="276" width="170" height="48" fill="#28303A" stroke="#4A576B"/>
+          <text x="925" y="296" fill="#A9C4E8">SOLO SUGIERE</text><text x="925" y="312" fill="#8FA6A0" font-size="10">notifica, no toca nada</text>
+        </g>
+        <g stroke="#6FBFB2" stroke-width="1.5" fill="none">
+          <line x1="350" y1="300" x2="406" y2="300" marker-end="url(#arr)"/>
+          <line x1="350" y1="290" x2="616" y2="290" marker-end="url(#arr)" stroke-dasharray="4 3"/>
+          <line x1="350" y1="310" x2="836" y2="310" marker-end="url(#arr)" stroke-dasharray="2 4"/>
+        </g>
+        <text x="30" y="392" fill="#5A716B" font-size="10">Cada flecha tiene métrica Prometheus propia: aiops_queue_* · aiops_enrichment_total · aiops_diagnosis_total · aiops_remediation_total · aiops_remediation_rollback_total</text>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 3 — Pipeline E2E.</b> Tres planos: la ingesta es durable (si Redis cae, el webhook devuelve 503 y
+      Alertmanager reintenta — la alerta no se pierde); el razonamiento junta tres fuentes de contexto (cluster real, runbooks, histórico)
+      antes del LLM; y la decisión final es 100% determinista. El sellado (seal) sobreescribe lo que el LLM dijo sobre
+      <i>quién</i> y <i>cuánto</i> con lo que el cluster dice de verdad.</figcaption>
+    </figure>
+  </div>
+
+  <div class="wrap">
+    <h3>5.3 — Quién es quién en el código</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Módulo</th><th>LOC</th><th>Responsabilidad</th><th>Postura ante fallo</th></tr></thead>
+      <tbody>
+        <tr><td><code>main.py</code></td><td>1368</td><td>Endpoints, orquestación del pipeline, rollback scheduling, formato Mattermost, métricas</td><td>mixta (ver F-15)</td></tr>
+        <tr><td><code>remediation.py</code></td><td>1129</td><td>Clasificación de comandos, 10 reglas, seal/ground, executor kubectl, snapshot + revert</td><td>fail-safe (escala ante duda)</td></tr>
+        <tr><td><code>rag.py</code></td><td>394</td><td>ChromaDB: runbooks + memoria de incidentes, embeddings vía Ollama</td><td>fail-open (sin contexto → zero-shot, pero regla 7.5 impide el auto)</td></tr>
+        <tr><td><code>streams.py</code></td><td>306</td><td>Cola Redis Streams: enqueue con dedup, consumer, reclaim del PEL, dead-letter</td><td><strong>fail-closed</strong> en ingesta (única excepción deliberada)</td></tr>
+        <tr><td><code>enrichment.py</code></td><td>247</td><td>Snapshot del cluster ANTES del LLM: límites, estados, workload dueño vía ownerReferences</td><td>fail-soft (sin snapshot → modo LLM-only, y la regla 4.7 escala)</td></tr>
+        <tr><td><code>diagnosis.py</code></td><td>242</td><td>Prompt AIOps + parsing del JSON del LLM con defaults seguros</td><td>fail-open (timeout → alerta cruda a Mattermost)</td></tr>
+        <tr><td><code>mattermost.py</code></td><td>152</td><td>Notificaciones + botones interactivos firmados con HMAC-SHA256</td><td>retry con backoff (ver F-04)</td></tr>
+        <tr><td><code>rollback_store.py</code> / <code>escalation_store.py</code></td><td>57/63</td><td>Persistencia en Redis de rollbacks en vuelo y escalaciones pendientes</td><td>fail-open</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>5.4 — El corazón: la cascada de decisión</h3>
+    <p>Cada diagnóstico pasa por <code>decide_action()</code>. Es una cascada donde <strong>gana la primera regla que aplica</strong>,
+    y el orden es en sí una decisión de seguridad: todo lo que anula al modelo va antes que todo lo que confía en él.</p>
+  </div>
+
+  <div class="wide">
+    <figure>
+      <div class="scroll">
+      <svg class="fig-svg" viewBox="0 0 1040 560" role="img" aria-label="Cascada de reglas de decisión">
+        <defs>
+          <marker id="arr2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L8,4 L0,8 z" fill="#6FBFB2"/>
+          </marker>
+        </defs>
+        <g font-size="12">
+          <!-- column headers -->
+          <text x="330" y="28" fill="#5FA79C" font-size="10" letter-spacing="2" text-anchor="middle">CASCADA (GANA LA PRIMERA QUE APLICA)</text>
+          <text x="850" y="28" fill="#5FA79C" font-size="10" letter-spacing="2" text-anchor="middle">SALIDA</text>
+
+          <!-- rules -->
+          <g fill="#E8F1EE" text-anchor="start">
+            <rect x="60" y="44"  width="540" height="40" fill="#1E2E2A" stroke="#3B534E"/>
+            <text x="76" y="69">R1–R2 · remediación deshabilitada / sin comandos</text>
+            <rect x="60" y="96"  width="540" height="40" fill="#1E2E2A" stroke="#3B534E"/>
+            <text x="76" y="121">R3 · algún comando BLOCKED (delete ns, rm -rf, drain…)</text>
+            <rect x="60" y="148" width="540" height="40" fill="#1E2E2A" stroke="#3B534E"/>
+            <text x="76" y="173">R4 · algún comando UNKNOWN (patrón no reconocido)</text>
+            <rect x="60" y="200" width="540" height="40" fill="#233A2E" stroke="#3E6B52"/>
+            <text x="76" y="225">R4.5 · el comando reinicia pods → salvo set-resources estructurado</text>
+            <rect x="60" y="252" width="540" height="40" fill="#233A2E" stroke="#3E6B52"/>
+            <text x="76" y="277">R4.6 · new_value &gt; 2× current (cap del tutor, por recurso)</text>
+            <rect x="60" y="304" width="540" height="40" fill="#233A2E" stroke="#3E6B52"/>
+            <text x="76" y="329">R4.7 · target fantasma (el cluster no confirmó el workload)</text>
+            <rect x="60" y="356" width="540" height="40" fill="#1E2E2A" stroke="#3B534E"/>
+            <text x="76" y="381">R5 · risk &gt; umbral → bypass si es estructurado (bound del motor)</text>
+            <rect x="60" y="408" width="540" height="40" fill="#1E2E2A" stroke="#3B534E"/>
+            <text x="76" y="433">R6 · confidence &lt; 0.8 (grounded desde restarts del cluster)</text>
+            <rect x="60" y="460" width="540" height="40" fill="#1E2E2A" stroke="#3B534E"/>
+            <text x="76" y="485">R7.5 · RAG degradado (ChromaDB caído → LLM zero-shot)</text>
+            <rect x="60" y="512" width="540" height="40" fill="#1F3527" stroke="#4E8A62"/>
+            <text x="76" y="537" fill="#9FD8AE">R7 · todo OK → el motor sintetiza y ejecuta su propio comando</text>
+          </g>
+
+          <!-- outcomes -->
+          <g text-anchor="middle">
+            <rect x="740" y="96" width="220" height="40" fill="#3A2E20" stroke="#6B5A3E"/>
+            <text x="850" y="121" fill="#E8C88F">ESCALATE → humano</text>
+            <rect x="740" y="44" width="220" height="40" fill="#28303A" stroke="#4A576B"/>
+            <text x="850" y="69" fill="#A9C4E8">SUGGEST_ONLY</text>
+            <rect x="740" y="512" width="220" height="40" fill="#1F3527" stroke="#4E8A62"/>
+            <text x="850" y="537" fill="#9FD8AE">AUTO_REMEDIATE</text>
+          </g>
+
+          <!-- arrows -->
+          <g stroke="#6FBFB2" stroke-width="1.3" fill="none">
+            <line x1="600" y1="64"  x2="736" y2="64"  marker-end="url(#arr2)"/>
+            <line x1="600" y1="116" x2="736" y2="116" marker-end="url(#arr2)"/>
+            <path d="M600 168 L660 168 L660 70 L736 70" marker-end="url(#arr2)"/>
+            <path d="M600 220 L678 220 L678 120 L736 120" marker-end="url(#arr2)"/>
+            <path d="M600 272 L693 272 L693 125 L736 125" stroke-dasharray="4 3" marker-end="url(#arr2)"/>
+            <path d="M600 324 L706 324 L706 130 L736 130" stroke-dasharray="4 3" marker-end="url(#arr2)"/>
+            <path d="M600 376 L718 376 L718 134 L736 134" stroke-dasharray="2 4" marker-end="url(#arr2)"/>
+            <path d="M600 428 L640 428 L640 78 L736 78" stroke-dasharray="2 4" marker-end="url(#arr2)"/>
+            <path d="M600 480 L728 480 L728 138 L736 138" stroke-dasharray="4 3" marker-end="url(#arr2)"/>
+            <line x1="600" y1="532" x2="736" y2="532" marker-end="url(#arr2)"/>
+          </g>
+        </g>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 4 — La cascada de <code>decide_action()</code>.</b> Las reglas 4.5–4.7 (verde) son las del re-sourcing v2:
+      el motor autoriza su propia excepción de reinicio solo para el bump de límites que él mismo sintetiza (acotado ≤2×, reversible),
+      y la 4.7 garantiza que un target que el cluster no confirmó jamás se ejecute — se colocó ANTES de la regla 5 precisamente para que
+      el resultado no dependa del <code>risk</code> autoevaluado del modelo.</figcaption>
+    </figure>
+  </div>
+
+  <div class="wrap">
+    <h3>5.5 — La red de seguridad: snapshot, ventana y rollback</h3>
+    <p>Un parche automático nunca queda sin vigilancia. Antes de tocar nada, el motor captura el valor actual
+    (<code>PrePatchSnapshot</code>); después de aplicar, programa una evaluación a los 300 segundos. Y como el propio agente
+    puede reiniciarse en medio de esa ventana (nodos spot), el contexto de rollback <strong>también se persiste en Redis</strong>
+    y se re-arma al arranque (<code>_recover_rollbacks</code>), durmiendo solo el tiempo restante.</p>
+  </div>
+
+  <div class="wide">
+    <figure>
+      <div class="scroll">
+      <svg class="fig-svg" viewBox="0 0 1040 250" role="img" aria-label="Ciclo de vida del rollback">
+        <defs>
+          <marker id="arr3" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L8,4 L0,8 z" fill="#6FBFB2"/>
+          </marker>
+        </defs>
+        <line x1="50" y1="120" x2="1000" y2="120" stroke="#3B534E" stroke-width="2"/>
+        <g font-size="11" text-anchor="middle">
+          <!-- t0 -->
+          <circle cx="120" cy="120" r="6" fill="#6FBFB2"/>
+          <text x="120" y="98" fill="#E8F1EE">t=0</text>
+          <text x="120" y="150" fill="#9FB8B1">snapshot pre-patch</text>
+          <text x="120" y="166" fill="#9FB8B1">(valor real vía kubectl)</text>
+          <!-- patch -->
+          <circle cx="270" cy="120" r="6" fill="#9FD8AE"/>
+          <text x="270" y="98" fill="#E8F1EE">patch</text>
+          <text x="270" y="150" fill="#9FB8B1">set resources ≤2×</text>
+          <text x="270" y="166" fill="#9FB8B1">+ persiste RollbackContext en Redis</text>
+          <!-- window -->
+          <rect x="330" y="108" width="330" height="24" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="495" y="124" fill="#8FA6A0">ventana de espera · 300 s</text>
+          <text x="495" y="150" fill="#9FB8B1">si el pod del agente reinicia aquí,</text>
+          <text x="495" y="166" fill="#9FB8B1">_recover_rollbacks() re-arma y duerme lo restante</text>
+          <!-- check -->
+          <circle cx="700" cy="120" r="6" fill="#E8C88F"/>
+          <text x="700" y="98" fill="#E8F1EE">health check</text>
+          <text x="700" y="150" fill="#9FB8B1">pods Running + 0 restarts</text>
+          <!-- outcomes -->
+          <rect x="800" y="40" width="200" height="36" fill="#1F3527" stroke="#4E8A62"/>
+          <text x="900" y="63" fill="#9FD8AE">sano → ✓ notifica y cierra</text>
+          <rect x="800" y="170" width="200" height="36" fill="#3A2E20" stroke="#6B5A3E"/>
+          <text x="900" y="193" fill="#E8C88F">enfermo → revert al snapshot</text>
+        </g>
+        <g stroke="#6FBFB2" stroke-width="1.3" fill="none">
+          <path d="M706 114 L760 58 L796 58" marker-end="url(#arr3)"/>
+          <path d="M706 126 L760 188 L796 188" marker-end="url(#arr3)"/>
+        </g>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 5 — Ciclo de vida de una remediación automática.</b> Desde 2026-07-02 el camino humano tiene exactamente
+      la misma red: el botón "Aprobar" ejecuta el mismo comando sintetizado por el motor, captura el mismo snapshot y programa el
+      mismo rollback (<i>"lo que apruebas es exactamente lo que se ejecuta"</i>).</figcaption>
+    </figure>
+  </div>
+
+  <div class="wrap">
+    <h3>5.6 — Conceptos que hay que dominar antes de tocar el repo</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Concepto</th><th>Qué significa aquí</th><th>Dónde se ve</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Fail-open</strong></td><td>Si una dependencia cae, se degrada con menos contexto pero se sigue. Diagnóstico sin RAG, notificación sin botones…</td><td><code>rag.py</code>, <code>escalation_store.py</code></td></tr>
+        <tr><td><strong>Fail-closed</strong></td><td>Si no hay garantías, se rechaza. Dos sitios elegidos a dedo: la <em>ingesta</em> (Redis caído → 503, Alertmanager reintenta, no se pierde nada) y la <em>auth</em> (con ejecución real, secret vacío → 401).</td><td><code>streams.enqueue_alert</code>, <code>_verify_hmac_token</code></td></tr>
+        <tr><td><strong>At-least-once</strong></td><td>La cola garantiza que ninguna alerta se procesa cero veces; a cambio puede procesarse dos (crash tras el LLM antes del XACK). Se mitiga con dedup-key y dead-letter.</td><td><code>streams.reclaim_pending</code></td></tr>
+        <tr><td><strong>Grounding / sellado</strong></td><td>El LLM pequeño alucina nombres y valores. Antes de decidir, el motor sobreescribe target, current_value y selector con lo observado en el cluster; si el cluster no confirma el workload, se anula la acción y se escala (R4.7).</td><td><code>seal_proposed_action</code>, <code>ground_confidence</code></td></tr>
+        <tr><td><strong>Blast radius</strong></td><td>Todo lo automático está confinado: allow-list de namespaces <code>arturo-*</code>, solo subir límites, solo ≤2×, solo Deployments, RBAC de namespace sin escritura cluster-scoped.</td><td><code>is_structured_remediation</code>, <code>k8s/rbac.yaml</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>5.7 — La cola por dentro: por qué "no se pierde ninguna alerta"</h3>
+    <p>La afirmación más fuerte del sistema merece su propio diagrama. La durabilidad no es magia: es la combinación de
+    tres mecanismos de Redis Streams usados con intención — y saber recitarlos distingue a quien entiende la cola de quien la usa.</p>
+  </div>
+  <div class="wide">
+    <figure>
+      <div class="scroll">
+      <svg class="fig-svg" viewBox="0 0 1040 330" role="img" aria-label="Semántica de la cola Redis Streams">
+        <defs>
+          <marker id="arr4" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L8,4 L0,8 z" fill="#6FBFB2"/>
+          </marker>
+        </defs>
+        <g font-size="12" text-anchor="middle">
+          <!-- webhook -->
+          <rect x="30" y="60" width="140" height="52" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="100" y="82" fill="#E8F1EE">webhook</text>
+          <text x="100" y="100" fill="#8FA6A0" font-size="10">503 si Redis cae</text>
+
+          <!-- dedup -->
+          <rect x="210" y="60" width="160" height="52" fill="#233A2E" stroke="#3E6B52"/>
+          <text x="290" y="82" fill="#E8F1EE">SETNX dedup 300s</text>
+          <text x="290" y="100" fill="#8FA6A0" font-size="10">alertname:ns:pod</text>
+
+          <!-- stream -->
+          <rect x="410" y="48" width="220" height="76" fill="#233A2E" stroke="#3E6B52"/>
+          <text x="520" y="72" fill="#E8F1EE">XADD → aiops:alerts</text>
+          <text x="520" y="90" fill="#8FA6A0" font-size="10">MAXLEN ~1000</text>
+          <text x="520" y="108" fill="#8FA6A0" font-size="10">consumer group: aiops-workers</text>
+
+          <!-- consumer -->
+          <rect x="690" y="60" width="150" height="52" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="765" y="82" fill="#E8F1EE">XREADGROUP</text>
+          <text x="765" y="100" fill="#8FA6A0" font-size="10">COUNT 1 · BLOCK 5s</text>
+
+          <!-- pipeline -->
+          <rect x="880" y="60" width="130" height="52" fill="#1E2E2A" stroke="#3B534E"/>
+          <text x="945" y="82" fill="#E8F1EE">pipeline</text>
+          <text x="945" y="100" fill="#8FA6A0" font-size="10">RAG+LLM+motor</text>
+
+          <!-- PEL -->
+          <rect x="560" y="190" width="220" height="56" fill="#28303A" stroke="#4A576B"/>
+          <text x="670" y="212" fill="#A9C4E8">PEL (entregado sin XACK)</text>
+          <text x="670" y="230" fill="#8FA6A0" font-size="10">crash mid-proceso → la entrada sigue aquí</text>
+
+          <!-- reclaim -->
+          <rect x="280" y="190" width="220" height="56" fill="#233A2E" stroke="#3E6B52"/>
+          <text x="390" y="212" fill="#E8F1EE">reclaim cada 60s</text>
+          <text x="390" y="230" fill="#8FA6A0" font-size="10">XPENDING idle&gt;600s + XCLAIM → reintenta</text>
+
+          <!-- dead letter -->
+          <rect x="30" y="190" width="200" height="56" fill="#3A2E20" stroke="#6B5A3E"/>
+          <text x="130" y="212" fill="#E8C88F">dead-letter</text>
+          <text x="130" y="230" fill="#8FA6A0" font-size="10">&gt;3 entregas → aiops:alerts:dead</text>
+        </g>
+        <g stroke="#6FBFB2" stroke-width="1.5" fill="none">
+          <line x1="170" y1="86" x2="206" y2="86" marker-end="url(#arr4)"/>
+          <line x1="370" y1="86" x2="406" y2="86" marker-end="url(#arr4)"/>
+          <line x1="630" y1="86" x2="686" y2="86" marker-end="url(#arr4)"/>
+          <line x1="840" y1="86" x2="876" y2="86" marker-end="url(#arr4)"/>
+          <path d="M945 112 L945 150 L670 150 L670 186" marker-end="url(#arr4)" stroke-dasharray="4 3"/>
+          <line x1="556" y1="218" x2="504" y2="218" marker-end="url(#arr4)"/>
+          <line x1="276" y1="218" x2="234" y2="218" stroke-dasharray="4 3" marker-end="url(#arr4)"/>
+          <path d="M390 186 L390 160 L500 160 L500 128" marker-end="url(#arr4)"/>
+        </g>
+        <text x="30" y="300" fill="#5A716B" font-size="10">Éxito → XACK borra del PEL. Fallo o crash → sin XACK → PEL → reclaim → tras 3 entregas, cuarentena con payload forense. El self-heal NOGROUP recrea el grupo con id="$" + backoff.</text>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 6 — Semántica de la cola (F2).</b> El contrato honesto es <i>at-least-once</i>: nada se procesa cero veces,
+      algo puede procesarse dos. Los dos agujeros conocidos de este diagrama están en §7: F-05 (la dedup-key se marca antes del XADD)
+      y F-06 (todo esto vive en un Redis sin persistencia).</figcaption>
+    </figure>
+  </div>
+  <div class="wrap">
+  </div>
+</section>
+
+<!-- ══════════════ §6 FORTALEZAS ══════════════ -->
+<section id="fortalezas">
+  <div class="wrap">
+    <div class="eyebrow">§6</div>
+    <h2>Lo que un panel senior reconocería</h2>
+    <p>Antes de atacar, lo honesto: hay decisiones aquí que muchos equipos de plataforma no tienen. Estas son las que
+    convierten el proyecto en defendible — y las que conviene contar activamente en la charla.</p>
+    <div class="grid2">
+      <div class="card"><h4>El LLM no tiene las llaves</h4>
+        <p>El texto libre del modelo jamás llega al executor en el camino automático. El motor sintetiza su propio
+        <code>kubectl set resources</code> con identidad y valores sellados desde el cluster. Es la respuesta correcta al problema
+        real medido (el 1.5b alucinaba target y current_value), y es una defensa de serie contra prompt-injection vía anotaciones de alerta.</p></div>
+      <div class="card"><h4>Ingesta que no pierde alertas</h4>
+        <p>Cola Redis Streams con dedup cluster-wide, PEL + reclaim para replay tras crash, dead-letter forense para poison messages,
+        y webhook fail-closed. Validado en cluster con ráfaga de 10, kill del pod y poison. La semántica at-least-once está
+        <em>documentada</em>, no descubierta en producción.</p></div>
+      <div class="card"><h4>Paridad humano/auto</h4>
+        <p>Lo que el operador aprueba en Mattermost es el mismo comando determinista que ejecutaría el camino auto, con el mismo
+        snapshot y el mismo rollback programado. Elimina la clase de bug "el humano aprobó otra cosa distinta de lo que corrió".</p></div>
+      <div class="card"><h4>Rollback como ciudadano de primera</h4>
+        <p>Snapshot pre-patch, ventana de evaluación, revert automático, y — tras P0·3 — durabilidad en Redis con recovery al
+        arranque que duerme solo el tiempo restante. El caso "nodo spot mata al agente a mitad de ventana" está cubierto.</p></div>
+      <div class="card"><h4>Decisiones medidas, no vibes</h4>
+        <p>Evals propios: RAG safety 100% vs 25% zero-shot; retrieval p@1=73%; "un modelo mayor lo arregla" <em>refutado</em>
+        experimentalmente (qwen3.5 más lento y frágil — la palanca era contexto, no tamaño). temp=0 justificado con varianza medida.</p></div>
+      <div class="card"><h4>Observabilidad por etapa</h4>
+        <p>Cada transición del pipeline tiene counter propio con outcome (<code>aiops_queue_*</code>, <code>enrichment</code>,
+        <code>diagnosis</code>, <code>remediation</code>, <code>rollback</code>), pre-inicializados para no tener huecos en Grafana,
+        más MTTD/MTTR de chaos. Logging JSON estructurado desde el día 1.</p></div>
+      <div class="card"><h4>Seguridad con postura</h4>
+        <p>Auth fail-closed gated por dry-run (P0·2), HMAC en botones, RBAC least-privilege por namespace (get/patch deployments,
+        lecturas para el grounding), SecurityContext completo (non-root, RO filesystem, drop ALL), NetworkPolicies por servicio.</p></div>
+      <div class="card"><h4>Honestidad documental</h4>
+        <p>La tabla de modos de fallo del roadmap incluye los fallos <em>del propio sistema</em>, con causa raíz y estado. La auditoría
+        de 5.9/10 se encargó internamente y sus P0 se cerraron con tests. Esa cultura es más rara que cualquier feature.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ §7 HALLAZGOS ══════════════ -->
+<section id="hallazgos">
+  <div class="wrap">
+    <div class="eyebrow">§7</div>
+    <h2>Hallazgos: los puntos que atacarían</h2>
+    <p class="lede">18 hallazgos verificados contra el código de <code>cb2d1db</code>, ordenados por severidad.
+    Ninguno es "el LLM podría equivocarse" — eso ya está mitigado. Son los fallos de <em>sistema</em> que quedan.</p>
+
+    <div class="sev-summary">
+      <div><div class="n" style="color:var(--crit)">6</div><div class="t" style="color:var(--crit)">Alta</div></div>
+      <div><div class="n" style="color:var(--warn)">7</div><div class="t" style="color:var(--warn)">Media</div></div>
+      <div><div class="n" style="color:var(--low)">5</div><div class="t" style="color:var(--low)">Baja</div></div>
+      <div><div class="n" style="color:var(--ok)">3</div><div class="t" style="color:var(--ok)">P0 previos cerrados</div></div>
+    </div>
+
+    <!-- ALTA -->
+    <article class="finding crit">
+      <header><span class="fid">F-01</span><h4>Sin cooldown por workload: episodios encadenados pueden duplicar límites en espiral</h4>
+        <span class="chip crit">Alta</span><span class="chip cat">Corrección / Seguridad</span></header>
+      <div class="body">
+        <p><strong>Escenario:</strong> OOM en un deployment → auto-bump a 2× → el <code>set resources</code> hace rollout →
+        pods con <em>nombre nuevo</em> → si sigue OOM, la nueva alerta tiene fingerprint distinto (<code>alertname:ns:pod</code>)
+        y esquiva la dedup → segundo episodio mientras la ventana de rollback del primero sigue abierta → el seal lee el current
+        <em>ya duplicado</em> del cluster → otro 2× "legal". Cada acción respeta el cap, pero el episodio no: 256Mi → 512Mi → 1Gi
+        en minutos, con dos rollbacks entrelazados apuntando a valores distintos del mismo deployment.</p>
+        <p>El cap 2× de la regla 4.6 es <strong>por acción, no por incidente</strong>, y no existe ningún lock ni enfriamiento a nivel
+        de workload. Es la pregunta clásica de un panel SRE: <em>"¿qué impide que tu remediador se pelee consigo mismo?"</em></p>
+        <div class="fix">Clave Redis <code>cooldown:{ns}/{deployment}</code> (SETNX + TTL ≥ ventana de rollback): segunda remediación
+        del mismo workload dentro de la ventana → ESCALATE con reason <code>workload_cooldown</code>. ~30 líneas + tests; reutiliza el patrón de la dedup-key.</div>
+        <div class="where">remediation.py:decide_action · main.py:1031 (fingerprint) · sin estado por workload en ningún módulo</div>
+      </div>
+    </article>
+
+    <article class="finding crit">
+      <header><span class="fid">F-02</span><h4>El kind del workload se resuelve pero no se aplica: StatefulSet/DaemonSet generan un comando inválido</h4>
+        <span class="chip crit">Alta</span><span class="chip cat">Corrección</span></header>
+      <div class="body">
+        <p><code>enrichment._resolve_workload</code> resuelve correctamente <code>workload_kind</code> (Deployment | StatefulSet | DaemonSet),
+        pero <code>seal_proposed_action</code> solo copia el <em>nombre</em>, <code>is_structured_remediation</code> no comprueba el kind, y
+        <code>build_set_resources_command</code> + <code>capture_pre_patch_value</code> llevan <strong>"deployment" hardcodeado</strong>.
+        Un pod de StatefulSet dispara el camino auto completo y ejecuta <code>kubectl set resources deployment &lt;nombre-del-sts&gt;</code> → NotFound.</p>
+        <p>Falla <em>seguro</em> (no toca nada), pero reporta remediación fallida y — peor para la narrativa — reproduce el síntoma
+        exacto ("NotFound") que la v2 acaba de anunciar como resuelto, ahora por un camino distinto.</p>
+        <div class="fix">Corto plazo: gate <code>workload_kind == "Deployment"</code> en el seal (kind ≠ Deployment → <code>target_unresolved</code> → R4.7 escala).
+        Medio plazo: sintetizar kind-aware — <code>set resources</code> soporta sts/ds; el snapshot/health/revert ya son casi agnósticos.</div>
+        <div class="where">remediation.py:206-222 (build_set_resources_command) · :857 (get deployment) · enrichment.py:158,199</div>
+      </div>
+    </article>
+
+    <article class="finding crit">
+      <header><span class="fid">F-03</span><h4>Cliente ChromaDB síncrono dentro del event loop: puede bloquear liveness y tumbar el pod</h4>
+        <span class="chip crit">Alta</span><span class="chip cat">Resiliencia</span></header>
+      <div class="body">
+        <p><code>chromadb.HttpClient</code> es síncrono (requests). <code>retrieve_context</code>, <code>ensure_collections</code>,
+        <code>ingest_incident</code> y <code>_query_recent_incidents</code> lo llaman <strong>directamente desde corrutinas</strong>:
+        cada query bloquea el event loop entero. Agente y consumer comparten loop → mientras ChromaDB responde lento
+        (pod evicted en spot, red degradada con TCP colgado), <code>/healthz</code> no responde. Con liveness a 3 fallos × 15s,
+        un bloqueo de ~45s <strong>reinicia el agente</strong> — y el reinicio ocurre justo cuando una dependencia está mal,
+        que es cuando menos quieres perder al remediador.</p>
+        <div class="fix">Envolver toda llamada a chroma en <code>asyncio.to_thread(...)</code> (o un executor dedicado) + timeout explícito
+        en el HttpClient. Es mecánico: ~6 call-sites.</div>
+        <div class="where">rag.py:350-394 · main.py:793-807, 710-732, 1176-1192</div>
+      </div>
+    </article>
+
+    <article class="finding crit">
+      <header><span class="fid">F-04</span><h4>Mattermost hereda http_timeout=360s: un chat colgado bloquea la cola ~18 min por alerta</h4>
+        <span class="chip crit">Alta</span><span class="chip cat">Resiliencia</span></header>
+      <div class="body">
+        <p><code>_post_with_retry</code> abre su propio cliente con <code>settings.http_timeout</code> — el timeout dimensionado para el
+        <em>LLM</em> (300s default, <strong>360s en el deployment</strong>). Con un Mattermost que acepta TCP pero no responde:
+        3 intentos × 360s + backoff ≈ <strong>18 minutos bloqueado</strong> dentro de <code>_process_alert_with_diagnosis</code>.
+        Consecuencia doble: (1) la cola se congela (consumer 1-a-1); (2) al superar los 600s de <code>queue_min_idle_seconds</code>,
+        el reclaim puede <strong>re-entregar la entrada aún en curso</strong> → diagnóstico y remediación duplicados del mismo incidente.</p>
+        <div class="fix">Timeout propio para Mattermost (p. ej. <code>mattermost_timeout: 10s</code>) + reutilizar el cliente compartido de
+        <code>app.state</code>. Regla general: el timeout de cada dependencia se dimensiona por esa dependencia, nunca heredado del peor caso global.</div>
+        <div class="where">mattermost.py:38 · config.py:30 · deployment-agent.yaml:75-76 (HTTP_TIMEOUT=360)</div>
+      </div>
+    </article>
+
+    <article class="finding crit">
+      <header><span class="fid">F-05</span><h4>Dedup marcada antes del XADD: si el XADD falla, la alerta se pierde de verdad</h4>
+        <span class="chip crit">Alta</span><span class="chip cat">Corrección</span></header>
+      <div class="body">
+        <p>En <code>enqueue_alert</code> el SETNX de la dedup-key ocurre <strong>antes</strong> del XADD. Si el XADD falla
+        (Redis OOM, red parpadea), el webhook devuelve 503 y Alertmanager reintenta… pero el reintento choca con la dedup-key
+        recién creada → devuelve None → el webhook lo trata como duplicado benigno → <strong>200 OK sin encolar nada</strong>.
+        Alertmanager da la alerta por entregada y no reenvía hasta el <code>repeat_interval</code>. El "fail-closed, no se pierden
+        alertas" tiene exactamente este agujero de una línea.</p>
+        <div class="fix">En el <code>except</code> del XADD, borrar la dedup-key antes de propagar (compensación), o invertir el orden
+        (XADD primero, SETNX después — un duplicado raro es más barato que una pérdida). Test: mock de Redis con XADD que lanza.</div>
+        <div class="where">streams.py:115-127</div>
+      </div>
+    </article>
+
+    <article class="finding crit">
+      <header><span class="fid">F-06</span><h4>Toda la durabilidad descansa en un Redis sin persistencia (Deployment sin PVC)</h4>
+        <span class="chip crit">Alta</span><span class="chip cat">Arquitectura</span></header>
+      <div class="body">
+        <p>La cola durable, las escalaciones pendientes, las dedup-keys y — desde P0·3 — los contextos de rollback viven en un
+        <code>redis:7-alpine</code> desplegado como Deployment con emptyDir. Un reinicio del pod de Redis borra todo. Para la cola
+        el sistema se auto-cura (webhook 503 + reenvío de Alertmanager + self-heal NOGROUP), pero <strong>un rollback en vuelo
+        perdido = parche aplicado que nunca se revierte</strong> — exactamente el escenario que P0·3 arregló para reinicios del
+        <em>agente</em>, reabierto por la capa de abajo.</p>
+        <div class="fix">Mínimo: AOF (<code>appendonly yes</code>) + PVC pequeño (1Gi) — mismo patrón que ChromaDB. Alternativa honesta:
+        documentar Redis como SPOF asumido y degradar el claim de durabilidad. Lo indefendible es reclamar durabilidad sobre memoria volátil.</div>
+        <div class="where">k8s/redis.yaml · rollback_store.py (TTL sobrevive; el proceso de Redis, no)</div>
+      </div>
+    </article>
+
+    <!-- MEDIA -->
+    <article class="finding warn">
+      <header><span class="fid">F-07</span><h4>Ejecución por shell-out a kubectl + clasificación por regex: frágil por construcción</h4>
+        <span class="chip warn">Media</span><span class="chip cat">Arquitectura</span></header>
+      <div class="body">
+        <p>Toda interacción con K8s pasa por subprocess + parsing de jsonpath/strings. Consecuencias: binario kubectl en la imagen
+        (superficie + version-skew con el API server), y una capa de clasificación regex que es inevitablemente incompleta:
+        <code>delete pod</code> es BLOCKED pero <code>delete pods</code> cae a UNKNOWN; <code>delete deployment</code> ni aparece.
+        Hoy los fallbacks son sanos (UNKNOWN → sugerir), pero es un blacklist que hay que mantener a mano para siempre.</p>
+        <div class="fix">Migrar el <em>camino estructurado</em> (get/patch/snapshot/health) a <code>kubernetes_asyncio</code> con operaciones
+        tipadas — elimina parsing y clasificación en el camino que ejecuta. Las regex quedan solo para clasificar el texto libre del LLM
+        que se le <em>muestra</em> al humano, donde un falso UNKNOWN es inocuo.</div>
+        <div class="where">remediation.py:72-99 (patrones) · :705-813 (executor) · enrichment.py:_kubectl_json</div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <header><span class="fid">F-08</span><h4>Health check post-patch ciego a multi-container y de evaluación única</h4>
+        <span class="chip warn">Media</span><span class="chip cat">Corrección</span></header>
+      <div class="body">
+        <p><code>check_pod_health</code> lee <code>containerStatuses[0]</code> — en pods con sidecar puede examinar el contenedor
+        equivocado. Además "sano" es una foto única a los 300s (Running + 0 restarts): un pod que tarda 6 minutos en volver a
+        OOM se declara curado y no se vuelve a mirar; el siguiente episodio entra por F-01. Y la ventana fija no considera
+        <code>initialDelaySeconds</code> de la app parcheada.</p>
+        <div class="fix">Iterar todos los containerStatuses (o filtrar por el container del snapshot) + segunda evaluación a 2× ventana
+        antes de declarar éxito definitivo. El campo <code>remediation_rollback_grace</code> ya existe en config y no se usa en la evaluación.</div>
+        <div class="where">remediation.py:905-982 (jsonpath containerStatuses[0]) · config.py:66</div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <header><span class="fid">F-09</span><h4>El approve humano ejecuta sin re-validar: hasta 60 min de datos obsoletos</h4>
+        <span class="chip warn">Media</span><span class="chip cat">Corrección</span></header>
+      <div class="body">
+        <p>La escalación vive 60 minutos en Redis. El operador puede aprobar un comando calculado sobre el <code>current_value</code>
+        de hace una hora: la alerta pudo resolverse sola, otro episodio pudo cambiar los límites, o el deployment pudo redesplegarse.
+        El comando se ejecuta tal cual se selló entonces. La red del rollback lo atenúa, pero el principio v2 — decidir sobre el estado
+        <em>real</em> — se rompe justo en el camino con humano.</p>
+        <div class="fix">En el approve de un estructurado: re-gather (ya existe <code>gather_incident_context</code>), re-check de 4.6 contra
+        el current fresco, y si el estado cambió, actualizar el mensaje pidiendo confirmación en vez de ejecutar. Reutiliza piezas existentes.</div>
+        <div class="where">main.py:1116-1141 (approve) · ESCALATION_TTL_MINUTES=60</div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <header><span class="fid">F-10</span><h4>Throughput estructural: ~1 alerta cada 4 minutos, sin priorización</h4>
+        <span class="chip warn">Media</span><span class="chip cat">Escalabilidad</span></header>
+      <div class="body">
+        <p>Ollama serializa (una instancia, CPU), el consumer es 1-a-1, y el diagnóstico tarda 205–252s. Una tormenta de 15 alertas
+        = una hora de backlog, procesado <strong>FIFO sin prioridad por severidad</strong>: el critical de las 10:00 espera detrás de
+        12 warnings. Con backlog &gt;1000, <code>MAXLEN ~</code> recorta las más antiguas silenciosamente. Es un límite asumido y
+        documentado — pero un panel preguntará por el plan, no por la excusa.</p>
+        <div class="fix">Barato y demostrable: (1) colapsar por workload al consumir — si hay N alertas del mismo deployment en cola,
+        diagnosticar una; (2) stream de prioridad para severity=critical leído primero; (3) counter de recortes por MAXLEN.
+        El paralelismo real (GPU / segunda instancia Ollama) es decisión de coste, no de código.</div>
+        <div class="where">streams.py:consume_loop (count=1) · config.py:queue_maxlen=1000 · docs/07 (limitación reconocida)</div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <header><span class="fid">F-11</span><h4>Sin correlación E2E: el incident_id nace demasiado tarde</h4>
+        <span class="chip warn">Media</span><span class="chip cat">Observabilidad</span></header>
+      <div class="body">
+        <p>El <code>incident_id</code> (UUID) se crea solo al escalar o programar rollback. Todo lo anterior — encolado, enrichment,
+        RAG, LLM, decisión — se loguea correlacionado por <code>alertname</code>, que colisiona en cuanto hay dos incidentes del mismo
+        tipo. Para un sistema cuyo pitch es "zero black-box", no poder reconstruir la línea temporal exacta de UN incidente entre
+        logs, cola y métricas es la grieta que un SRE senior encuentra en 5 minutos de kubectl logs.</p>
+        <div class="fix">Generar el incident_id en el webhook, guardarlo como campo del stream entry, y pasarlo por
+        <code>logging extra</code> en cada etapa (la infraestructura de JSON logging ya existe). Reutilizarlo como doc_id del incidente en ChromaDB.</div>
+        <div class="where">main.py:870,905 (uuid4 tardíos) · streams.py:enqueue_alert (payload sin id)</div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <header><span class="fid">F-12</span><h4>Feedback loop RAG sin gate de calidad: envenenamiento a fuego lento</h4>
+        <span class="chip warn">Media</span><span class="chip cat">ML / Datos</span></header>
+      <div class="body">
+        <p>Cada incidente se persiste en ChromaDB con el diagnóstico <em>del LLM</em> como contenido, incluidos los fallidos y los
+        de baja confianza, y ese corpus alimenta los diagnósticos futuros. Sin gate, el sistema aprende de sus propios errores en
+        ambos sentidos. Con volumen bajo es teórico; con el sistema funcionando meses, el retrieval degrada sin que ninguna métrica lo detecte.
+        Está reconocido (F4 del roadmap) — el hallazgo es que el <em>write path</em> ya está activo hoy sin el gate.</p>
+        <div class="fix">Gate mínimo inmediato: persistir solo outcomes verificados (auto con health-check sano, o approve humano) y
+        etiquetar el resto como <code>unverified</code> excluido del retrieval. El bucle de aprendizaje completo sigue siendo F4.</div>
+        <div class="where">main.py:875-891 (persiste todo diagnóstico) · rag.py:build_incident_document</div>
+      </div>
+    </article>
+
+    <article class="finding warn">
+      <header><span class="fid">F-17</span><h4>El enrichment no lee logs ni events: el LLM diagnostica sin las señales más ricas</h4>
+        <span class="chip warn">Media</span><span class="chip cat">Grounding / LLM</span></header>
+      <div class="body">
+        <p>El RBAC concede <code>pods/log</code> y <code>events</code> (get/list) desde la Fase 3, y <code>gather_incident_context</code>
+        solo consulta el objeto Pod. El diagnóstico — la parte que SÍ es trabajo del LLM (§3) — se genera sin las dos señales que
+        un humano miraría primero: las últimas líneas de log del container que murió y los events del namespace
+        (<code>FailedScheduling</code>, <code>BackOff</code>, <code>Unhealthy</code>…). Es la inversión con mejor ratio del brainstorm
+        (§3.3 #1): puro lenguaje, cero ejecución, y sube la calidad del diagnóstico de toda clase de alerta, no solo OOM.</p>
+        <div class="fix"><code>kubectl logs --tail=30 --previous</code> + <code>get events --field-selector</code> en el gather (fail-soft,
+        mismo patrón <code>_kubectl_json</code>), resumen acotado al prompt y al mensaje de Mattermost. El permiso ya existe; falta usarlo.</div>
+        <div class="where">enrichment.py:204-247 (solo get pod) · k8s/rbac.yaml:18-23 (pods/log + events concedidos, sin uso)</div>
+      </div>
+    </article>
+
+    <!-- BAJA -->
+    <article class="finding low">
+      <header><span class="fid">F-13</span><h4>Endpoint legacy /extract vivo en producción</h4>
+        <span class="chip low">Baja</span><span class="chip cat">Superficie</span></header>
+      <div class="body">
+        <p>La Fase 0 (extracción de parámetros GCP + generador Terraform) sigue montada en el binario de producción: un endpoint
+        sin auth que consume ciclos del Ollama serializado — desde cualquier pod permitido por la NetworkPolicy se puede encolar
+        trabajo LLM por delante del pipeline de alertas. Riesgo real bajo (ingress acotado), pero es código muerto con coste.</p>
+        <div class="fix">Flag <code>legacy_extract_enabled=false</code> en producción, o extraer Fase 0 a su propio servicio/imagen. La auditoría del 07-01 ya lo señaló.</div>
+        <div class="where">main.py:1268-1368 · extraction.py · tf_generator.py · validation.py</div>
+      </div>
+    </article>
+
+    <article class="finding low">
+      <header><span class="fid">F-14</span><h4>Sin conciencia de LimitRange/quota/allocatable antes del bump</h4>
+        <span class="chip low">Baja</span><span class="chip cat">Corrección</span></header>
+      <div class="body">
+        <p>Subir un límite 2× puede exceder la ResourceQuota del namespace (patch rechazado — inocuo) o el allocatable del nodo
+        (pods Pending — <em>peor</em> que el OOM original hasta que el rollback lo coja a los 300s). El RBAC ya concede
+        <code>get limitranges</code> y el código nunca lo usa: es un permiso pedido para una validación que no existe.</p>
+        <div class="fix">Pre-check en el seal: si el new_value supera LimitRange máx o el allocatable del nodo del pod → ESCALATE con la
+        cifra en el mensaje. Convierte un permiso ocioso en una regla más de la cascada.</div>
+        <div class="where">k8s/rbac.yaml:24-26 · seal_proposed_action (sin check de contorno)</div>
+      </div>
+    </article>
+
+    <article class="finding low">
+      <header><span class="fid">F-15</span><h4>main.py de 1.368 líneas: orquestador, formateador y endpoints en el mismo fichero</h4>
+        <span class="chip low">Baja</span><span class="chip cat">Mantenibilidad</span></header>
+      <div class="body">
+        <p><code>_process_alert_with_diagnosis</code> son ~200 líneas que mezclan retrieval, enrichment, diagnóstico, remediación,
+        rollback, feedback y notificación; el formato Mattermost (6 funciones <code>_format_*</code>) y el ciclo de vida del rollback
+        conviven con los endpoints. Además <code>ProposedAction</code> existe como modelo Pydantic y no se usa nunca — todo el pipeline
+        mueve dicts crudos con <code>.get()</code>, renunciando a la validación que Pydantic daría gratis en la frontera del LLM.</p>
+        <div class="fix">Extraer <code>pipeline.py</code> (orquestación) y <code>formatting.py</code>; validar la salida del LLM contra
+        <code>ProposedAction</code> en <code>diagnosis.py</code> y tipar <code>diagnosis</code> como modelo. Refactor sin cambio de comportamiento, con la suite como red.</div>
+        <div class="where">main.py:770-971 · schemas.py:38-46 (ProposedAction huérfano)</div>
+      </div>
+    </article>
+
+    <article class="finding low">
+      <header><span class="fid">F-16</span><h4>474 tests, cero integración: la clase de bug que se escapa es exactamente la que ha dolido</h4>
+        <span class="chip low">Baja</span><span class="chip cat">Testing</span></header>
+      <div class="body">
+        <p>La suite es amplia y disciplinada, pero 100% mockeada. Los bugs reales del proyecto (target alucinado, secrets pisoteados,
+        NOGROUP busy-spin) se encontraron todos <em>en el cluster</em>, no en CI — porque viven en las fronteras que los mocks
+        reemplazan: salida real de kubectl, semántica real de Streams, contratos de secrets. La validación E2E existe pero es manual (chaos.sh).</p>
+        <div class="fix">Un job de CI con <code>kind</code> + fake-Ollama (respuestas grabadas) que corra 1 escenario OOM E2E: alerta → cola →
+        seal → comando → rollback. No sustituye al cluster real; ataja la clase de regresión más cara. Guard anti-placeholder en
+        <code>secrets-setup.sh</code> (ya identificado el 07-02, pendiente).</div>
+        <div class="where">agent/tests/ (14 ficheros, AsyncMock) · scripts/chaos.sh (manual)</div>
+      </div>
+    </article>
+
+    <article class="finding low">
+      <header><span class="fid">F-18</span><h4>NetworkPolicy solo de ingress: el agente puede hablar con cualquier cosa</h4>
+        <span class="chip low">Baja</span><span class="chip cat">Seguridad</span></header>
+      <div class="body">
+        <p>Las políticas actuales acotan quién entra a cada pod, pero ninguna acota el <em>egress</em>: un agente comprometido
+        (o un bug de SSRF en un endpoint) puede alcanzar cualquier servicio del cluster o — si hubiera NAT — el exterior. Para un
+        pod cuya función es ejecutar kubectl con permisos de patch, el egress permitido debería ser una lista cerrada: API server,
+        Ollama, ChromaDB, Redis, Mattermost. En un cluster compartido con otra inquilina, además, es cortesía de tenancy.</p>
+        <div class="fix">NetworkPolicy de egress para <code>app=agent</code> con las 5 rutas nombradas + DNS. Sin NAT el riesgo externo
+        ya es nulo; el interno (lateral movement) es el que se cierra.</div>
+        <div class="where">k8s/networkpolicy.yaml (7 políticas, todas policyTypes: Ingress)</div>
+      </div>
+    </article>
+
+    <div class="box warn-box">
+      <h4>Nota sobre el incidente de secrets (2026-07-02)</h4>
+      <p>Durante el despliegue, <code>secrets-setup.sh</code> se ejecutó con placeholders y sobreescribió el webhook real de Mattermost.
+      No es un hallazgo de código sino de proceso — pero es el tipo de anécdota que un panel usa para preguntar por
+      <em>gestión de secretos</em>. Respuesta preparada: recovery documentado en la bitácora, guard anti-placeholder en el script (F-16),
+      y en el roadmap H2, External Secrets / SealedSecrets como solución estructural.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ §8 ROADMAP ══════════════ -->
+<section id="roadmap">
+  <div class="wrap">
+    <div class="eyebrow">§8</div>
+    <h2>Roadmap: de aquí a "como tendría que quedar"</h2>
+    <p class="lede">Cuatro horizontes. El criterio de orden no es ambición sino riesgo: primero lo que valida lo ya construido,
+    después lo que elimina los modos de fallo de esta review, y solo entonces ampliar capacidades.</p>
+  </div>
+  <div class="wide">
+    <div class="horizon">
+      <div class="when"><div class="h">H0</div><div class="d">YA — antes del chapter<br>(8/14 julio)</div></div>
+      <div class="what">
+        <h4>Validar lo construido y cerrar la demo</h4>
+        <ul>
+          <li><strong>Recuperar secrets</strong> (webhook MM desde el env del pod vivo, token del slash desde MM UI) + guard anti-placeholder en <code>secrets-setup.sh</code>.</li>
+          <li>Desplegar <code>cb2d1db</code> + <strong>chaos OOM del arco completo</strong>: log <code>sealed from cluster snapshot</code>, <code>aiops_enrichment_total{gathered}</code> subiendo, auto sin NotFound, confidence grounded visible en Mattermost.</li>
+          <li>Gate 8: screenshots Grafana con caudal (fila cola + panel enrichment) · matriz E1–E6 de <code>docs/14</code>.</li>
+          <li><code>/promote</code>: 6 bitácoras pendientes; el roadmap aún dice "Eje A siguiente" cuando ya está en <code>cb2d1db</code>.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="horizon">
+      <div class="when"><div class="h">H1</div><div class="d">v2.1 — hardening<br>(2–4 semanas post-chapter)</div></div>
+      <div class="what">
+        <h4>Cerrar los hallazgos altos de esta review</h4>
+        <ul>
+          <li><strong>F-01</strong> cooldown por workload · <strong>F-02</strong> gate kind==Deployment · <strong>F-05</strong> compensar dedup-key si XADD falla — los tres son pequeños y testeables con mocks.</li>
+          <li><strong>F-03</strong> chroma vía <code>asyncio.to_thread</code> · <strong>F-04</strong> timeout dedicado Mattermost — aislamiento de dependencias.</li>
+          <li><strong>F-06</strong> decidir la historia de Redis: AOF+PVC, o degradar el claim de durabilidad en docs.</li>
+          <li><strong>F-11</strong> incident_id desde la ingesta, propagado por logs/métricas/ChromaDB.</li>
+          <li><strong>F-17</strong> logs + events en el enrichment — el primer uso nuevo del LLM (§3.3 #1): solo lenguaje, cero riesgo, valor inmediato en cada mensaje.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="horizon">
+      <div class="when"><div class="h">H2</div><div class="d">v2.5 — consolidación<br>(1–2 meses)</div></div>
+      <div class="what">
+        <h4>Convertir el prototipo production-credible en production-grade</h4>
+        <ul>
+          <li><strong>F4 real</strong>: bucle de aprendizaje RAG con gate de calidad (solo outcomes verificados) + métrica de mejora del retrieval con histórico (F-12).</li>
+          <li><strong>Eje C</strong> (cobertura): Pending / Evicted / NotReady / FailedJob vía kube-state-metrics — cero código, solo reglas de alerta.</li>
+          <li>Executor estructurado sobre <code>kubernetes_asyncio</code> (F-07) · re-validación en el approve (F-09) · health check multi-container + doble evaluación (F-08).</li>
+          <li>E2E en CI con kind + fake-Ollama (F-16) · retirar /extract del binario de prod (F-13) · gestión de secretos estructural.</li>
+          <li><strong>Capa de negocio (§2.4)</strong>: panel de KPIs (% auto-resuelto, minutos ahorrados, MTTR humano vs auto) + informe mensual de auditoría automático al canal.</li>
+          <li><strong>LLM donde vale (§3.3 #2/#3/#6)</strong>: postmortem automático por incidente · runbooks candidatos con aprobación humana (alimenta F4 sin envenenar) · triage de alertas sin runbook.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="horizon">
+      <div class="when"><div class="h">H3</div><div class="d">v3 — visión<br>(3–6 meses)</div></div>
+      <div class="what">
+        <h4>De remediador de una jugada a plataforma</h4>
+        <ul>
+          <li><strong>Ampliar el espacio de acciones</strong> con el mismo patrón "el motor dispone": rollout restart acotado, scale horizontal con cap, limpieza de jobs — cada acción nueva = una síntesis determinista + su rollback.</li>
+          <li><strong>F5 predicción proactiva</strong>: consultar tendencias en Prometheus y actuar antes de que la alerta dispare.</li>
+          <li>Priorización y colapso por workload en la cola (F-10) · escalar inferencia si el negocio lo justifica (en CPU, <code>OLLAMA_NUM_PARALLEL</code> da poco — la inferencia es bandwidth-bound; la palanca real es GPU o segunda instancia).</li>
+          <li><strong>LLM conversacional (§3.3 #4/#5/#7)</strong>: correlación de tormentas en un incidente raíz · <code>/aiops explica</code> sobre el histórico · "qué cambió desde el último deploy" en el diagnóstico.</li>
+          <li>Multi-tenant real: allow-list por equipo, políticas de riesgo por namespace, auditoría exportable.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="dod">
+      <h3>Definition of done — "nivel empresa" para un auto-remediador</h3>
+      <ul>
+        <li>Ninguna acción automática sin: cap determinista, rollback programado y cooldown por target</li>
+        <li>Ningún fallo de dependencia (chat, vector DB, Redis) puede parar la ingesta ni matar el pod</li>
+        <li>Todo incidente reconstruible E2E por un solo ID en logs, métricas y ChromaDB</li>
+        <li>La durabilidad prometida coincide con la durabilidad real de la capa de almacenamiento</li>
+        <li>El humano que aprueba ve exactamente lo que se ejecutará, validado contra el estado actual</li>
+        <li>Un escenario E2E corre en CI en cada commit; el chaos en cluster es periódico, no heroico</li>
+        <li>El corpus del que aprende el sistema solo contiene outcomes verificados</li>
+        <li>Los secretos no pueden pisarse con placeholders por diseño, no por disciplina</li>
+        <li>El valor se reporta en métricas de negocio (incidentes auto-resueltos, horas recuperadas), no solo técnicas</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ §9 APÉNDICE JUNIOR ══════════════ -->
+<section id="junior">
+  <div class="wrap">
+    <div class="eyebrow">§9</div>
+    <h2>Apéndice: kit de supervivencia para quien llega nuevo</h2>
+
+    <h3>9.1 — Orden de lectura del repo (2–3 horas)</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Paso</th><th>Qué leer</th><th>Qué entender al salir</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>docs/07-roadmap.md</code></td><td>Estado real, decisiones y modos de fallo conocidos — la fuente única</td></tr>
+        <tr><td>2</td><td><code>agent/streams.py</code> (306 líneas, el mejor documentado)</td><td>Cómo entra una alerta y por qué no se pierde</td></tr>
+        <tr><td>3</td><td><code>agent/enrichment.py</code> → <code>diagnosis.py</code></td><td>Qué sabe el sistema antes de preguntar al LLM, y qué le pregunta</td></tr>
+        <tr><td>4</td><td><code>remediation.py</code>: <code>decide_action</code> + <code>seal_proposed_action</code> + <code>is_structured_remediation</code></td><td>La cascada (Fig. 4) y por qué el LLM no tiene las llaves</td></tr>
+        <tr><td>5</td><td><code>main.py</code>: <code>_process_alert_with_diagnosis</code> + <code>_evaluate_rollback</code></td><td>Cómo se orquesta todo y la red de seguridad (Fig. 5)</td></tr>
+        <tr><td>6</td><td><code>agent/tests/test_remediation.py</code></td><td>Los contratos de seguridad expresados como tests — la spec de facto</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>9.2 — Glosario mínimo</h3>
+    <dl>
+      <dt>PEL (Pending Entries List)</dt><dd>La lista que Redis Streams mantiene de entradas entregadas a un consumidor pero aún no confirmadas (XACK). Es donde vive la durabilidad: si el pod muere a mitad de proceso, la entrada sigue ahí y el reclaim la reprocesa.</dd>
+      <dt>Dead-letter</dt><dd>Stream de cuarentena (<code>aiops:alerts:dead</code>) para entradas que fallaron más de 3 veces. Evita que un mensaje envenenado bloquee la cola para siempre, y conserva el payload para forense.</dd>
+      <dt>Dry-run</dt><dd>Modo en que el executor loguea los comandos sin ejecutarlos. Es el default de config; el cluster corre con <code>REMEDIATION_DRY_RUN=false</code>. Muchas salvaguardas (auth fail-closed) se activan precisamente al salir de dry-run.</dd>
+      <dt>Sellado (seal)</dt><dd>Sobrescribir la propuesta del LLM (nombre, namespace, container, current_value, selector) con lo que el cluster dice. Si el cluster no confirma el workload → la propuesta se anula y se escala (regla 4.7).</dd>
+      <dt>Grounded confidence</dt><dd>La confianza del diagnóstico deja de ser la autoevaluación del modelo: para incidentes de clase crash/OOM se deriva de hechos (razón de terminación + nº de restarts). El valor del modelo se conserva como <code>model_confidence</code> para auditoría.</dd>
+      <dt>HMAC en botones</dt><dd>Cada botón de Mattermost lleva una firma <code>HMAC-SHA256(incident_id:action)</code>. El endpoint de callback la verifica: nadie puede fabricar un "aprobar" sin el secret.</dd>
+      <dt>Fingerprint de dedup</dt><dd><code>alertname:namespace:pod</code> con TTL de 300s. Evita procesar dos veces la misma alerta reenviada; no protege entre episodios distintos del mismo workload (ver F-01).</dd>
+    </dl>
+
+    <h3>9.3 — Las preguntas hostiles del chapter, con respuesta honesta</h3>
+    <details><summary>«¿Y si el LLM alucina un comando destructivo?»</summary><div class="ans">
+      <p>No llega al executor. El texto libre del modelo solo se clasifica para <em>mostrarse</em>; lo que se ejecuta en automático
+      lo sintetiza el motor (<code>build_set_resources_command</code>) con identidad y valores leídos del cluster, acotado a subir un
+      límite ≤2× en namespaces propios. Y lo medimos: el 1.5b alucinaba targets — por eso existe el sellado, no a pesar de ello.</p>
+    </div></details>
+    <details><summary>«¿Por qué un modelo de 1.5B y no GPT-4/algo grande?»</summary><div class="ans">
+      <p>Restricción real (datos no salen del cluster, sin GPU) convertida en resultado medido: con el runbook correcto inyectado, el 1.5b
+      acierta el campo 5/5; probamos un modelo mayor y fue más lento y frágil (600s timeout). La palanca demostrada es <strong>contexto,
+      no tamaño</strong> — y la arquitectura es model-agnostic si mañana hay GPU.</p>
+    </div></details>
+    <details><summary>«¿Qué pasa si vuestro parche empeora las cosas?»</summary><div class="ans">
+      <p>Snapshot pre-patch + evaluación a los 300s + revert automático + notificación. El contexto de rollback se persiste en Redis y
+      sobrevive reinicios del agente. Los huecos honestos: evaluación única (F-08) y dependencia de la persistencia de Redis (F-06) — ambos en el roadmap H1/H2.</p>
+    </div></details>
+    <details><summary>«¿Esto escala a un cluster con cientos de alertas?»</summary><div class="ans">
+      <p>No, y no lo pretende todavía: ~1 alerta/4min por el LLM en CPU serializado. La cola absorbe ráfagas sin perder nada y eso está
+      validado. El plan de escala es priorización + colapso por workload (barato) y paralelismo de inferencia (decisión de coste). Lo que
+      no haríamos es fingir que escala hoy.</p>
+    </div></details>
+    <details><summary>«¿Por qué kubectl por subprocess en vez del API client?»</summary><div class="ans">
+      <p>Decisión de velocidad de la fase de prototipo, hoy en la lista de deuda (F-07): el camino estructurado migrará a
+      <code>kubernetes_asyncio</code> tipado. El shell-out actual es argv-sin-shell, whitelist kubectl-only, con timeout y kill — acotado, pero no es el estado final.</p>
+    </div></details>
+    <details><summary>«¿El sistema aprende? ¿De qué datos?»</summary><div class="ans">
+      <p>Persiste cada incidente en ChromaDB y lo recupera como contexto en diagnósticos futuros. La parte honesta: hoy escribe también
+      outcomes no verificados, y el gate de calidad (solo aprender de remediaciones confirmadas) es F4/H2 — está identificado como
+      requisito antes de reclamar "aprendizaje", precisamente para no envenenar el corpus (F-12).</p>
+    </div></details>
+    <details><summary>«¿Para qué el LLM, si al final decide un if?»</summary><div class="ans">
+      <p>Para el happy path OOM, cierto: el if bastaría (§3.1, lo decimos nosotros antes que tú). El LLM está para lo que el if no
+      cubre: generalizar a cualquier clase de alerta con un runbook en vez de una rama de código, elegir el campo correcto cuando la
+      señal es ambigua (5/5 medido), y redactar el contexto que hace que el humano decida en segundos. El motor pone los números;
+      el modelo pone el lenguaje. Y a medida que crece el catálogo (H3), la parte de lenguaje crece más rápido que la de números.</p>
+    </div></details>
+    <details><summary>«¿Esto no lo hace ya el VPA?»</summary><div class="ans">
+      <p>Para dimensionamiento continuo de requests, sí — y mejor (§4.1). Pero el VPA no explica, no notifica, no escala a un humano,
+      necesita histórico y no toca crashloop/badimage. Esto es respuesta a <em>incidentes</em> con diagnóstico auditado, aprobación
+      ChatOps y rollback; el bump de límites es la primera acción del catálogo, no el producto. De hecho VPA y este sistema pueden convivir:
+      VPA optimiza en régimen, esto responde a eventos.</p>
+    </div></details>
+    <details><summary>«¿Y K8sGPT o HolmesGPT, que ya existen y tienen comunidad?»</summary><div class="ans">
+      <p>Los conocemos y la tabla de §4 los compara en serio. K8sGPT diagnostica con analizadores y su Operator empieza a remediar;
+      HolmesGPT investiga más hondo que nosotros. Ninguno trae de serie la combinación ejecución-acotada-con-rollback + aprobación
+      ChatOps + memoria de incidentes + 100% local. Y estratégicamente: aquí el valor para la empresa es el conocimiento operativo
+      propio (runbooks, histórico) y el control del blast-radius — las piezas de terceros se pueden adoptar por debajo sin tirar eso.</p>
+    </div></details>
+    <details><summary>«¿Qué pasa si corréis dos réplicas del agente?»</summary><div class="ans">
+      <p>La cola lo soporta por diseño (consumer group: cada entrada la procesa un solo pod; el dedup es cluster-wide en Redis).
+      Lo que NO está preparado: el rollback recovery re-armaría los mismos contextos en ambos pods (doble revert benigno pero sucio)
+      y no hay lock por workload (F-01 empeora). Respuesta honesta: hoy es single-replica deliberado porque Ollama serializa de todas
+      formas; multi-réplica es trabajo de H2, no un flip de replicas: 2.</p>
+    </div></details>
+    <details><summary>«¿El cap de 2× no es arbitrario?»</summary><div class="ans">
+      <p>Es una regla acordada con el tutor, elegida por ser conservadora y explicable: nunca más del doble, nunca bajar, y el
+      overshoot escala a un humano en vez de corregirse en silencio. ¿Refinable? Sí — el VPA usa +20%/100MB proporcional al evento y es
+      un buen siguiente paso (§4.2). Lo importante no es la constante: es que la constante la pone el motor y no el modelo.</p>
+    </div></details>
+    <details><summary>«¿Prompt injection? Las anotaciones de la alerta las escribe cualquiera con acceso a un workload.»</summary><div class="ans">
+      <p>Superficie real: la descripción de la alerta entra al prompt. Defensa estructural: aunque el atacante controle TODO el output
+      del modelo, en el camino auto solo puede conseguir una subida de límites ≤2× de su propio workload en un namespace <code>arturo-*</code>
+      con rollback — porque target, valores y comando los pone el motor desde el cluster. El texto libre solo llega a ojos humanos.
+      Residual: fatiga/engaño del operador en escalaciones — por eso el mensaje distingue el comando determinista del motor del texto del modelo.</p>
+    </div></details>
+    <details><summary>«¿Quién es responsable si el bot rompe producción a las 3 AM?»</summary><div class="ans">
+      <p>La misma cadena que hoy: el equipo dueño del namespace — el agente solo actúa dentro del allow-list del tenant y deja rastro
+      completo (qué, cuándo, por qué, con qué diagnóstico, qué revirtió) en logs estructurados, métricas y ChromaDB. La política de
+      autonomía es configuración por entorno (dry-run/suggest/escalate/auto), así que "cuánta cuerda tiene el bot" es una decisión de
+      management explícita, no un default del código. El informe de auditoría automático (§2.4) es la pieza que falta para que esa conversación sea cómoda.</p>
+    </div></details>
+    <details><summary>«¿Por qué no comprar esto? Datadog, PagerDuty, Robusta SaaS…»</summary><div class="ans">
+      <p>Coste y datos. El stack completo corre en nodos que ya existen, sin licencias por host ni por evento, y ninguna telemetría
+      de la infraestructura sale del cluster — en una telco eso no es preferencia, es requisito. El SaaS gana en madurez de UI y en
+      breadth; pierde en soberanía del dato, en coste marginal y en la parte que aquí es diferencial: remediación acotada con las
+      reglas de riesgo de ESTA casa. La respuesta madura es "esto complementa el observability stack, no lo sustituye".</p>
+    </div></details>
+    <details><summary>«¿Qué pasa cuando Redis se llena o la cola desborda?»</summary><div class="ans">
+      <p>Tres contornos: la dedup-key y los stores tienen TTL (no crecen sin límite); el stream tiene <code>MAXLEN ~1000</code> (a
+      nuestro throughput, ~66h de backlog antes de recortar — y si recorta, recorta lo más viejo); y Redis tiene limit de 128Mi con
+      la cola dimensionada dentro. El agujero honesto: el recorte por MAXLEN es silencioso (sin métrica, F-10) y Redis no persiste (F-06).
+      Ambos en el roadmap con fecha.</p>
+    </div></details>
+    <details><summary>«¿Cómo sabéis que el RAG recupera el runbook correcto y no uno parecido?»</summary><div class="ans">
+      <p>Se mide, no se supone: retrieval p@1=73%/p@3=87% sobre un dataset propio etiquetado, con HighCPU/HighMemory a 5/5. Y el fallo
+      de retrieval no es peligroso por diseño: un runbook equivocado produce un diagnóstico peor, pero los números y el target siguen
+      viniendo del cluster y el cap sigue siendo del motor. El retrieval malo degrada la calidad del <em>texto</em>, no la seguridad de la <em>acción</em>.</p>
+    </div></details>
+    <details><summary>«¿Y cuando actualicéis el modelo? ¿Todo esto se recalibra?»</summary><div class="ans">
+      <p>Ese es exactamente el motivo del diseño model-agnostic: al modelo solo se le piden field + dirección + prosa, así que cambiarlo
+      no toca ninguna regla de seguridad. El proceso correcto (§3.5): los evals con dataset propio corren como gate — un modelo nuevo
+      entra si iguala o mejora p@1 y el acierto de field, igual que un commit entra si pasan los 535 tests. Ya se hizo una vez:
+      qwen3.5 se evaluó y se <em>rechazó</em> con datos.</p>
+    </div></details>
+  </div>
+
+  <div class="wrap">
+    <footer>
+      Review v2 · 2026-07-02 sobre <span class="mono">main@cb2d1db</span> · lectura completa de agent/ (16 módulos), k8s/ (manifiestos + RBAC + NetworkPolicy), docs/07 y bitácoras v2 ·
+      18 hallazgos verificados contra el código, con file:line · estado del arte contrastado con documentación pública (referencias en §4) ·
+      complementa (no sustituye) la auditoría arquitectónica del 2026-07-01.
+    </footer>
+  </div>
+</section>

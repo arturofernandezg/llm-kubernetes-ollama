@@ -17,6 +17,8 @@ from rag import (
     load_runbooks_from_dir,
     ingest_all_runbooks,
     build_incident_document,
+    error_class_for_alertname,
+    runbook_filter_for_alert,
     COLLECTION_RUNBOOKS,
     COLLECTION_INCIDENTS,
 )
@@ -214,6 +216,90 @@ class TestRetrieveContext:
 
         await retrieve_context("test", http_client, chroma_client=chroma)
         incidents_col.query.assert_not_called()
+
+
+# ── R1: metadata-guided retrieval ─────────────────────────────────────────────
+
+class TestErrorClassForAlertname:
+    def test_prefixed_prometheus_alert_maps_to_bare_class(self):
+        # The mismatch that blocked the naive filter: Prometheus prefixes these.
+        assert error_class_for_alertname("KubePodOOMKilled") == "OOMKilled"
+        assert error_class_for_alertname("KubePodCrashLoopBackOff") == "CrashLoopBackOff"
+        assert error_class_for_alertname("KubePodImagePullBackOff") == "ImagePullBackOff"
+
+    def test_alert_already_named_after_class_is_identity(self):
+        assert error_class_for_alertname("HighCPU") == "HighCPU"
+        assert error_class_for_alertname("HighMemory") == "HighMemory"
+        assert error_class_for_alertname("TargetDown") == "TargetDown"
+
+    def test_unknown_alertname_falls_through_to_identity(self):
+        # Unknown class → identity; retrieve_context's empty-result fallback covers it.
+        assert error_class_for_alertname("SomethingNew") == "SomethingNew"
+
+    def test_empty_alertname_returns_none(self):
+        assert error_class_for_alertname("") is None
+
+    def test_filter_shape(self):
+        assert runbook_filter_for_alert({"alertname": "KubePodOOMKilled"}) == {"error_class": "OOMKilled"}
+        assert runbook_filter_for_alert({}) is None
+
+
+class TestMetadataFilteredRetrieval:
+    @pytest.mark.asyncio
+    async def test_filter_passed_to_runbook_query(self):
+        http_client = mock_ollama_embedding_client()
+        chroma, runbooks_col, _ = mock_chroma_client(
+            runbook_docs=[{"id": "rb-oom", "document": "OOM fix", "distance": 0.1,
+                           "metadata": {"error_class": "OOMKilled"}}],
+        )
+
+        await retrieve_context(
+            "OOMKilled pod nginx", http_client, chroma_client=chroma,
+            metadata_filter={"error_class": "OOMKilled"},
+        )
+
+        _, kwargs = runbooks_col.query.call_args
+        assert kwargs["where"] == {"error_class": "OOMKilled"}
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_semantic_when_filter_matches_nothing(self):
+        """A filter that matches no class-tagged runbook retries unfiltered (R1)."""
+        http_client = mock_ollama_embedding_client()
+        chroma, runbooks_col, _ = mock_chroma_client()
+        empty = {"ids": [[]], "documents": [[]], "distances": [[]], "metadatas": [[]]}
+        populated = {
+            "ids": [["rb-fallback"]],
+            "documents": [["semantic match"]],
+            "distances": [[0.25]],
+            "metadatas": [[{"error_class": "PodEvicted"}]],
+        }
+        runbooks_col.query.side_effect = [empty, populated]
+
+        result = await retrieve_context(
+            "unknown alert", http_client, chroma_client=chroma,
+            metadata_filter={"error_class": "DoesNotExist"},
+        )
+
+        assert runbooks_col.query.call_count == 2
+        # Second (fallback) call drops the filter.
+        assert runbooks_col.query.call_args_list[1].kwargs["where"] is None
+        assert result["runbooks"][0]["id"] == "rb-fallback"
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_when_filter_hits(self):
+        """A filter that hits does NOT trigger a second unfiltered query."""
+        http_client = mock_ollama_embedding_client()
+        chroma, runbooks_col, _ = mock_chroma_client(
+            runbook_docs=[{"id": "rb-oom", "document": "OOM fix", "distance": 0.1,
+                           "metadata": {"error_class": "OOMKilled"}}],
+        )
+
+        await retrieve_context(
+            "OOMKilled pod", http_client, chroma_client=chroma,
+            metadata_filter={"error_class": "OOMKilled"},
+        )
+
+        assert runbooks_col.query.call_count == 1
 
 
 # ── ingest_runbook tests ──────────────────────────────────────────────────────

@@ -36,6 +36,7 @@ from remediation import (
     seal_proposed_action,
     derive_confidence,
     ground_confidence,
+    acquire_workload_cooldown,
     _limit_resource,
     _double_limit_value,
 )
@@ -1442,6 +1443,113 @@ class TestStructuredAutoRemediation:
         assert is_structured_remediation({"proposed_action": cpu}) is True
 
 
+# ── TestWorkloadCooldown (F-01) ───────────────────────────────────────────────
+
+class TestWorkloadCooldown:
+    """F-01: one auto patch per workload per cooldown window (SETNX in Redis).
+
+    Without it, an alert re-firing while the first patch rolls out (or within
+    the rollback window) stacks a second 2x on top of the first. Blocked or
+    unverifiable cooldown → ESCALATE (the human path carries the deterministic
+    command); redis_client=None (tests/local) → no gate.
+    """
+
+    def _base_monkeypatch(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_enabled", True)
+        monkeypatch.setattr("remediation.settings.remediation_auto_max_risk", "low")
+        monkeypatch.setattr("remediation.settings.remediation_auto_confidence", 0.8)
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", True)
+
+    def _structured_diagnosis(self):
+        return {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "commands": ["kubectl describe deployment engine -n arturo-llm-test"],
+            "proposed_action": {
+                "kind": "Deployment", "name": "engine", "namespace": "arturo-llm-test",
+                "container": "engine", "field": "resources.limits.memory",
+                "current_value": "256Mi", "new_value": "512Mi",
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_acquires_cooldown_and_auto_remediates(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        r = AsyncMock()
+        r.set.return_value = True  # SETNX → acquired
+
+        result = await process_remediation(self._structured_diagnosis(), redis_client=r)
+
+        assert result["action"] == RemediationAction.AUTO_REMEDIATE
+        r.set.assert_awaited_once()
+        assert r.set.call_args.args[0] == "aiops:cooldown:arturo-llm-test/engine"
+        assert r.set.call_args.kwargs.get("nx") is True
+        assert r.set.call_args.kwargs.get("ex") == 600
+
+    @pytest.mark.asyncio
+    async def test_active_cooldown_downgrades_to_escalate(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        r = AsyncMock()
+        r.set.return_value = None  # SETNX → key already held
+
+        result = await process_remediation(self._structured_diagnosis(), redis_client=r)
+
+        assert result["action"] == RemediationAction.ESCALATE
+        assert result["execution_attempted"] is False
+        assert result["execute_results"] == []
+        # The human path still gets the deterministic command to approve.
+        assert result["structured_command"] is not None
+
+    @pytest.mark.asyncio
+    async def test_redis_error_fails_closed_to_escalate(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+        r = AsyncMock()
+        r.set.side_effect = Exception("Connection refused")
+
+        result = await process_remediation(self._structured_diagnosis(), redis_client=r)
+
+        assert result["action"] == RemediationAction.ESCALATE
+        assert result["execution_attempted"] is False
+
+    @pytest.mark.asyncio
+    async def test_no_redis_client_skips_gate(self, monkeypatch):
+        self._base_monkeypatch(monkeypatch)
+
+        result = await process_remediation(self._structured_diagnosis(), redis_client=None)
+
+        assert result["action"] == RemediationAction.AUTO_REMEDIATE
+
+    @pytest.mark.asyncio
+    async def test_unstructured_auto_does_not_consult_cooldown(self, monkeypatch):
+        """Safe-command (investigative) auto path never patches → no cooldown claim."""
+        self._base_monkeypatch(monkeypatch)
+        r = AsyncMock()
+        diagnosis = {
+            **mock_diagnosis_auto_remediate(),
+            "risk": "low", "confidence": 0.9,
+            "commands": ["kubectl describe pod engine -n arturo-llm-test"],
+            "proposed_action": None,
+        }
+
+        result = await process_remediation(diagnosis, redis_client=r)
+
+        assert result["action"] == RemediationAction.AUTO_REMEDIATE
+        r.set.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_acquire_helper_key_and_ttl(self, monkeypatch):
+        monkeypatch.setattr("remediation.settings.remediation_cooldown_seconds", 42)
+        r = AsyncMock()
+        r.set.return_value = True
+
+        assert await acquire_workload_cooldown(r, "ns-a", "web") is True
+        r.set.assert_awaited_once_with("aiops:cooldown:ns-a/web", "1", nx=True, ex=42)
+
+        r.set.reset_mock()
+        r.set.return_value = None
+        assert await acquire_workload_cooldown(r, "ns-a", "web") is False
+
+
 # ── TestProcessRemediationNonStringFilter ─────────────────────────────────────
 
 class TestProcessRemediationNonStringFilter:
@@ -1765,6 +1873,19 @@ class TestSealProposedAction:
         seal_proposed_action(d, snap)
         assert d["proposed_action"] is None       # → escalate, no auto on a phantom target
 
+    def test_non_deployment_kind_drops_action(self):
+        # F-02: synthesis is Deployment-only — a confirmed StatefulSet must NOT reach the
+        # auto path (kubectl set resources deployment <sts-name> → NotFound). Escalate via 4.7.
+        for kind in ("StatefulSet", "DaemonSet", None):
+            d = self._diagnosis()
+            snap = _snapshot(
+                gather_ok=True, container="app", workload_name="db", workload_kind=kind,
+                limits={"app": {"memory": "256Mi"}},
+            )
+            seal_proposed_action(d, snap)
+            assert d["proposed_action"] is None, f"kind={kind} must not seal"
+            assert d["target_unresolved"] is True
+
     def test_no_proposed_action_is_noop(self):
         d = {"proposed_action": None}
         seal_proposed_action(d, _snapshot(gather_ok=True, workload_name="web"))
@@ -1773,7 +1894,8 @@ class TestSealProposedAction:
     def test_missing_cluster_limit_keeps_llm_current(self):
         d = self._diagnosis()
         snap = _snapshot(
-            gather_ok=True, container="app", workload_name="web", limits={"app": {}},
+            gather_ok=True, container="app", workload_name="web",
+            workload_kind="Deployment", limits={"app": {}},
         )
         seal_proposed_action(d, snap)
         assert d["proposed_action"]["current_value"] == "999Mi"  # no cluster value → keep LLM
@@ -1783,7 +1905,7 @@ class TestSealProposedAction:
         d = self._diagnosis()
         snap = _snapshot(
             gather_ok=True, container="app", workload_name="web",
-            limits={"app": {"memory": "256Mi"}},
+            workload_kind="Deployment", limits={"app": {"memory": "256Mi"}},
             match_labels={"app": "web", "tier": "backend"},
         )
         seal_proposed_action(d, snap)
@@ -1794,7 +1916,7 @@ class TestSealProposedAction:
         d = self._diagnosis()
         snap = _snapshot(
             gather_ok=True, container="app", workload_name="web",
-            limits={"app": {"memory": "256Mi"}},
+            workload_kind="Deployment", limits={"app": {"memory": "256Mi"}},
         )
         seal_proposed_action(d, snap)
         assert "match_labels" not in d["proposed_action"]  # → app={name} fallback applies

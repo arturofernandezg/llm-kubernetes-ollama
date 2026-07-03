@@ -13,13 +13,14 @@ Uso:
 
 import asyncio
 import json
+import os
 from datetime import date
 from pathlib import Path
 
 import httpx
 
 from config import logger
-from rag import build_rag_query, retrieve_context
+from rag import build_rag_query, retrieve_context, runbook_filter_for_alert
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _EVAL_DIR = Path(__file__).parent
@@ -68,16 +69,21 @@ async def evaluate_alert(
     expected_error_class: str,
     http_client: httpx.AsyncClient,
     top_k: int = 3,
+    use_filter: bool = True,
 ) -> dict:
     payload = alert_entry["payload"]
     labels, annotations, _ = _first_alert_fields(payload)
     description = annotations.get("description", "")
 
     query_text = build_rag_query(labels, description)
+    # R1: metadata-guided retrieval. Set EVAL_NO_FILTER=1 to reproduce the semantic-only
+    # baseline (docs/10) and A/B the gain.
+    metadata_filter = runbook_filter_for_alert(labels) if use_filter else None
     context = await retrieve_context(
         query_text=query_text,
         http_client=http_client,
         top_k_runbooks=top_k,
+        metadata_filter=metadata_filter,
     )
     retrieved = context.get("runbooks", [])
 
@@ -111,12 +117,13 @@ async def evaluate_alert(
     }
 
 
-async def main(top_k: int = 3) -> dict:
+async def main(top_k: int = 3, use_filter: bool = True) -> dict:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     alerts = load_datasets()
     ground_truth = load_ground_truth()
 
+    print(f"Metadata filter (R1): {'ON' if use_filter else 'OFF (semantic baseline)'}")
     results = []
     async with httpx.AsyncClient(timeout=60.0) as client:
         for alert in alerts:
@@ -126,7 +133,7 @@ async def main(top_k: int = 3) -> dict:
 
             print(f"  Evaluating {alert_id} (expected: {expected_error_class})...")
             try:
-                result = await evaluate_alert(alert, expected_error_class, client, top_k)
+                result = await evaluate_alert(alert, expected_error_class, client, top_k, use_filter)
             except Exception as exc:
                 logger.error("Failed to evaluate alert %s: %s", alert_id, exc)
                 result = {
@@ -147,6 +154,7 @@ async def main(top_k: int = 3) -> dict:
         "date": str(date.today()),
         "total": total,
         "top_k": top_k,
+        "metadata_filter": use_filter,
         "precision_at_1": round(hits_at_1 / total, 3) if total else 0,
         f"precision_at_{top_k}": round(hits_at_k / total, 3) if total else 0,
         "hits_at_1": hits_at_1,
@@ -166,4 +174,5 @@ async def main(top_k: int = 3) -> dict:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    use_filter = os.getenv("EVAL_NO_FILTER", "").lower() not in ("1", "true", "yes")
+    asyncio.run(main(use_filter=use_filter))

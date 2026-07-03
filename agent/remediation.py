@@ -416,7 +416,10 @@ def seal_proposed_action(diagnosis: dict, snapshot) -> None:
       backward-compatible: dry-run and unit tests without a cluster keep working).
     - Gathered but workload unresolved (existence gate: NotFound/bare pod) → drop
       proposed_action → the structured auto path can't fire on a phantom target → escalate.
-    - Gathered + workload confirmed → seal name/namespace/container + current_value.
+    - Gathered but the workload is not a Deployment → same drop: the synthesis path
+      (build_set_resources_command, capture_pre_patch_value) is Deployment-only today, so a
+      sealed StatefulSet/DaemonSet target would run the full auto path into a NotFound.
+    - Gathered + Deployment confirmed → seal name/namespace/container + current_value.
     """
     pa = diagnosis.get("proposed_action")
     if not isinstance(pa, dict):
@@ -431,6 +434,21 @@ def seal_proposed_action(diagnosis: dict, snapshot) -> None:
         # a "remediation" that fixed nothing (outcome would hinge on the model's risk).
         diagnosis["target_unresolved"] = True
         logger.info("seal_proposed_action: workload unresolved, dropping proposed_action")
+        return
+
+    if getattr(snapshot, "workload_kind", None) != "Deployment":
+        # Resolved but not synthesizable: `kubectl set resources deployment <sts-name>`
+        # would be the NotFound-by-hallucination symptom reintroduced by another path.
+        # Route through the same 4.7 escalation until synthesis is kind-aware.
+        diagnosis["proposed_action"] = None
+        diagnosis["target_unresolved"] = True
+        logger.info(
+            "seal_proposed_action: workload kind not auto-remediable, dropping proposed_action",
+            extra={
+                "workload_kind": getattr(snapshot, "workload_kind", None),
+                "workload": snapshot.workload_name,
+            },
+        )
         return
 
     pa["name"] = snapshot.workload_name
@@ -1060,9 +1078,33 @@ def build_remediation_result(
     }
 
 
+# ── Cooldown por workload (F-01) ──────────────────────────────────────────────
+
+def _cooldown_key(namespace: str, name: str) -> str:
+    return f"aiops:cooldown:{namespace}/{name}"
+
+
+async def acquire_workload_cooldown(redis_client, namespace: str, name: str) -> bool:
+    """Claim the auto-remediation cooldown for a workload.
+
+    `SET aiops:cooldown:{ns}/{name} 1 NX EX <remediation_cooldown_seconds>` —
+    True if this call acquired it (no auto patch in the window), False if a
+    previous remediation still holds it. Redis errors propagate; the caller
+    downgrades to ESCALATE (fail-closed: an unverifiable cooldown must not
+    allow a second patch on a workload the previous patch may not have cured).
+    """
+    acquired = await redis_client.set(
+        _cooldown_key(namespace, name), "1",
+        nx=True, ex=settings.remediation_cooldown_seconds,
+    )
+    return bool(acquired)
+
+
 # ── Entry point principal ─────────────────────────────────────────────────────
 
-async def process_remediation(diagnosis: dict, rag_degraded: bool = False) -> dict:
+async def process_remediation(
+    diagnosis: dict, rag_degraded: bool = False, redis_client=None,
+) -> dict:
     """Pipeline completo: validate → decide → snapshot → execute → resultado.
 
     Args:
@@ -1070,6 +1112,10 @@ async def process_remediation(diagnosis: dict, rag_degraded: bool = False) -> di
                    (output de generate_diagnosis() en diagnosis.py)
         rag_degraded: True si el retrieval RAG falló; fuerza ESCALATE en vez de
                       AUTO_REMEDIATE (PR-04, sin grounding no se auto-actúa).
+        redis_client: cliente Redis para el cooldown por workload (F-01). None
+                      (tests/local) → sin gate. Solo aplica a la rama auto
+                      estructurada — la única que patchea; los safe commands
+                      son investigativos.
 
     Returns:
         build_remediation_result() dict, extended with:
@@ -1097,6 +1143,33 @@ async def process_remediation(diagnosis: dict, rag_degraded: bool = False) -> di
             proposed_action["container"], proposed_action["field"],
             proposed_action["new_value"],
         )
+
+    # Cooldown por workload (F-01): one auto patch per workload per window. Breaks
+    # the patch-storm loop (alert re-fires while the first patch is still rolling
+    # out / within the rollback window → a second 2x on top of the first). The
+    # human path stays open: the escalation carries the deterministic command.
+    if (
+        action == RemediationAction.AUTO_REMEDIATE
+        and structured_command is not None
+        and redis_client is not None
+    ):
+        workload = f"{proposed_action['namespace']}/{proposed_action['name']}"
+        try:
+            acquired = await acquire_workload_cooldown(
+                redis_client, proposed_action["namespace"], proposed_action["name"],
+            )
+            if not acquired:
+                logger.info(
+                    "Auto-remediation blocked by workload cooldown, escalating",
+                    extra={"reason_code": "workload_cooldown", "workload": workload},
+                )
+                action = RemediationAction.ESCALATE
+        except Exception as exc:
+            logger.warning(
+                "Cooldown check failed, escalating (fail-closed)",
+                extra={"reason_code": "workload_cooldown", "workload": workload, "error": str(exc)},
+            )
+            action = RemediationAction.ESCALATE
 
     execute_results: list[ExecuteResult] = []
     pre_patch_snapshot: PrePatchSnapshot | None = None

@@ -35,7 +35,7 @@ async def _post_with_retry(payload: dict[str, Any]) -> bool:
         logger.warning("Mattermost webhook URL not configured")
         return False
 
-    async with httpx.AsyncClient(timeout=settings.http_timeout) as client:
+    async with httpx.AsyncClient(timeout=settings.mattermost_timeout) as client:
         last_exc: Exception | None = None
 
         for attempt in range(MATTERMOST_MAX_RETRIES):

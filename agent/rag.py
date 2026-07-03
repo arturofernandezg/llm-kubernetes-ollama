@@ -327,6 +327,45 @@ def build_rag_query(alert_labels: dict, description: str) -> str:
     return " ".join(parts)
 
 
+# ── Metadata-guided retrieval (R1) ────────────────────────────────────────────
+
+# Prometheus alertname → runbook error_class. Prometheus prefixes the pod-level
+# Kube* alerts, while the runbooks store the bare Kubernetes reason as error_class;
+# HighCPU/HighMemory/TargetDown already match 1:1. This deterministic map lets us
+# filter the runbook query by class (the alert already NAMES the class) instead of
+# leaning on the embedding to disambiguate near-neighbour classes — the source of
+# the residual p@1 misses (see docs/10). Unknown alertnames fall through to a
+# semantic query (identity below + empty-result fallback in retrieve_context).
+ALERTNAME_TO_ERROR_CLASS: dict[str, str] = {
+    "KubePodOOMKilled": "OOMKilled",
+    "KubePodCrashLoopBackOff": "CrashLoopBackOff",
+    "KubePodImagePullBackOff": "ImagePullBackOff",
+    "HighMemory": "HighMemory",
+    "HighCPU": "HighCPU",
+    "TargetDown": "TargetDown",
+}
+
+
+def error_class_for_alertname(alertname: str) -> Optional[str]:
+    """
+    Map a Prometheus alertname to a runbook error_class (deterministic).
+
+    Returns the explicit mapping when known, else the alertname itself (identity —
+    many alerts already name their class, e.g. HighCPU). Returns None only for an
+    empty alertname. A class that has no matching runbook is harmless: the filtered
+    query in retrieve_context yields nothing and falls back to a semantic search.
+    """
+    if not alertname:
+        return None
+    return ALERTNAME_TO_ERROR_CLASS.get(alertname, alertname)
+
+
+def runbook_filter_for_alert(alert_labels: dict) -> Optional[dict]:
+    """Build a ChromaDB `where` filter on error_class from the alert's alertname."""
+    error_class = error_class_for_alertname(alert_labels.get("alertname", ""))
+    return {"error_class": error_class} if error_class else None
+
+
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
 async def retrieve_context(
@@ -354,13 +393,24 @@ async def retrieve_context(
 
     results = {"query": query_text, "runbooks": [], "incidents": []}
 
-    # Query runbooks
-    runbook_results = runbooks_col.query(
-        query_embeddings=[query_embedding],
-        n_results=top_k_runbooks,
-        where=metadata_filter,
-        include=["documents", "metadatas", "distances"],
-    )
+    def _query_runbooks(where):
+        return runbooks_col.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k_runbooks,
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
+
+    # Query runbooks. Two-stage (R1): try the metadata filter first; if it matches
+    # no class-tagged runbook (unknown/mismatched class), fall back to an unfiltered
+    # semantic query so we never return an empty context just because the filter missed.
+    runbook_results = _query_runbooks(metadata_filter)
+    if metadata_filter is not None and not runbook_results["ids"][0]:
+        logger.info(
+            "RAG metadata filter %s matched no runbooks; falling back to semantic query",
+            metadata_filter,
+        )
+        runbook_results = _query_runbooks(None)
     for i in range(len(runbook_results["ids"][0])):
         results["runbooks"].append({
             "id": runbook_results["ids"][0][i],
