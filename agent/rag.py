@@ -10,6 +10,7 @@ Manages two ChromaDB collections:
 Embeddings are generated in-cluster via Ollama (nomic-embed-text).
 """
 
+import asyncio
 import re
 import time
 from pathlib import Path
@@ -97,19 +98,24 @@ async def ingest_runbook(
         http_client: Shared httpx client for Ollama embedding calls
     """
     client = chroma_client or get_chroma_client()
-    collection = client.get_or_create_collection(
-        name=COLLECTION_RUNBOOKS,
-        metadata={"hnsw:space": "cosine"},
-    )
 
     embedding = await generate_embedding(text, http_client)
 
-    collection.upsert(
-        ids=[doc_id],
-        embeddings=[embedding],
-        documents=[text],
-        metadatas=[metadata],
-    )
+    # ChromaDB's HttpClient is synchronous (blocking HTTP). Offload the collection
+    # access + upsert to a thread so they never block the event loop (F-03).
+    def _upsert() -> None:
+        collection = client.get_or_create_collection(
+            name=COLLECTION_RUNBOOKS,
+            metadata={"hnsw:space": "cosine"},
+        )
+        collection.upsert(
+            ids=[doc_id],
+            embeddings=[embedding],
+            documents=[text],
+            metadatas=[metadata],
+        )
+
+    await asyncio.to_thread(_upsert)
     logger.info("Ingested runbook %s (%d chars)", doc_id, len(text))
 
 
@@ -205,19 +211,23 @@ async def ingest_incident(
         http_client: Shared httpx client for Ollama embedding calls
     """
     client = chroma_client or get_chroma_client()
-    collection = client.get_or_create_collection(
-        name=COLLECTION_INCIDENTS,
-        metadata={"hnsw:space": "cosine"},
-    )
 
     embedding = await generate_embedding(text, http_client)
 
-    collection.upsert(
-        ids=[doc_id],
-        embeddings=[embedding],
-        documents=[text],
-        metadatas=[metadata],
-    )
+    # Offload the blocking ChromaDB upsert to a thread (F-03).
+    def _upsert() -> None:
+        collection = client.get_or_create_collection(
+            name=COLLECTION_INCIDENTS,
+            metadata={"hnsw:space": "cosine"},
+        )
+        collection.upsert(
+            ids=[doc_id],
+            embeddings=[embedding],
+            documents=[text],
+            metadatas=[metadata],
+        )
+
+    await asyncio.to_thread(_upsert)
     logger.info("Persisted incident %s (outcome=%s)", doc_id, metadata.get("outcome"))
 
 
@@ -471,55 +481,63 @@ async def retrieve_context(
         }
     """
     client = chroma_client or get_chroma_client()
-    runbooks_col, incidents_col = ensure_collections(client)
 
     query_embedding = await generate_embedding(query_text, http_client)
 
     results = {"query": query_text, "runbooks": [], "incidents": []}
 
-    def _query_runbooks(where):
-        return runbooks_col.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k_runbooks,
-            where=where,
-            include=["documents", "metadatas", "distances"],
-        )
+    # ChromaDB's HttpClient is synchronous. All the collection access + queries below
+    # are blocking HTTP; offload the whole block to a thread so it never freezes the
+    # event loop (F-03). The two-stage R1 filter and the R2·3 incidents filter are
+    # preserved verbatim inside the offloaded body.
+    def _blocking() -> None:
+        runbooks_col, incidents_col = ensure_collections(client)
 
-    # Query runbooks. Two-stage (R1): try the metadata filter first; if it matches
-    # no class-tagged runbook (unknown/mismatched class), fall back to an unfiltered
-    # semantic query so we never return an empty context just because the filter missed.
-    runbook_results = _query_runbooks(metadata_filter)
-    if metadata_filter is not None and not runbook_results["ids"][0]:
-        logger.info(
-            "RAG metadata filter %s matched no runbooks; falling back to semantic query",
-            metadata_filter,
-        )
-        runbook_results = _query_runbooks(None)
-    for i in range(len(runbook_results["ids"][0])):
-        results["runbooks"].append({
-            "id": runbook_results["ids"][0][i],
-            "document": runbook_results["documents"][0][i],
-            "distance": runbook_results["distances"][0][i],
-            "metadata": runbook_results["metadatas"][0][i],
-        })
+        def _query_runbooks(where):
+            return runbooks_col.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k_runbooks,
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            )
 
-    # Query incidents (may be empty initially). Pending (unverified) incidents are
-    # excluded — no semantic fallback here: an empty incident context is a normal
-    # state, and falling back would defeat the filter (R2·3).
-    if incidents_col.count() > 0:
-        incident_results = incidents_col.query(
-            query_embeddings=[query_embedding],
-            n_results=min(top_k_incidents, incidents_col.count()),
-            where=INCIDENTS_RETRIEVAL_FILTER,
-            include=["documents", "metadatas", "distances"],
-        )
-        for i in range(len(incident_results["ids"][0])):
-            results["incidents"].append({
-                "id": incident_results["ids"][0][i],
-                "document": incident_results["documents"][0][i],
-                "distance": incident_results["distances"][0][i],
-                "metadata": incident_results["metadatas"][0][i],
+        # Query runbooks. Two-stage (R1): try the metadata filter first; if it matches
+        # no class-tagged runbook (unknown/mismatched class), fall back to an unfiltered
+        # semantic query so we never return an empty context just because the filter missed.
+        runbook_results = _query_runbooks(metadata_filter)
+        if metadata_filter is not None and not runbook_results["ids"][0]:
+            logger.info(
+                "RAG metadata filter %s matched no runbooks; falling back to semantic query",
+                metadata_filter,
+            )
+            runbook_results = _query_runbooks(None)
+        for i in range(len(runbook_results["ids"][0])):
+            results["runbooks"].append({
+                "id": runbook_results["ids"][0][i],
+                "document": runbook_results["documents"][0][i],
+                "distance": runbook_results["distances"][0][i],
+                "metadata": runbook_results["metadatas"][0][i],
             })
+
+        # Query incidents (may be empty initially). Pending (unverified) incidents are
+        # excluded — no semantic fallback here: an empty incident context is a normal
+        # state, and falling back would defeat the filter (R2·3).
+        if incidents_col.count() > 0:
+            incident_results = incidents_col.query(
+                query_embeddings=[query_embedding],
+                n_results=min(top_k_incidents, incidents_col.count()),
+                where=INCIDENTS_RETRIEVAL_FILTER,
+                include=["documents", "metadatas", "distances"],
+            )
+            for i in range(len(incident_results["ids"][0])):
+                results["incidents"].append({
+                    "id": incident_results["ids"][0][i],
+                    "document": incident_results["documents"][0][i],
+                    "distance": incident_results["distances"][0][i],
+                    "metadata": incident_results["metadatas"][0][i],
+                })
+
+    await asyncio.to_thread(_blocking)
 
     logger.info(
         "RAG retrieval: %d runbooks, %d incidents for query: %.80s...",

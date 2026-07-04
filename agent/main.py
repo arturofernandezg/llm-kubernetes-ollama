@@ -474,7 +474,9 @@ async def lifespan(app: FastAPI):
     # ChromaDB client (fail-open: None if unavailable at startup)
     try:
         app.state.chroma_client = get_chroma_client()
-        ensure_collections(app.state.chroma_client)
+        # ensure_collections is blocking HTTP; offload it so startup never blocks the
+        # event loop (F-03). Not a request hot path, but keeps the pattern consistent.
+        await asyncio.to_thread(ensure_collections, app.state.chroma_client)
         logger.info(
             "ChromaDB connected at %s:%s",
             settings.chromadb_host, settings.chromadb_port,
@@ -1346,7 +1348,9 @@ async def handle_slash_command(
                     "response_type": "ephemeral",
                     "text": f"Invalid N: `{parts[1]}` (expected integer 1–20)",
                 }
-        rows = _query_recent_incidents(app.state.chroma_client, limit)
+        # _query_recent_incidents makes blocking ChromaDB calls; offload it so the
+        # slash-command handler never blocks the event loop (F-03).
+        rows = await asyncio.to_thread(_query_recent_incidents, app.state.chroma_client, limit)
         text_out = _format_incidents_response(rows)
 
     elif sub == "help":

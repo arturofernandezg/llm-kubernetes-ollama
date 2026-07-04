@@ -273,6 +273,49 @@ class TestRetrieveContext:
         incidents_col.query.assert_not_called()
 
 
+# ── F-03: ChromaDB calls offloaded off the event loop ─────────────────────────
+
+class TestChromaOffloading:
+    """The blocking synchronous ChromaDB calls must run via asyncio.to_thread so
+    they never freeze the FastAPI event loop. The offload preserves behaviour."""
+
+    @pytest.mark.asyncio
+    async def test_retrieve_context_offloads_and_preserves_results(self):
+        http_client = mock_ollama_embedding_client()
+        chroma, runbooks_col, _ = mock_chroma_client(
+            runbook_docs=[{"id": "rb-001", "document": "doc", "distance": 0.1, "metadata": {}}],
+        )
+
+        async def spy_to_thread(func, *args, **kwargs):
+            # Execute the blocking body synchronously (as the executor would) so the
+            # result is identical, while proving the call was routed through to_thread.
+            return func(*args, **kwargs)
+
+        with patch("rag.asyncio.to_thread", side_effect=spy_to_thread) as to_thread:
+            result = await retrieve_context("OOMKilled", http_client, chroma_client=chroma)
+
+        to_thread.assert_awaited()  # the blocking chroma work was offloaded
+        runbooks_col.query.assert_called()  # and actually ran
+        assert result["runbooks"][0]["id"] == "rb-001"
+
+    @pytest.mark.asyncio
+    async def test_ingest_incident_offloads_upsert(self):
+        http_client = mock_ollama_embedding_client()
+        chroma, _, incidents_col = mock_chroma_client()
+
+        async def spy_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("rag.asyncio.to_thread", side_effect=spy_to_thread) as to_thread:
+            await ingest_incident(
+                doc_id="inc-1", text="t", metadata={"outcome": "cured"},
+                http_client=http_client, chroma_client=chroma,
+            )
+
+        to_thread.assert_awaited()
+        incidents_col.upsert.assert_called_once()
+
+
 # ── R1: metadata-guided retrieval ─────────────────────────────────────────────
 
 class TestErrorClassForAlertname:
