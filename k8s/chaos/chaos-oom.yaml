@@ -45,7 +45,12 @@ spec:
         image: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent/aiops-agent/polinux-stress:latest
         imagePullPolicy: Always
         command: ["stress"]
-        args: ["--vm", "1", "--vm-bytes", "100M", "--timeout", "60"]
+        # No --timeout: stress runs forever so restarts only ever mean OOM.
+        # With a timeout, once a fix raises the limit above 100M, stress would
+        # exit(0) at the deadline and restart cleanly — benign restarts the
+        # rollback health-check misreads as crashes (false rollback). Infinite
+        # stress => healthy fix = 0 restarts = cured; failing fix = OOM = revert.
+        args: ["--vm", "1", "--vm-bytes", "100M"]
         resources:
           requests:
             memory: "16Mi"

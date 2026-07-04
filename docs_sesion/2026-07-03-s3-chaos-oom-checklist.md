@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-03
 slug: s3-chaos-oom-checklist
-promoted: false
+promoted: true
 tipo: checklist-ejecutable (S3 del sprint chapter — no es bitácora; la bitácora se escribe al ejecutarlo)
 ---
 

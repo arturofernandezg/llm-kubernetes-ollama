@@ -138,6 +138,24 @@ Criterio de MTTD común a todos: dado que MTTD(pipeline) mide latencia pura (fir
 - **outcome**: 3/4 `escalate` (OOM/Crashloop/BadImage) — remediación bloqueada por regla 4.5/4.6/5 (safety gates). 1/4 `suggest_only` (HighCPU, confidence=0.00, commands=0) — el motor de decisión no tenía comandos que ejecutar. Todos los outcomes son correctos y esperados.
 - **BadImage no genera restarts**: `kube_pod_container_status_restarts_total` queda en 0; `KubePodCrashLoopBackOff` **no** dispara para este caso. Por eso se añadió la regla `KubePodImagePullBackOff`.
 
+## Validación del arco completo v2 (2026-07-04, `8a40fdc`)
+
+La tabla de arriba mide **detección + notificación** (MTTD/MTTR del pipeline). El 2026-07-04 se corrió por primera vez en cluster el **arco completo de remediación v2** (chaos OOM sobre `chaos-oom-target`): detección → grounding (enrichment) → diagnóstico → seal → cap 4.6 → escalación → **approve humano** → patch → ventana rollback → veredicto → re-upsert R2. No es un experimento de latencia sino de **corrección del arco de remediación**.
+
+**Qué se validó (todo verde):**
+- **Grounding Eje A real**: el snapshot trae `last_state_reason=OOMKilled`, `workload_kind=Deployment` por ownerReferences con pod vivo; `seal_proposed_action` saca `current_value=32Mi` **del cluster** (no del LLM); `ground_confidence: grounded=1.0, model=0.95`. La clase de fallo `NotFound`/alucinación del slice 6 está **muerta** en el camino grounded.
+- **Safety cap 4.6**: el LLM propuso `512Mi` (16× el límite de 32Mi) → `blocked: exceeds 2x current` → **escala** (no clampa en silencio, acuerdo tutor "overshoot >2× escala").
+- **Human-in-the-loop E2E**: escala → approve (HMAC OK) → `kubectl set resources … 512Mi` → persistió. Botón ✅ validado.
+- **Rollback durable (P0·3) + R2**: el approve programó rollback (paridad humano/auto), +300s → eval → veredicto re-upsertado en ChromaDB.
+
+**Aprendizaje clave — falso rollback por restart benigno:** tras aprobar 512Mi, el health-check dio `healthy=false, reason="pods_restarting: [3]"` y revirtió a 32Mi (`outcome=reverted`). Pero el pod **NO OOMeaba** a 512Mi: los 3 restarts eran del ciclo `stress --timeout 60` (stress sale con exit 0 cada 60s → el contenedor reinicia por término limpio). **El health-check cuenta restarts sin mirar el motivo** → interpretó exit-limpio como crash. Es un **artefacto del manifiesto**, no del sistema: en un OOM real, fix que cura = 0 restarts = healthy; fix que falla = sigue OOMeando = revert (el heurístico es correcto para OOM real). **Fix aplicado**: `k8s/chaos/chaos-oom.yaml` sin `--timeout` (stress infinito → restarts solo significan OOM). **Mejora de producto pendiente (v2.x, C-01 en docs/11)**: el health-check debería mirar `lastState.reason==OOMKilled`, no solo contar restarts.
+
+**Limitación del harness — `scripts/chaos.sh` no observa el arco:** su ciclo de auto-cleanup (~300s) es **más corto que el arco completo** (patch → 300s ventana rollback → veredicto ≈10min) → borra el deployment a mitad → `NotFound` en captura/remediación/rollback, y sin pod vivo el enrichment cae a `skipped` → seal sin grounding. **Para validar el arco: aplicar el manifiesto a mano** (`kubectl apply`); `scripts/chaos.sh` sirve solo para medir MTTD/MTTR de detección (C-04 en docs/11).
+
+**MTTR = techo de hardware:** el LLM (qwen2.5:1.5b en CPU, todo el nodo e2-standard-2 sin GPU) tarda 147-213s warm por diagnóstico y timeoutea a 360s en cold. MTTD sigue en 5s; el MTTR está dominado por la inferencia. No bajable con más CPU (C-05 en docs/11).
+
+**Pendiente**: el veredicto `cured` positivo (solo se tiene `rolled_back`). Con el manifiesto arreglado, el run limpio de S3·b lo cerrará → habilita R4 (gráfica `aiops_feedback_verdict_total` con `cured`+`rolled_back`).
+
 ## Visualización en Grafana
 
 El dashboard **"AIOps — Chaos"** provisionado en `k8s/grafana.yaml` (ConfigMap

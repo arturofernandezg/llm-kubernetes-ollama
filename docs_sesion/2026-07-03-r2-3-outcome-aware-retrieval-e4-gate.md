@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-03
 slug: r2-3-outcome-aware-retrieval-e4-gate
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

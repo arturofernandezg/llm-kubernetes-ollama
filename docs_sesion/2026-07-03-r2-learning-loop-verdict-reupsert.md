@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-03
 slug: r2-learning-loop-verdict-reupsert
-promoted: false
+promoted: true
 ---
 
 ## Objetivo
