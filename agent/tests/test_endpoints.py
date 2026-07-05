@@ -1815,6 +1815,31 @@ class TestApproveStructuredParity:
         mock_sched.assert_called_once()
         assert mock_sched.call_args.args[0] == "st-1"         # reusa el incident_id (trazabilidad E2E)
 
+    def test_approve_feeds_verdict_loop_with_doc_id(self, api_client):
+        """R2 human/auto parity: el approve pasa el doc_id (acarreado por la escalación) y el
+        remediation al rollback → el veredicto podrá re-upsertar el MISMO doc e incrementar
+        aiops_feedback_verdict_total. Sin esto el cured humano se saltaba el bucle de aprendizaje."""
+        esc = _structured_escalation("st-doc-1")
+        esc.incident_doc_id = "incident-KubePodOOMKilled-1700000000"
+        self.fake_redis.set_raw("escalation:st-doc-1", json.dumps(_escalation_to_dict(esc)))
+        ok = MagicMock(success=True)
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value=[ok]), \
+             patch("main.results_to_log", return_value="[OK] kubectl set resources ..."), \
+             patch("main.capture_pre_patch_value", new_callable=AsyncMock, return_value=MagicMock()), \
+             patch("main._schedule_rollback_evaluation", new_callable=AsyncMock) as mock_sched, \
+             patch("main.ingest_incident", new_callable=AsyncMock) as mock_ingest:
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve", "incident_id": "st-doc-1"},
+            })
+        assert r.status_code == 200
+        # El rollback recibe el doc_id acarreado + el remediation (espejo del camino auto)
+        assert mock_sched.call_args.kwargs["doc_id"] == esc.incident_doc_id
+        assert mock_sched.call_args.kwargs["remediation"]["action"] == RemediationAction.AUTO_REMEDIATE
+        # El ingest del approve reusa el mismo doc y lo marca provisional (una sola doc por incidente)
+        assert mock_ingest.call_args.kwargs["doc_id"] == esc.incident_doc_id
+        assert mock_ingest.call_args.kwargs["metadata"]["outcome"] == main.INCIDENT_OUTCOME_PENDING
+
     def test_approve_structured_no_rollback_when_execution_fails(self, api_client):
         self._seed("st-2")
         failed = MagicMock(success=False)

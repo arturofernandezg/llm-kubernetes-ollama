@@ -148,6 +148,11 @@ class PendingEscalation:
     diagnosis: dict
     safe_commands: list[str]
     expires_at: datetime
+    # R2 human/auto parity: the ChromaDB incident doc_id computed at diagnosis time.
+    # Carried through Redis so the human approve path can re-upsert the SAME document
+    # with the rollback verdict (make_incident_doc_id embeds time.time() → not
+    # reproducible at approve time, minutes later). Empty for pre-R2 escalations.
+    incident_doc_id: str = ""
 
 
 # ── Rollback State ────────────────────────────────────────────────────────────
@@ -195,6 +200,7 @@ def _escalation_to_dict(esc: PendingEscalation) -> dict:
         "diagnosis": esc.diagnosis,
         "safe_commands": esc.safe_commands,
         "expires_at": esc.expires_at.isoformat(),
+        "incident_doc_id": esc.incident_doc_id,
     }
 
 
@@ -206,6 +212,7 @@ def _dict_to_escalation(data: dict) -> PendingEscalation:
         diagnosis=data["diagnosis"],
         safe_commands=data["safe_commands"],
         expires_at=datetime.fromisoformat(data["expires_at"]),
+        incident_doc_id=data.get("incident_doc_id", ""),
     )
 
 
@@ -1010,6 +1017,7 @@ async def _process_alert_with_diagnosis(
                 diagnosis=diagnosis,
                 safe_commands=esc_commands,
                 expires_at=expires_at,
+                incident_doc_id=incident_doc_id or "",
             )
             ttl_seconds = ESCALATION_TTL_MINUTES * 60
             stored = False
@@ -1212,6 +1220,7 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
     user = payload.user_name or "human"
     action = payload.context.action
 
+    rollback_scheduled = False
     if action == "approve":
         # Human/auto parity (v2 Eje A): for a structured remediation the stored command IS
         # the engine synthesis, so the human path gets the same safety net as the auto path —
@@ -1226,25 +1235,40 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             execute_results = await execute_commands(incident.safe_commands)
             log = results_to_log(execute_results)
             REMEDIATION_COUNTER.labels(action="human_approved").inc()
+            remediation_for_feedback = {
+                "action": RemediationAction.AUTO_REMEDIATE,
+                "execution_log": log,
+                "safe_commands": incident.safe_commands,
+                "blocked_commands": [],
+            }
             if (
                 settings.remediation_rollback_enabled
                 and pre_patch_snapshot is not None
                 and any(r.success for r in execute_results)
             ):
+                # R2 human/auto parity: feed the verdict loop exactly like the auto path
+                # (main.py auto branch) — pass the incident doc_id + remediation summary so
+                # the rollback verdict re-upserts the SAME ChromaDB doc (cured/rolled_back)
+                # and increments aiops_feedback_verdict_total. Without them ctx.doc_id="" and
+                # _reupsert_incident_outcome short-circuits → a human-approved cure never
+                # entered the learning loop.
                 await _schedule_rollback_evaluation(
                     incident.incident_id, pre_patch_snapshot, incident.alert_item, incident.diagnosis,
+                    doc_id=incident.incident_doc_id or "",
+                    remediation=remediation_for_feedback,
                 )
+                rollback_scheduled = True
         except Exception as exc:
             logger.error("Command execution failed for incident %s: %s", incident.incident_id, exc)
             log = f"ERROR: {exc}"
             REMEDIATION_COUNTER.labels(action="human_approve_failed").inc()
+            remediation_for_feedback = {
+                "action": RemediationAction.AUTO_REMEDIATE,
+                "execution_log": log,
+                "safe_commands": incident.safe_commands,
+                "blocked_commands": [],
+            }
         decision_line = f"\n---\n✅ **Remediación APROBADA** por @{user}\n```\n{log}\n```"
-        remediation_for_feedback = {
-            "action": RemediationAction.AUTO_REMEDIATE,
-            "execution_log": log,
-            "safe_commands": incident.safe_commands,
-            "blocked_commands": [],
-        }
         logger.info("Human approved remediation for incident %s", incident.incident_id)
     elif action == "reject":
         REMEDIATION_COUNTER.labels(action="human_rejected").inc()
@@ -1277,8 +1301,14 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             "labels": incident.alert_item.labels,
             "annotations": incident.alert_item.annotations,
         }
+        # R2 human/auto parity: reuse the original incident doc_id so this write updates
+        # the SAME document the rollback verdict will later re-upsert (one doc per incident,
+        # not a duplicate). When a rollback is pending, mark it auto_pending so retrieval
+        # won't cite an unverified fix before the verdict flips it to cured/rolled_back.
         doc_id, text, metadata = build_incident_document(
             alert_data, incident.diagnosis, remediation_for_feedback,
+            doc_id=incident.incident_doc_id or None,
+            outcome=INCIDENT_OUTCOME_PENDING if rollback_scheduled else None,
         )
         await ingest_incident(
             doc_id=doc_id, text=text, metadata=metadata,
