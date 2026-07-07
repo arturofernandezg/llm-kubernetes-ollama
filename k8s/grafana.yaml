@@ -65,12 +65,13 @@ data:
 ---
 
 # ── ConfigMap: dashboard AIOps ────────────────────────────────────────────────
-# 5 filas:
+# 6 filas:
 #   1. Pipeline AIOps      — aiops_diagnosis_total, aiops_remediation_total, aiops_feedback_total
 #   2. Latencia Webhook    — p95/p50 de http_request_duration_seconds + req/s
 #   3. Salud del Sistema   — up{} de servicios propios (job=kubernetes-endpoints) + pod phases en arturo-*
 #   4. Debug Interno       — aiops_ollama_retries_total, aiops_extraction_total
 #   5. Cola Redis Streams  — aiops_queue_{enqueued,processed,depth,reclaimed,dead} (F2)
+#   6. Bucle de aprendizaje — aiops_feedback_verdict_total (F4 R2: ¿el fix aguantó?) + gate E4
 
 apiVersion: v1
 kind: ConfigMap
@@ -442,6 +443,99 @@ data:
           ],
           "title": "Durabilidad (rango)",
           "type": "stat"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 43},
+          "id": 18,
+          "title": "Bucle de aprendizaje (F4 R2) — ¿el fix aguantó?",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "description": "Veredicto final de cada remediación (auto o approve humano) re-escrito sobre su incidente en ChromaDB: cured = el fix aguantó la ventana de rollback; rolled_back = se revirtió; rollback_failed = revert fallido (intervención manual).",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "green", "value": null}]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "rolled_back"},
+                "properties": [
+                  {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "rollback_failed"},
+                "properties": [
+                  {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}
+                ]
+              }
+            ]
+          },
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 44},
+          "id": 19,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "expr": "sum by (outcome) (increase(aiops_feedback_verdict_total[$__range]))",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Veredictos (rango)",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "description": "Acumulado de veredictos desde el arranque del agente — el escalón marca el momento del veredicto.",
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 8, "x": 8, "y": 44},
+          "id": 20,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "aiops_feedback_verdict_total",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Veredictos acumulados",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "description": "Salud de la ingesta del bucle: persisted = incidentes archivados; skipped_low_quality = gate E4 (diagnóstico sin confianza, no es precedente); verdict_failed = el re-upsert del veredicto falló (fail-open).",
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 8, "x": 16, "y": 44},
+          "id": 21,
+          "options": {
+            "legend": {"calcs": ["last"], "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "multi"}
+          },
+          "targets": [
+            {
+              "expr": "sum by (outcome) (increase(aiops_feedback_total[$__range]))",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Ingesta del bucle (rango)",
+          "type": "timeseries"
         }
       ],
       "refresh": "30s",
@@ -467,7 +561,7 @@ data:
       "timezone": "browser",
       "title": "AIOps Agent — Overview",
       "uid": "aiops-agent-overview",
-      "version": 3
+      "version": 4
     }
   chaos.json: |
     {

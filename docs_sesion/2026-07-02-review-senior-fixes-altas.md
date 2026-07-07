@@ -6,7 +6,7 @@ promoted: true
 
 ## Objetivo
 Sesión autónoma ("ve decidiendo tú, sin microtasks"): leer la review senior modo-libro
-(`docs_sesion/2026-07-02-paper-review-senior.html`, 7.1/10, 18 hallazgos F-01..F-18) y
+(`docs_sesion/estado_de_proyecto.html (antes 2026-07-02-paper-review-senior.html)`, 7.1/10, 18 hallazgos F-01..F-18) y
 atacar lo que ella misma marca como pequeño + alto + testeable con mocks, mientras el
 despliegue de `cb2d1db` sigue bloqueado en la recuperación de secrets (manual, Jay).
 

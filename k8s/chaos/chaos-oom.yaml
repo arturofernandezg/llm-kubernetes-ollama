@@ -50,7 +50,14 @@ spec:
         # exit(0) at the deadline and restart cleanly — benign restarts the
         # rollback health-check misreads as crashes (false rollback). Infinite
         # stress => healthy fix = 0 restarts = cured; failing fix = OOM = revert.
-        args: ["--vm", "1", "--vm-bytes", "100M"]
+        #
+        # --vm-hang 0: allocate+dirty the 100M once, then sleep forever holding it
+        # (stress(1): 0 = hang indefinitely). At 32Mi the allocation still blows
+        # the limit => OOM as before; but a CURED target (512Mi) sits resident at
+        # ~0 CPU instead of spinning malloc/free — a forgotten cured run no longer
+        # burns a node overnight nor floods HighCPU ("horno nocturno", 2026-07-06).
+        # Cured-side behaviour pending first in-cluster validation.
+        args: ["--vm", "1", "--vm-bytes", "100M", "--vm-hang", "0"]
         resources:
           requests:
             memory: "16Mi"

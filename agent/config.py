@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # URL base del agente accesible desde Mattermost (intra-cluster FQDN)
     agent_callback_url: str = "http://agent-svc.arturo-llm-test.svc.cluster.local:8000"
 
+    # Ventana para aprobar/rechazar una escalación en Mattermost (C-03). Antes era una
+    # constante hardcodeada (60) en main.py — un rebuild para cambiarla. 120min equilibra
+    # demos/ausencias frente al riesgo F-09 (el approve ejecuta sin re-validar: una ventana
+    # mayor amplía cuánto puede envejecer el estado que el humano aprueba).
+    escalation_ttl_minutes: int = 120
+
     # HMAC signing secret for Mattermost button callbacks (Fase 3 — X5)
     # Empty = HMAC disabled (dev/test). Set via K8s Secret in production.
     webhook_secret: str = ""

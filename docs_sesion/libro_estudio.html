@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="es">
+<meta charset="utf-8">
+<title>Libro de Estudio — AIOps Infrastructure Agent</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --ink:#1b1f24; --muted:#5b6470; --paper:#fbfaf7; --card:#ffffff;
+    --hair:#e3ded4; --accent:#0f5132; --accent2:#8a4b08; --crit:#a3252f;
+    --ok:#0f7a3d; --warn:#b57d0a; --info:#1d5c8f;
+    --serif:'Charter','Georgia','Times New Roman',serif;
+    --sans:-apple-system,'Segoe UI',Roboto,sans-serif;
+    --mono:'SF Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--serif);font-size:16.5px;line-height:1.65}
+  .wrap{max-width:880px;margin:0 auto;padding:0 28px}
+  p{max-width:74ch}
+  code{font-family:var(--mono);font-size:.85em;background:#f0ede5;padding:1px 5px;border-radius:3px}
+  pre{background:#14181d;color:#dce3ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.55}
+  pre code{background:none;color:inherit;padding:0}
+  h1{font-size:34px;line-height:1.2;margin:.3em 0}
+  h2{font-size:25px;margin:2.2em 0 .5em;border-bottom:2px solid var(--accent);padding-bottom:6px}
+  h3{font-size:19px;margin:1.8em 0 .4em;color:var(--accent)}
+  h4{font-size:16.5px;margin:1.4em 0 .3em}
+  a{color:var(--info)}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent2);margin-bottom:6px}
+  .lede{font-size:18.5px;color:#333a44}
+  .tbl{overflow-x:auto;margin:18px 0}
+  table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:13.5px}
+  th{background:#efece4;text-align:left;padding:8px 10px;border:1px solid var(--hair);font-size:12.5px;text-transform:uppercase;letter-spacing:.04em}
+  td{padding:8px 10px;border:1px solid var(--hair);vertical-align:top}
+  tr:nth-child(even) td{background:#faf8f3}
+  .kbox{background:var(--card);border:1px solid var(--hair);border-left:4px solid var(--accent);padding:14px 18px;margin:20px 0;font-family:var(--sans);font-size:14.5px}
+  .kbox.warn{border-left-color:var(--warn)}
+  .kbox.crit{border-left-color:var(--crit)}
+  .kbox h4{margin:.1em 0 .35em;font-size:14px;text-transform:uppercase;letter-spacing:.06em}
+  .thesis{background:#0f5132;color:#f2f8f4;padding:22px 26px;border-radius:6px;font-size:20px;text-align:center;margin:26px 0;font-style:italic}
+  .numstrip{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:24px 0;font-family:var(--sans)}
+  .numstrip>div{background:var(--card);border:1px solid var(--hair);padding:12px;text-align:center}
+  .numstrip .n{font-size:22px;font-weight:800;color:var(--accent)}
+  .numstrip .t{font-size:11.5px;color:var(--muted);margin-top:3px}
+  /* pipeline diagram */
+  .pipe{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:22px 0;font-family:var(--sans)}
+  .pipe .st{flex:1 1 118px;min-width:112px;background:var(--card);border:1.5px solid var(--hair);border-top:4px solid var(--accent);padding:10px;font-size:12.5px;position:relative}
+  .pipe .st b{display:block;font-size:13px;margin-bottom:3px}
+  .pipe .st.llm{border-top-color:var(--accent2)}
+  .pipe .st.hum{border-top-color:var(--info)}
+  .pipe .st .who{font-family:var(--mono);font-size:10px;color:var(--muted)}
+  nav{position:sticky;top:0;background:rgba(251,250,247,.96);border-bottom:1px solid var(--hair);z-index:5;backdrop-filter:blur(4px)}
+  nav .row{max-width:880px;margin:0 auto;padding:9px 28px;display:flex;flex-wrap:wrap;gap:4px 14px;font-family:var(--sans);font-size:12px}
+  nav a{color:var(--muted);text-decoration:none}
+  nav a:hover{color:var(--accent)}
+  details{border:1px solid var(--hair);background:var(--card);margin:10px 0;border-radius:4px}
+  summary{cursor:pointer;padding:12px 16px;font-weight:700;font-family:var(--sans);font-size:14.5px}
+  details .ans{padding:2px 16px 14px;font-size:15px;border-top:1px solid var(--hair)}
+  dl{margin:16px 0}
+  dt{font-family:var(--mono);font-size:13.5px;font-weight:700;color:var(--accent);margin-top:13px}
+  dd{margin:.2em 0 0 0;font-size:15px}
+  .toc{background:var(--card);border:1px solid var(--hair);padding:18px 24px;margin:24px 0;font-family:var(--sans);font-size:14.5px;column-count:2;column-gap:36px}
+  .toc a{display:block;padding:2.5px 0;text-decoration:none;color:var(--ink)}
+  .toc a:hover{color:var(--accent)}
+  .toc .n{color:var(--accent2);font-family:var(--mono);font-size:12px;margin-right:6px}
+  footer{margin:70px 0 44px;border-top:1px solid var(--hair);padding-top:22px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  @media print{nav{display:none} body{font-size:12.5px} pre{white-space:pre-wrap}}
+  @media (max-width:640px){.toc{column-count:1}}
+</style>
+
+<nav><div class="row">
+  <a href="#c1">1·Problema</a><a href="#c2">2·Arquitectura</a><a href="#c3">3·Cola</a><a href="#c4">4·RAG</a>
+  <a href="#c5">5·Grounding</a><a href="#c6">6·LLM</a><a href="#c7">7·Motor</a><a href="#c8">8·Red de seguridad</a>
+  <a href="#c9">9·Observabilidad</a><a href="#c10">10·Historia</a><a href="#c11">11·Números</a><a href="#c12">12·Demo</a>
+  <a href="#c13">13·Preguntas</a><a href="#c14">14·Límites</a><a href="#c15">15·Método</a><a href="#glosario">Glosario</a>
+</div></nav>
+
+<header class="wrap" style="padding-top:52px">
+  <div class="eyebrow">Libro de estudio · AIOps Infrastructure Agent · MasOrange/Telecable · julio 2026</div>
+  <h1>Remediación automática de incidentes en Kubernetes con un LLM local</h1>
+  <p class="lede">Todo el proyecto en un documento: el problema, la arquitectura, cada decisión de diseño con su porqué,
+  los números medidos, el guion de la demo y las respuestas a las preguntas difíciles. Si estudias esto, puedes
+  presentar y defender el sistema sin abrir el repo.</p>
+
+  <div class="thesis">«El cluster informa, el modelo razona, el motor dispone.»</div>
+
+  <div class="numstrip">
+    <div><div class="n">621</div><div class="t">tests (15 ficheros, gate CI)</div></div>
+    <div><div class="n">100%</div><div class="t">p@1 retrieval (antes 73.3%)</div></div>
+    <div><div class="n">5 s</div><div class="t">MTTD del pipeline</div></div>
+    <div><div class="n">≤2×</div><div class="t">cap de cualquier patch auto</div></div>
+    <div><div class="n">100% vs 25%</div><div class="t">safety RAG vs zero-shot</div></div>
+    <div><div class="n">cured=1.0</div><div class="t">bucle de aprendizaje validado</div></div>
+  </div>
+
+  <div class="toc">
+    <a href="#c1"><span class="n">1</span>El problema y el caso de negocio</a>
+    <a href="#c2"><span class="n">2</span>Arquitectura de un vistazo</a>
+    <a href="#c3"><span class="n">3</span>La entrada: alertas y la cola durable</a>
+    <a href="#c4"><span class="n">4</span>El conocimiento: RAG con ChromaDB</a>
+    <a href="#c5"><span class="n">5</span>El grounding: la verdad sale del cluster</a>
+    <a href="#c6"><span class="n">6</span>El cerebro acotado: el LLM</a>
+    <a href="#c7"><span class="n">7</span>El motor de decisión: la cascada</a>
+    <a href="#c8"><span class="n">8</span>La red de seguridad: rollback y veredicto</a>
+    <a href="#c9"><span class="n">9</span>Observabilidad: cero caja negra</a>
+    <a href="#c10"><span class="n">10</span>Cómo llegamos aquí (historia)</a>
+    <a href="#c11"><span class="n">11</span>Chuleta de números para la demo</a>
+    <a href="#c12"><span class="n">12</span>Guion de demo paso a paso</a>
+    <a href="#c13"><span class="n">13</span>Preguntas hostiles, respuestas honestas</a>
+    <a href="#c14"><span class="n">14</span>Límites conocidos y trabajo futuro</a>
+    <a href="#c15"><span class="n">15</span>El taller: método de sesión y skills</a>
+    <a href="#glosario"><span class="n">G</span>Glosario</a>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- ══════════ 1 ══════════ -->
+<h2 id="c1">1 · El problema y el caso de negocio</h2>
+<p>Un pod de Kubernetes muere por falta de memoria (OOMKilled) a las 3 de la mañana. Hoy, en la mayoría de equipos,
+eso significa: el on-call recibe un aviso, abre el portátil, hace <code>kubectl describe</code>, busca el runbook,
+diagnostica, decide un fix, lo aplica y vigila que no empeore nada. <strong>15–45 minutos de humano interrumpido</strong>,
+para un fallo cuyo diagnóstico y fix son, la mayoría de las veces, mecánicos.</p>
+<p>Este sistema automatiza ese ciclo completo — detección → diagnóstico con contexto → decisión → acción acotada →
+vigilancia post-fix — y deja al humano solo las decisiones que de verdad requieren juicio. No es un chatbot que sugiere:
+es un <strong>agente que actúa</strong>, con un LLM dentro pero nunca al mando.</p>
+
+<h3>Por qué un LLM local (y no GPT-4/API externa)</h3>
+<ul>
+  <li><strong>Los datos no salen del cluster.</strong> Logs, nombres de pods, topología: todo se queda dentro. En una
+  operadora, eso no es un nice-to-have, es requisito.</li>
+  <li><strong>Coste cero por token.</strong> Ollama corre in-cluster (qwen2.5:1.5b para generación,
+  nomic-embed-text para embeddings). Sin factura por alerta.</li>
+  <li><strong>La restricción se convirtió en resultado:</strong> medimos que con el runbook correcto inyectado, el modelo
+  de 1.5B acierta el campo a tocar 5/5. La palanca es el <em>contexto</em>, no el tamaño del modelo. Y la arquitectura
+  es model-agnostic: con GPU mañana, se cambia una variable de entorno.</li>
+</ul>
+
+<h3>Qué NO es</h3>
+<p>No es un VPA (Vertical Pod Autoscaler) reinventado: el VPA ajusta requests/limits por histórico de uso, sin diagnóstico,
+sin runbooks, sin explicación y sin humano en el loop. Este sistema diagnostica la <em>causa</em> (con lenguaje natural que
+un operador lee), decide con reglas deterministas, explica en Mattermost lo que hace y por qué, aprende de sus propios
+resultados y escala a humano cuando el fix sale de lo acotado. El VPA es un termostato; esto es un operador junior
+supervisado que documenta todo lo que toca.</p>
+
+<!-- ══════════ 2 ══════════ -->
+<h2 id="c2">2 · Arquitectura de un vistazo</h2>
+
+<div class="pipe">
+  <div class="st"><b>Prometheus</b>detecta (10 reglas, scrape 30s)<span class="who">arturo-monitoring</span></div>
+  <div class="st"><b>Alertmanager</b>agrupa y reenvía<span class="who">arturo-monitoring</span></div>
+  <div class="st"><b>Webhook FastAPI</b>encola O(1), fail-closed<span class="who">agent · arturo-llm-test</span></div>
+  <div class="st"><b>Cola Redis Streams</b>durable, dedup, dead-letter<span class="who">redis · arturo-llm-test</span></div>
+  <div class="st"><b>RAG ChromaDB</b>runbooks + incidentes<span class="who">chromadb · arturo-llm-test</span></div>
+  <div class="st"><b>Enrichment</b>snapshot real del cluster<span class="who">kubectl (RBAC lectura)</span></div>
+  <div class="st llm"><b>LLM Ollama</b>diagnóstico JSON (qwen2.5:1.5b)<span class="who">ollama · arturo-llm-test</span></div>
+  <div class="st"><b>Motor de decisión</b>cascada de reglas + seal<span class="who">remediation.py</span></div>
+  <div class="st hum"><b>Mattermost</b>notifica / botones HMAC<span class="who">arturo-mattermost</span></div>
+  <div class="st"><b>kubectl</b>patch acotado + rollback<span class="who">RBAC least-privilege</span></div>
+</div>
+
+<div class="kbox"><h4>La idea en una frase</h4>
+Cada etapa hace lo que mejor sabe: <strong>el cluster informa</strong> (hechos deterministas vía kubectl),
+<strong>el modelo razona</strong> (diagnóstico en lenguaje, qué campo tocar y en qué dirección),
+<strong>el motor dispone</strong> (sintetiza el comando exacto, lo acota a ≤2×, lo hace reversible y lo vigila).
+El LLM nunca ejecuta nada: propone, y todo lo que propone pasa por una validation layer.</div>
+
+<h3>Quién es quién en el código</h3>
+<div class="tbl"><table>
+<thead><tr><th>Módulo</th><th>Papel</th><th>Filosofía de fallo</th></tr></thead>
+<tbody>
+<tr><td><code>main.py</code></td><td>Endpoints, orquestación del pipeline, rollback scheduling, formato Mattermost, métricas</td><td>mixta (F-15: modularizar pendiente)</td></tr>
+<tr><td><code>streams.py</code></td><td>Cola Redis Streams: enqueue (dedup), consume loop, reclaim, dead-letter</td><td>enqueue <strong>fail-closed</strong>; resto fail-soft</td></tr>
+<tr><td><code>rag.py</code></td><td>Embeddings vía Ollama, colecciones ChromaDB, retrieval filtrado (R1), gate de calidad (E4), documentos de incidente</td><td>fail-open (sin RAG → LLM zero-shot + regla 7.5)</td></tr>
+<tr><td><code>enrichment.py</code></td><td>Snapshot del pod + identidad del workload por ownerReferences ANTES del LLM</td><td>fail-soft (sin snapshot → modo LLM-only, regla 4.7 escala)</td></tr>
+<tr><td><code>diagnosis.py</code></td><td>Prompt AIOps + CLUSTER FACTS, parseo del JSON del modelo</td><td>fail-open (sin JSON → alerta cruda a MM)</td></tr>
+<tr><td><code>remediation.py</code></td><td>Validation layer, cascada de decisión, seal, síntesis del comando, executor, health-check, revert, cooldown</td><td><strong>fail-closed en todo lo que ejecuta</strong></td></tr>
+<tr><td><code>mattermost.py</code></td><td>Notificaciones + botones firmados HMAC-SHA256, timeout propio 10s</td><td>fail-open con retry/backoff</td></tr>
+<tr><td><code>escalation_store.py</code> / <code>rollback_store.py</code></td><td>Persistencia Redis de escalaciones pendientes y rollbacks en vuelo</td><td>fail-open</td></tr>
+<tr><td><code>config.py</code></td><td>Settings (pydantic-settings) + logging JSON estructurado</td><td>—</td></tr>
+</tbody></table></div>
+
+<h3>Infraestructura desplegada (GKE, cluster compartido)</h3>
+<div class="tbl"><table>
+<thead><tr><th>Namespace</th><th>Qué corre</th></tr></thead>
+<tbody>
+<tr><td><code>arturo-llm-test</code></td><td>agent (FastAPI, imagen <code>aiops-agent:0914611</code>) · ollama (qwen2.5:1.5b + nomic-embed-text, PVC con los modelos) · chromadb (StatefulSet, 16 runbooks) · redis (cola + estado)</td></tr>
+<tr><td><code>arturo-monitoring</code></td><td>prometheus · kube-state-metrics · alertmanager · grafana (2 dashboards provisionados)</td></tr>
+<tr><td><code>arturo-mattermost</code></td><td>mattermost + postgres (ChatOps)</td></tr>
+<tr><td><code>arturo-chaos</code></td><td>targets de chaos engineering (4 experimentos)</td></tr>
+</tbody></table></div>
+<p><strong>Tenancy:</strong> el cluster es compartido con otra persona → todas las reglas de alerta, el scrape y la
+auto-remediación están acotados a <code>arturo-.*</code> (KSM <code>--namespaces</code>, metric_relabel del cadvisor,
+allow-list de namespace en el motor). Sin Cloud NAT: los pods no tienen internet — los modelos y las imágenes se
+mirrorean a Artifact Registry con <code>crane</code>.</p>
+
+<!-- ══════════ 3 ══════════ -->
+<h2 id="c3">3 · La entrada: alertas y la cola durable</h2>
+
+<h3>3.1 Detección (Prometheus)</h3>
+<p>10 reglas en <code>k8s/prometheus.yaml</code>: 6 de workloads — <code>KubePodOOMKilled</code> (for: 0m),
+<code>KubePodCrashLoopBackOff</code> (&gt;3 restarts/15m), <code>HighMemory</code> y <code>HighCPU</code> (&gt;90% del límite, 5m),
+<code>TargetDown</code>, <code>KubePodImagePullBackOff</code> — y 4 <strong>meta-alertas del propio agente</strong>
+(«quién vigila al vigilante»): <code>AiopsQueueBacklog</code>, <code>AiopsRollbackRevertFailed</code>,
+<code>AiopsDeadLetter</code>, <code>AiopsEscalationsDegraded</code>. Truco clave: las anotaciones de OOM/HighMemory/HighCPU
+<strong>inyectan el límite actual con una query PromQL</strong> en la descripción — así el modelo nunca tiene que
+inventarse el <code>current_value</code>.</p>
+
+<h3>3.2 Por qué hay una cola (y por qué es fail-closed)</h3>
+<p>El LLM en CPU tarda 3-4 minutos por diagnóstico. Sin cola, una ráfaga de alertas o un reinicio del agente a mitad de
+diagnóstico = alertas perdidas. La cola (Redis Streams, módulo <code>streams.py</code>) da tres cosas:
+<strong>durabilidad</strong> (una alerta aceptada se procesa aunque el pod muera), <strong>absorción de ráfagas</strong>
+(el webhook responde en O(1)) y <strong>dedup cluster-wide</strong>. No compra paralelismo — Ollama serializa la
+generación — y por eso el consumidor es in-process, no un worker aparte.</p>
+
+<div class="kbox"><h4>El contrato de "no se pierde ninguna alerta"</h4>
+<ol style="margin:4px 0;padding-left:20px">
+<li><strong>Ingesta fail-closed:</strong> si Redis está caído, el webhook devuelve <strong>503</strong> → Alertmanager
+reintenta. Es la única pieza fail-closed de la ingesta, a propósito: perder una alerta es peor que rechazarla.</li>
+<li><strong>Dedup:</strong> <code>SET aiops:seen:{alertname:ns:pod} NX EX 300</code> — la misma alerta reenviada en 5 min
+no se reprocesa. Si el XADD falla tras marcar la dedup-key, la clave se borra (compensación F-05) para que el retry
+de Alertmanager no choque con una clave huérfana.</li>
+<li><strong>PEL (Pending Entries List):</strong> el consumidor lee con XREADGROUP y solo hace XACK al terminar. Si muere a
+mitad, la entrada queda "entregada sin confirmar" y el <code>reclaim_pending</code> periódico (idle &gt;600s, para no robar
+trabajo en curso) la reprocesa.</li>
+<li><strong>Dead-letter:</strong> tras 3 entregas fallidas, la entrada va a <code>aiops:alerts:dead</code> con forense —
+un mensaje envenenado no bloquea la cola.</li>
+<li><strong>Self-heal NOGROUP:</strong> si Redis renace sin el consumer group, el loop lo recrea con <code>id="$"</code>
+(solo entregas futuras, evita replay masivo) y backoff exponencial (sin busy-spin — la causa raíz de un HighCPU real que tuvimos).</li>
+</ol>
+Semántica resultante: <strong>at-least-once</strong> — un crash después del LLM pero antes del XACK puede reprocesar
+(mensaje duplicado en MM); mitigado por la dedup-key. Asumido y documentado.</div>
+
+<!-- ══════════ 4 ══════════ -->
+<h2 id="c4">4 · El conocimiento: RAG con ChromaDB</h2>
+<p><strong>Por qué RAG y no fine-tuning ni clasificador:</strong> el conocimiento operacional cambia (runbooks nuevos,
+incidentes nuevos) y el corpus es pequeño (16 runbooks). Recuperar el documento correcto e inyectarlo en el prompt es
+más barato, más explicable (el mensaje de MM cita sus fuentes) y medible. Y el efecto es enorme:
+<strong>con runbook la seguridad de los comandos propuestos es 100%; zero-shot cae al 25%</strong> (medido, docs/10).</p>
+
+<h3>4.1 Mecánica</h3>
+<p>Dos colecciones en ChromaDB (distancia coseno): <code>runbooks</code> (conocimiento estático curado: 16 documentos YAML
+con <code>error_class</code>, comandos, texto) e <code>incidents</code> (memoria semántica de incidentes pasados — el bucle
+de aprendizaje del cap. 8). Los embeddings (768 dims) los genera <code>nomic-embed-text</code> en el mismo Ollama.
+Toda llamada a ChromaDB va envuelta en <code>asyncio.to_thread</code> (F-03): el cliente es síncrono y sin eso una
+query lenta congelaba el event loop entero (y con él, el liveness probe).</p>
+
+<h3>4.2 R1 — Retrieval guiado por metadata (la mejora estrella)</h3>
+<p>El problema medido: p@1 = 73.3% — el embedding confundía clases <em>vecinas</em> (OOMKilled vs HighMemory).
+La observación: <strong>la alerta ya nombra su clase</strong> — <code>KubePodOOMKilled</code> ES la clase OOMKilled.
+No hay que pedirle al embedding que desambigüe lo que ya sabemos de forma determinista. Solución en dos etapas:
+un mapping <code>alertname→error_class</code> filtra la query de runbooks por metadata; si el filtro no matchea nada
+(alerta desconocida), fallback a query semántica sin filtro. Resultado medido en cluster (N=15):
+<strong>p@1 73.3%→100%, p@3 86.7%→100%</strong>. Lema: <em>determinista donde se puede, semántico como fallback</em>.</p>
+<p><strong>R3 — higiene de query:</strong> el nombre de pod lleva hash (<code>frontend-8d7c4b-xnq2p</code>) — ruido de
+embedding puro. <code>strip_pod_hash</code> lo reduce al nombre del workload <em>solo para la query</em>;
+el documento del incidente conserva el pod real para forense.</p>
+
+<h3>4.3 Fail-open triple</h3>
+<p>ChromaDB caído → contexto vacío + flag <code>rag_degraded</code> (con reconexión lazy que descarta el cliente stale).
+Ollama caído → sin diagnóstico → alerta cruda a MM. Ambos caídos → el humano recibe al menos lo que Alertmanager sabía.
+Pero — crítico — <strong>rag_degraded desactiva el auto</strong> (regla 7.5): sin grounding RAG el modelo es
+zero-shot y sobreconfiado; nunca actúa solo en ese estado.</p>
+
+<!-- ══════════ 5 ══════════ -->
+<h2 id="c5">5 · El grounding: la verdad sale del cluster (v2 Eje A)</h2>
+<p>La lección más cara del proyecto. En la validación de la primera auto-remediación real, el comando llegaba bien
+sintetizado… y fallaba con <code>NotFound</code>. Causa raíz: el target (<code>name/namespace/container</code>) y el
+<code>current_value</code> salían de la propuesta del LLM, y el modelo de 1.5B <strong>los alucina</strong>
+(target=namespace, container=pod, current inventado). Bajar la temperatura a 0 mató la varianza del <em>valor</em>,
+pero el target era un problema de <strong>sourcing, no de inteligencia</strong>. La respuesta es la etapa
+determinista <code>enrichment.py</code>, que corre ANTES del LLM:</p>
+<ol>
+<li><strong>Snapshot del pod</strong> (<code>kubectl get pod -o json</code>, argv sin shell, timeout 10s, nunca lanza):
+límites actuales por container, phase, <code>restart_count</code>, <code>last_state_reason</code> (p.ej. OOMKilled).</li>
+<li><strong>Identidad por ownerReferences:</strong> pod → ReplicaSet → Deployment, con un <code>get</code> final que actúa de
+<em>gate de existencia</em> — el workload solo se confirma si el API server lo devuelve. Nada de heurísticas de strip-hash.</li>
+<li><strong>Selector real</strong> (<code>.spec.selector.matchLabels</code>) para el health-check post-patch — mata la clase
+de "rollback falso" que causaba el selector adivinado <code>app={name}</code>.</li>
+</ol>
+<p>El snapshot único alimenta a <strong>tres consumidores</strong>:</p>
+<div class="tbl"><table>
+<thead><tr><th>Consumidor</th><th>Qué hace con él</th></tr></thead>
+<tbody>
+<tr><td><strong>Prompt</strong> ("CLUSTER FACTS")</td><td>El modelo razona sobre hechos reales, no sobre lo que imagina del cluster. Prompt con regla anti-alucinación.</td></tr>
+<tr><td><strong>Seal</strong> (<code>seal_proposed_action</code>)</td><td>Sobrescribe <code>name/namespace/container/current_value</code> de la propuesta con la verdad del cluster; propaga <code>match_labels</code>; si el valor del LLM es inusable, sintetiza <code>new_value=2×current</code> (exactamente el borde de la regla 4.6); si el workload NO se confirma o no es un Deployment (F-02) → <strong>anula la propuesta</strong> → marker <code>target_unresolved</code> → regla 4.7 escala. El LLM queda reducido a <em>field + dirección</em>.</td></tr>
+<tr><td><strong>Confidence grounded</strong></td><td>Para la clase crash/OOM, la confianza deja de ser la autoevaluación del modelo (sobreconfiado, E5): razón de fallo confirmada + restarts ≥ umbral → 1.0; evento aislado → 0.5 (debajo del gate auto). El valor del modelo se conserva como <code>model_confidence</code> para auditoría, y Mattermost muestra ambos.</td></tr>
+</tbody></table></div>
+<div class="kbox"><h4>Validado en cluster (2026-07-04 y 07-06)</h4>
+Log real: <code>seal_proposed_action: sealed from cluster snapshot … current_value=32Mi</code> — el valor sale del CLUSTER.
+<code>ground_confidence: grounded=1.0, model=0.9</code>. La clase de fallo NotFound/alucinación está <strong>muerta</strong>
+en el camino grounded. Kill-switch: <code>ENRICHMENT_ENABLED=false</code> degrada a LLM-only sin romper nada (fail-soft).</div>
+
+<!-- ══════════ 6 ══════════ -->
+<h2 id="c6">6 · El cerebro acotado: el LLM</h2>
+<p><strong>Modelo:</strong> qwen2.5:1.5b servido por Ollama in-cluster, <code>temperature=0</code> (greedy determinista —
+el default 0.8 daba propuestas distintas run a run). <strong>Entrada:</strong> alerta + runbooks recuperados + incidentes
+similares (con su outcome) + CLUSTER FACTS. <strong>Salida:</strong> JSON estructurado — diagnóstico en lenguaje,
+comandos sugeridos, <code>proposed_action</code> (field, new_value…), confidence, risk.</p>
+<p><strong>Qué decide realmente el LLM tras la v2:</strong> el diagnóstico narrado (lo que lee el humano), qué campo tocar
+(<code>resources.limits.memory</code> vs <code>cpu</code>) y en qué dirección. Todo lo demás — target, valor actual, comando,
+límites, si se ejecuta — lo pone el cluster o el motor. Esta reducción deliberada es la respuesta a la pregunta
+"¿para qué el LLM?": para lo que es de lenguaje, que es donde aporta y donde no puede romper nada.</p>
+<p><strong>El techo de hardware (honesto):</strong> 147–213 s por diagnóstico en caliente (CPU pura, nodo e2-standard-2;
+Ollama ya tiene el nodo entero); la primera llamada tras un deploy puede superar los 360 s. El MTTR está dominado por la
+inferencia — es un límite de la sandbox, no de la arquitectura: MTTD sigue en 5 s, y con GPU el mismo diseño baja a segundos.
+Refutado con datos: probamos un modelo mayor (qwen3.5) y fue <em>más lento y frágil</em> (600s timeout) sin mejorar el field
+— la palanca es contexto, no tamaño.</p>
+
+<!-- ══════════ 7 ══════════ -->
+<h2 id="c7">7 · El motor de decisión: la cascada</h2>
+<p>Todo lo que el LLM emite pasa por la validation layer: clasificación regex de cada comando en
+<strong>BLOCKED</strong> (delete pod/ns/pvc, drain, rm -rf… — prioridad máxima) &gt; <strong>SAFE</strong> (describe/get/logs/top)
+&gt; <strong>MUTATING</strong> (set resources, scale, patch…) &gt; <strong>UNKNOWN</strong>. Después, la cascada
+(<code>decide_action</code> — primera regla que aplica, gana):</p>
+<div class="tbl"><table>
+<thead><tr><th>#</th><th>Regla</th><th>Resultado</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Remediación deshabilitada por config</td><td>SUGGEST_ONLY</td></tr>
+<tr><td>2</td><td>Sin comandos</td><td>SUGGEST_ONLY</td></tr>
+<tr><td>3</td><td>Algún comando BLOCKED (el LLM propuso algo destructivo)</td><td><strong>ESCALATE</strong></td></tr>
+<tr><td>4</td><td>Algún comando UNKNOWN (incertidumbre)</td><td>SUGGEST_ONLY</td></tr>
+<tr><td>4.5</td><td>Comando MUTATING que reinicia pods (condición del tutor) — <em>excepción</em>: bump de límites estructurado y acotado</td><td><strong>ESCALATE</strong></td></tr>
+<tr><td>4.6</td><td>new_value &gt; <strong>2× current</strong> (memoria o CPU) — el overshoot NO se clampa en silencio: escala al humano</td><td><strong>ESCALATE</strong></td></tr>
+<tr><td>4.7</td><td><code>target_unresolved</code> — el seal anuló la propuesta (workload sin confirmar) — colocada ANTES de la 5 para que el resultado nunca dependa del self-rating del modelo</td><td><strong>ESCALATE</strong></td></tr>
+<tr><td>5</td><td>risk (autoevaluado por el modelo) &gt; umbral — <em>bypass</em> si es remediación estructurada: el bound determinista del motor sustituye al self-rating</td><td><strong>ESCALATE</strong></td></tr>
+<tr><td>6</td><td>confidence &lt; 0.8 (la grounded, si hay snapshot)</td><td>SUGGEST_ONLY</td></tr>
+<tr><td>7.5</td><td>RAG degradado (sin grounding de runbooks, safety 25%)</td><td><strong>ESCALATE</strong></td></tr>
+<tr><td>7</td><td>Todo lo anterior pasado</td><td><strong>AUTO_REMEDIATE</strong></td></tr>
+</tbody></table></div>
+
+<h3>7.1 La remediación estructurada — "el modelo propone, el motor dispone"</h3>
+<p><code>is_structured_remediation()</code> es la <strong>fuente única de elegibilidad</strong> para el auto: target completo
+y confirmado, namespace dentro del allow-list <code>arturo-</code> (blast-radius en cluster compartido), campo de límite
+conocido (memoria siempre; CPU tras flag, escalate-first), valores parseables, y <strong>solo-subir</strong> (nunca
+auto-bajar un límite). Cuando dispara, el motor <strong>sintetiza él mismo</strong> el comando
+(<code>kubectl set resources deployment X -n NS --containers=C --limits=memory=V</code>) — jamás ejecuta el free-text del
+modelo. Una sola síntesis compartida por el camino auto y el humano.</p>
+<p><strong>Cooldown por workload (F-01):</strong> <code>SETNX aiops:cooldown:{ns}/{name} TTL 600s</code> antes de
+ejecutar — un solo patch auto por workload por ventana. Rompe el patch-storm (la alerta re-firing durante el rollout
+disparando un segundo 2× encima del primero). Bloqueado o Redis no verificable → ESCALATE <strong>fail-closed</strong>
+con el comando determinista listo para el humano. (Detalle consciente: el cooldown se consume aunque el kubectl falle —
+mejor un humano de más que un patch de más.)</p>
+<p><strong>Executor:</strong> solo acepta comandos que empiecen por <code>kubectl</code>, argv vía shlex (sin shell),
+timeout 30s por comando, kill del proceso en timeout. En dry-run loguea sin ejecutar (default de config; el cluster
+corre con <code>REMEDIATION_DRY_RUN=false</code> — y varias salvaguardas fail-closed se activan justo al salir de dry-run).</p>
+
+<!-- ══════════ 8 ══════════ -->
+<h2 id="c8">8 · La red de seguridad: rollback, veredicto y humano</h2>
+
+<h3>8.1 Snapshot → ventana → veredicto</h3>
+<p>Antes de cualquier patch, <code>capture_pre_patch_value</code> lee del cluster el valor vigente (no el que diga nadie).
+Tras el patch se programa una evaluación a los <strong>300 s</strong>: <code>check_pod_health</code> mira los pods del
+selector <em>real</em> (matchLabels sellados). ¿Sanos (Running, 0 restarts)? → <strong>cured</strong>, mensaje de éxito.
+¿Siguen mal? → <strong>revert automático</strong> al valor capturado + notificación. ¿El revert falla? →
+<strong>rollback_failed</strong>, alerta crítica (meta-alerta <code>AiopsRollbackRevertFailed</code>) e intervención manual.</p>
+<p><strong>Durabilidad (P0·3):</strong> el contexto de rollback se persiste en Redis; si el agente reinicia a mitad de
+ventana, <code>_recover_rollbacks()</code> lo re-arma al arranque y duerme solo el tiempo <em>restante</em>. Antes de esto,
+un reinicio dejaba un patch aplicado que nunca se revertía — el clásico agujero del "casi seguro".</p>
+
+<h3>8.2 R2 — El bucle de aprendizaje real (la feature narrable)</h3>
+<div class="kbox"><h4>El sistema aprende de sus incidentes — incluidos los fallidos</h4>
+Cada incidente se archiva en ChromaDB. Pero un archivo escrito <em>en el momento del diagnóstico</em> mentiría: aún no se
+sabe si el fix curó. Solución R2: la ingesta inicial marca <code>outcome=auto_pending</code> (provisional) y el veredicto
+del rollback <strong>re-escribe el MISMO documento</strong> con la verdad: <code>cured</code>, <code>rolled_back</code> o
+<code>rollback_failed</code>. El retrieval (R2·3): excluye los <code>auto_pending</code> (un fix sin veredicto no es
+precedente) pero <strong>expone a propósito los fallidos</strong> como conocimiento negativo — en el prompt aparecen
+etiquetados <code>FAILED FIX (reverted, do not repeat)</code> y el modelo tiene la regla de no reproponer un fix que ya
+falló. Gate E4 (<code>incident_worth_ingesting</code>): un diagnóstico sin confianza parseada no se archiva —
+prevención de la contaminación del corpus que ya sufrimos (y purgamos) una vez.
+Métrica: <code>aiops_feedback_verdict_total{outcome}</code>, con su fila propia en Grafana.
+<strong>Validado en cluster: cured=1.0 el 2026-07-06.</strong></div>
+
+<h3>8.3 Human-in-the-loop: paridad exacta con el auto</h3>
+<p>Cuando la cascada escala, Mattermost recibe el diagnóstico con <strong>botones Aprobar/Rechazar</strong>. Cada botón
+lleva una firma <strong>HMAC-SHA256(incident_id:action)</strong> — nadie fabrica un "aprobar" sin el secret. Con ejecución
+real, un secret vacío <strong>rechaza (401)</strong> en vez de fail-open (P0·2). La escalación pendiente vive en Redis con
+TTL (<code>escalation_ttl_minutes=120</code>, configurable sin rebuild).</p>
+<p><strong>"What you approve is what runs":</strong> la escalación estructurada guarda y muestra el comando determinista
+del motor (no el free-text del modelo), y el approve ejecuta exactamente eso — con snapshot pre-patch, rollback programado
+y entrada al bucle de veredicto <strong>idénticos al camino auto</strong>. El último gap de paridad (el <code>doc_id</code>
+del incidente no viajaba con la escalación → un cured humano no entraba al bucle) se cerró en <code>ca159be</code>:
+el doc_id se acarrea por Redis dentro de la escalación, porque re-derivarlo es imposible (lleva timestamp).</p>
+
+<!-- ══════════ 9 ══════════ -->
+<h2 id="c9">9 · Observabilidad: cero caja negra</h2>
+<p>Principio de proyecto: instrumentación desde el día 1, no en la fase 6. Logging JSON estructurado en todo el agente
+(parseable por Cloud Logging), y una métrica Prometheus por cada decisión del pipeline:</p>
+<div class="tbl"><table>
+<thead><tr><th>Métrica</th><th>Qué cuenta</th></tr></thead>
+<tbody>
+<tr><td><code>aiops_diagnosis_total{outcome}</code></td><td>success / rag_ok / rag_reconnect / rag_failed / llm_timeout / llm_error / pipeline_failed</td></tr>
+<tr><td><code>aiops_remediation_total{action}</code></td><td>auto_remediate / escalate / suggest_only / human_approved / human_rejected…</td></tr>
+<tr><td><code>aiops_enrichment_total{outcome}</code></td><td>gathered / workload_unresolved / skipped / error — el grounding es observable por alerta</td></tr>
+<tr><td><code>aiops_remediation_rollback_total{outcome}</code></td><td>scheduled / healthy / reverted / revert_failed</td></tr>
+<tr><td><code>aiops_feedback_verdict_total{outcome}</code></td><td><strong>cured / rolled_back / rollback_failed</strong> — ¿el fix aguantó? (la gráfica de la demo)</td></tr>
+<tr><td><code>aiops_queue_*</code></td><td>enqueued / processed / depth / reclaimed / dead — salud de la cola</td></tr>
+<tr><td><code>aiops_chaos_mttd/mttr_seconds</code></td><td>histogramas MTTD/MTTR por experimento chaos</td></tr>
+<tr><td><code>aiops_escalation_store_total{outcome}</code></td><td>stored / redis_down — escalaciones degradadas sin botones</td></tr>
+</tbody></table></div>
+<p><strong>Grafana</strong> (provisionado por ConfigMap, stateless): dashboard <em>Overview</em> con 6 filas — pipeline,
+latencia webhook, salud, debug, cola, y la nueva <strong>"Bucle de aprendizaje"</strong> (veredictos por outcome:
+verde cured, naranja rolled_back, rojo rollback_failed) — y dashboard <em>Chaos</em> (MTTD/MTTR p95, outcomes).
+<strong>Meta-alertas 7-10:</strong> el agente reporta su propia degradación al canal mientras vive; si muere del todo,
+lo cubre <code>TargetDown</code>.</p>
+
+<!-- ══════════ 10 ══════════ -->
+<h2 id="c10">10 · Cómo llegamos aquí (historia en 12 hitos)</h2>
+<div class="tbl"><table>
+<thead><tr><th>Cuándo</th><th>Hito</th><th>Lo esencial</th></tr></thead>
+<tbody>
+<tr><td>feb–mar</td><td><strong>Fase 0</strong> — generador Terraform</td><td>El proyecto original: LLM extrae parámetros GCP → genera .tf. Se conserva legacy (endpoint /extract). Base FastAPI+Ollama+CI.</td></tr>
+<tr><td>abr</td><td><strong>Fase 1</strong> — observabilidad + ChatOps</td><td>Prometheus + KSM + Alertmanager + webhook + Mattermost + Grafana. Sin kube-prometheus-stack por permisos IAM.</td></tr>
+<tr><td>23 abr</td><td><strong>Fase 2</strong> — RAG</td><td>ChromaDB + embeddings + 16 runbooks + pipeline de diagnóstico con triple fail-open.</td></tr>
+<tr><td>12 may</td><td><strong>Fase 3</strong> — remediación</td><td>Validation layer + cascada + botones HMAC + feedback loop. Eval inicial: p@1 60%, safety RAG 100% vs 25%.</td></tr>
+<tr><td>27 may</td><td><strong>Mini-Fase 4</strong> — production readiness</td><td>Chaos engineering (4 experimentos, MTTD ~5s), slash command, rollback automático, Redis para escalaciones.</td></tr>
+<tr><td>26–29 jun</td><td><strong>F2</strong> — cola durable</td><td>Redis Streams como camino único; legacy BackgroundTasks retirado. Validada en cluster: ráfaga de 10 sin pérdida, replay tras matar el pod.</td></tr>
+<tr><td>30 jun–1 jul</td><td><strong>F3</strong> — CPU + auto real</td><td>Dimensión CPU field-agnostic. Causa raíz del "auto nunca dispara": el motor ejecutaba los comandos investigativos del modelo → re-sourcing (síntesis determinista). Evals refutan "modelo mayor lo arregla".</td></tr>
+<tr><td>1 jul</td><td><strong>Auditoría v2</strong>: 5.9/10, 3 P0</td><td>"Rechazo para producción". Reencuadre: grounding como keystone. Eje B cerrado el mismo día (auth fail-closed P0·2, rollback durable P0·3).</td></tr>
+<tr><td>2 jul</td><td><strong>Eje A</strong> — grounding</td><td><code>enrichment.py</code>: snapshot + ownerReferences + seal + confidence grounded + regla 4.7 + paridad humano/auto. La tesis hecha código.</td></tr>
+<tr><td>2–3 jul</td><td><strong>Review senior</strong>: 7.1/10, F-01..F-18</td><td>Cerrados los 5 Alta accionables (F-01 cooldown, F-02 gate kind, F-03 to_thread, F-04 timeout MM, F-05 compensación dedup) + CI GitHub Actions. <strong>F4 R1/R2/R2·3/R3</strong>: retrieval 100% + bucle de veredicto.</td></tr>
+<tr><td>4 jul</td><td><strong>Validación v2 en cluster</strong></td><td>1ª vez del arco completo: grounding real (32Mi del cluster), cap 4.6 escala 512Mi (16×), approve E2E, rollback durable. Hallazgo: falso-rollback por artefacto del manifiesto chaos (--timeout).</td></tr>
+<tr><td>6 jul</td><td><strong>S3·b — cured validado</strong></td><td>Fix paridad R2-humano (doc_id viaja con la escalación) → run limpio → <code>verdict_total{cured}=1.0</code>. Lección: horno nocturno → teardown mecánico (<code>chaos_arc.sh</code> + <code>--vm-hang 0</code>) + panel veredicto + meta-alertas.</td></tr>
+</tbody></table></div>
+
+<!-- ══════════ 11 ══════════ -->
+<h2 id="c11">11 · Chuleta de números para la demo</h2>
+<div class="tbl"><table>
+<thead><tr><th>Número</th><th>Qué es</th><th>Contexto / de dónde sale</th></tr></thead>
+<tbody>
+<tr><td><strong>621</strong></td><td>tests (15 ficheros)</td><td>pytest global verde; gate en Cloud Build y en CI GitHub Actions. Todo mockeado (no requieren cluster).</td></tr>
+<tr><td><strong>p@1 73.3%→100%</strong></td><td>precisión del retrieval</td><td>R1 filtro por error_class, A/B en cluster N=15. p@3 86.7%→100%.</td></tr>
+<tr><td><strong>100% vs 25%</strong></td><td>safety con RAG vs zero-shot</td><td>docs/10 — por eso rag_degraded nunca auto-remedia (regla 7.5).</td></tr>
+<tr><td><strong>5 s</strong></td><td>MTTD del pipeline</td><td>startsAt→webhook. Detección prácticamente instantánea.</td></tr>
+<tr><td><strong>147–213 s</strong></td><td>LLM warm por diagnóstico</td><td>qwen2.5:1.5b en CPU (e2-standard-2, sin GPU). Techo de hardware, no de diseño.</td></tr>
+<tr><td><strong>≤2×</strong></td><td>cap de cualquier patch</td><td>Regla 4.6 (acuerdo tutor). El overshoot escala, no se clampa en silencio. Demo real: LLM pidió 512Mi (16×) → escalate.</td></tr>
+<tr><td><strong>300 s</strong></td><td>ventana de rollback</td><td>Espera antes del health-check post-patch; el contexto sobrevive reinicios (Redis).</td></tr>
+<tr><td><strong>600 s</strong></td><td>cooldown por workload</td><td>SETNX; un patch auto por workload por ventana; &gt; ventana de rollback.</td></tr>
+<tr><td><strong>120 min</strong></td><td>TTL de escalación</td><td>Configurable por env var (antes 60 hardcodeado).</td></tr>
+<tr><td><strong>300 s / 3 / 600 s</strong></td><td>cola: dedup TTL / max deliveries / min idle reclaim</td><td>dead-letter a <code>aiops:alerts:dead</code> tras 3 entregas.</td></tr>
+<tr><td><strong>16</strong></td><td>runbooks en ChromaDB</td><td>YAML curados con error_class + comandos.</td></tr>
+<tr><td><strong>10</strong></td><td>reglas Prometheus</td><td>6 de workloads (acotadas a arturo-.*) + 4 meta-alertas del agente.</td></tr>
+<tr><td><strong>5.9 → 7.1</strong></td><td>notas de las dos reviews senior</td><td>Auditoría 07-01 (3 P0, cerrados) → review 07-02 (F-01..18; 5 de 6 Alta cerrados, queda F-06).</td></tr>
+<tr><td><strong>0914611</strong></td><td>imagen en cluster</td><td>Tag = short SHA del commit que buildeó. Validada 07-06 con el cured.</td></tr>
+<tr><td><strong>cured=1.0</strong></td><td>aiops_feedback_verdict_total</td><td>El bucle de aprendizaje cerrado E2E con approve humano, en cluster.</td></tr>
+</tbody></table></div>
+
+<!-- ══════════ 12 ══════════ -->
+<h2 id="c12">12 · Guion de demo paso a paso</h2>
+
+<h3>12.1 Preparación (10 min antes)</h3>
+<pre><code># Port-forwards (cada uno en su terminal, o con & al final)
+kubectl port-forward svc/mattermost-svc 8065:8065 -n arturo-mattermost
+kubectl port-forward svc/grafana-svc 3000:3000 -n arturo-monitoring
+kubectl port-forward svc/prometheus-svc 9090:9090 -n arturo-monitoring
+kubectl port-forward svc/agent-svc 8000:8000 -n arturo-llm-test
+
+# Pre-vuelo del agente
+curl -s localhost:8000/readyz          # {"status":"ready","mode":"queue","redis":"up"}
+curl -s localhost:8000/metrics | grep aiops_feedback_verdict
+
+# Grafana: admin / (kubectl get secret grafana-admin -n arturo-monitoring -o jsonpath='{.data.admin-password}' | base64 -d)
+# Mattermost: canal #alerts abierto. OJO: el websocket sobre port-forward es flaky — si no ves
+# actualizaciones, REFRESCA el navegador (los botones funcionan igual: son POST HTTP, no websocket).</code></pre>
+
+<h3>12.2 El arco completo en vivo (~12 min)</h3>
+<pre><code># Lanza el arco con teardown garantizado (trap EXIT: nunca queda nada encendido)
+./scripts/chaos_arc.sh</code></pre>
+<ol>
+<li><strong>Min 0</strong> — el script aplica <code>chaos-oom.yaml</code>: pod con stress de 100M contra un límite de 32Mi
+→ OOMKilled en crash-loop. Enseña <code>kubectl get pods -n arturo-chaos -w</code>: cada restart dice OOMKilled.</li>
+<li><strong>Min 1-2</strong> — Prometheus dispara <code>KubePodOOMKilled</code> (enséñalo en :9090/alerts). Alertmanager →
+webhook → encolado (log <code>Alert enqueued</code>).</li>
+<li><strong>Min 2-6</strong> — el pipeline: en los logs del agente se ven, en orden, las cuatro frases de la tesis:
+<pre><code>kubectl logs -n arturo-llm-test deploy/agent -f | grep -E "enrichment|sealed|ground_confidence|Remediation blocked|escalation"</code></pre>
+<code>enrichment: snapshot gathered</code> (el cluster informa) → <code>RAG retrieval: 3 runbooks</code> →
+diagnóstico LLM (~3 min, el momento de explicar el techo de hardware) →
+<code>sealed from cluster snapshot … current_value=32Mi</code> (¡el valor sale del cluster, no del modelo!) →
+<code>ground_confidence: grounded=1.0, model=0.9</code> →
+<code>Remediation blocked: memory_exceeds_2x</code> (el LLM pidió 512Mi = 16× → el cap NO clampa: escala al humano).</li>
+<li><strong>Min 6-7</strong> — Mattermost: mensaje de escalación con el diagnóstico, las DOS confidencias
+("100% grounded del cluster; el modelo dijo 90%"), el comando determinista del motor y los botones.
+<strong>Pulsa Aprobar.</strong> El patch se aplica (<code>--limits=memory=512Mi</code>) y se programa el rollback.</li>
+<li><strong>Min 7-12</strong> — ventana de 300s. Tiempo para Grafana: fila Cola (enqueued/processed), fila
+Bucle de aprendizaje (aún sin veredicto — el incidente está <code>auto_pending</code>, "provisional hasta el veredicto").</li>
+<li><strong>Min 12</strong> — veredicto: <code>healthy: true → cured</code>. Mensaje de éxito en MM, el stat de Grafana
+se pone verde (<code>cured=1</code>), y el doc en ChromaDB queda marcado — <strong>"el sistema acaba de aprender
+que este fix funcionó; la próxima vez lo citará como precedente"</strong>. El script hace el teardown solo.</li>
+</ol>
+
+<h3>12.3 Verificaciones rápidas si preguntan</h3>
+<pre><code># El veredicto en la métrica
+curl -s localhost:8000/metrics | grep aiops_feedback_verdict_total
+
+# El doc marcado cured en ChromaDB (vía slash command en Mattermost)
+/aiops incidents 5
+
+# El rollback context durable mientras la ventana está abierta
+kubectl exec -n arturo-llm-test deploy/redis -- redis-cli --scan --pattern 'rollback:*'</code></pre>
+
+<h3>12.4 Plan B (si el LLM está frío o el cluster se tuerce)</h3>
+<p>Screenshots del run del 07-06 en <code>demo/</code> (<code>mattermost_cured.png</code>,
+<code>mattermost_escalation_grounded_confidence.png</code>) + el deck <code>demo/demo.html</code> con los CHAOS_RESULTS
+embebidos. La narrativa se sostiene igual: enseña los logs reales del run validado.</p>
+
+<!-- ══════════ 13 ══════════ -->
+<h2 id="c13">13 · Preguntas hostiles, respuestas honestas</h2>
+
+<details><summary>«¿Y si el LLM alucina un comando destructivo?»</summary><div class="ans">
+<p>No llega al executor. El free-text del modelo solo se clasifica para <em>mostrarse</em> (y un BLOCKED escala directo);
+lo que se ejecuta en automático lo sintetiza el motor con identidad y valores leídos del cluster, acotado a subir un límite
+≤2× en namespaces propios. Y lo medimos: el 1.5b alucinaba targets — <strong>por eso existe el sellado, no a pesar de ello</strong>.</p>
+</div></details>
+
+<details><summary>«¿Por qué un modelo de 1.5B y no GPT-4?»</summary><div class="ans">
+<p>Restricción real (datos no salen, sin GPU) convertida en resultado medido: con el runbook correcto el 1.5b acierta el
+campo 5/5; probamos un modelo mayor y fue más lento y frágil. La palanca demostrada es <strong>contexto, no tamaño</strong> —
+y el diseño es model-agnostic si mañana hay GPU o presupuesto de API.</p>
+</div></details>
+
+<details><summary>«¿Qué pasa si vuestro parche empeora las cosas?»</summary><div class="ans">
+<p>Snapshot pre-patch del valor real + evaluación a los 300s + revert automático + notificación. El contexto sobrevive
+reinicios del agente (Redis). Y el resultado se escribe sobre el incidente (<code>rolled_back</code>) como conocimiento
+negativo: el sistema no vuelve a proponer un fix que ya falló.</p>
+</div></details>
+
+<details><summary>«¿Esto no es un VPA con pasos de más?»</summary><div class="ans">
+<p>El VPA ajusta por histórico de uso: sin causa, sin runbook, sin explicación, sin humano. Aquí hay diagnóstico legible,
+decisión trazable regla a regla, escalación con contexto y un bucle que aprende de veredictos. Además el espacio de acciones
+crece (CPU ya está; restart acotado y scale con cap, en roadmap) — el VPA solo sabe hacer una cosa.</p>
+</div></details>
+
+<details><summary>«¿Se os puede perder una alerta?»</summary><div class="ans">
+<p>La ingesta es la única pieza fail-closed: Redis caído → 503 → Alertmanager reintenta. Aceptada = en el stream; si el pod
+muere a mitad, el PEL la conserva y el reclaim la reprocesa; un mensaje envenenado va a dead-letter con forense en vez de
+bloquear la cola. Semántica at-least-once asumida: puede haber un duplicado, nunca una pérdida silenciosa.</p>
+</div></details>
+
+<details><summary>«¿Y si muere Redis? Prometéis durabilidad sobre un pod sin disco»</summary><div class="ans">
+<p>Cierto, y está reconocido como F-06 (el único hallazgo Alta abierto). Estado real: la cola se auto-cura (503 + reenvío
+de Alertmanager + self-heal del consumer group), pero un rollback en vuelo se perdería. El fix es barato (AOF + PVC de 1Gi,
+mismo patrón que ChromaDB) y está en el sprint; la alternativa honesta es degradar el claim. Lo indefendible sería no saberlo.</p>
+</div></details>
+
+<details><summary>«¿Quién vigila al vigilante?»</summary><div class="ans">
+<p>El agente expone métricas de cada decisión y 4 meta-alertas sobre sí mismo (backlog de cola, revert fallido, dead-letter,
+escalaciones sin botones) que fluyen por el mismo canal. Si el agente muere del todo, TargetDown lo cubre desde Prometheus.
+Y el chaos engineering es parte del método: matamos a sus dependencias a propósito y documentamos qué pasa.</p>
+</div></details>
+
+<details><summary>«¿Por qué subir límites y no escalar horizontalmente / HPA?»</summary><div class="ans">
+<p>Para un OOM real, más réplicas = más pods muriendo por lo mismo; el fix correcto es vertical. HPA además exige
+metrics-server y es un cambio de estado persistente, no una remediación puntual reversible. El bump vertical reusa un camino
+ya blindado (snapshot/health/rollback). Scale con cap está en el roadmap como acción nueva del mismo patrón.</p>
+</div></details>
+
+<details><summary>«¿El MTTR de ~4 minutos no es lento?»</summary><div class="ans">
+<p>El desglose importa: detección 5s, decisión y acción segundos — el 95% es la inferencia del LLM en CPU compartida sin GPU
+(147-213s). Es el techo del hardware de la sandbox, no del diseño; y aun así, 4 minutos sin humano contra 15-45 minutos
+con on-call interrumpido. Con una GPU modesta, la misma arquitectura baja a segundos.</p>
+</div></details>
+
+<details><summary>«¿Cómo evitáis que aprenda de sus propios errores?» (RAG poisoning)</summary><div class="ans">
+<p>Tres compuertas: el gate E4 no archiva diagnósticos sin confianza parseada; los incidentes sin veredicto
+(<code>auto_pending</code>) no se citan; y los veredictos negativos se citan <em>como negativos</em>, etiquetados en el
+prompt. Ya sufrimos una contaminación real (bug de labels en mayo), la purgamos y esa lección es exactamente este diseño.</p>
+</div></details>
+
+<details><summary>«Aprobasteis por error una escalación por la noche, ¿no?» (si sale el horno)</summary><div class="ans">
+<p>Sí — y las tres capas respondieron: la validation layer clasificó los comandos como read-only, el RBAC denegó lo que
+no estaba concedido (<code>kubectl top</code> → Forbidden: least-privilege funcionando) y el resultado se mostró honesto
+(<code>[FAILED exit=1]</code>) en vez de fingir éxito. El gap identificado — validar <em>factibilidad</em> además de
+seguridad — está en backlog como pre-flight <code>kubectl auth can-i</code>.</p>
+</div></details>
+
+<details><summary>«¿Y la seguridad de los callbacks? ¿Un curl puede aprobar una remediación?»</summary><div class="ans">
+<p>No: cada botón lleva HMAC-SHA256 de <code>incident_id:action</code> con secret compartido, verificado con comparación
+en tiempo constante. Con ejecución real, secret ausente = 401 (fail-closed, P0·2). El slash command tiene su token propio
+con la misma política. Y la escalación expira (TTL 120min): no se puede aprobar estado viejo indefinidamente.</p>
+</div></details>
+
+<!-- ══════════ 14 ══════════ -->
+<h2 id="c14">14 · Límites conocidos y trabajo futuro</h2>
+<p>La credibilidad del sistema es que sus modos de fallo están escritos por nosotros antes de que los encuentre nadie:</p>
+<ul>
+<li><strong>F-06 (Alta, abierto):</strong> Redis sin AOF/PVC — la durabilidad prometida excede la de la capa de
+almacenamiento. Fix en sprint o degradar el claim.</li>
+<li><strong>Throughput estructural:</strong> ~1 alerta/4min (LLM serializado en CPU). Mitigado por la cola; la solución es
+GPU o priorización/colapso por workload (F-10, v3).</li>
+<li><strong>C-01:</strong> el health-check post-patch cuenta restarts sin mirar el motivo — un reinicio benigno puede
+leerse como crash (visto con un manifiesto chaos, no con OOM real). Fix diseñado: mirar <code>lastState.reason</code>.</li>
+<li><strong>C-02:</strong> el approve humano aún no siembra el cooldown (F-01 solo cubre el auto) → doble escalación
+posible del mismo workload.</li>
+<li><strong>Single-target:</strong> hoy solo Deployments (STS/DaemonSet escalan a humano por diseño, F-02) y solo bump
+de límites. El patrón para crecer está definido: cada acción nueva = una síntesis determinista + su rollback.</li>
+<li><strong>Horizontes:</strong> v2.1 (F-06, F-11 incident_id E2E, F-17 logs+events al prompt — el primer uso <em>nuevo</em>
+del LLM: solo lenguaje, cero ejecución —, salida estructurada del decoder, watchdog del consumer) · v2.5 (cobertura
+Pending/Evicted, kubernetes_asyncio, re-validación en approve, E2E en CI con kind, panel de KPIs de negocio) ·
+v3 (catálogo de acciones, predicción proactiva, ChatOps conversacional, multi-tenant).</li>
+</ul>
+
+<!-- ══════════ 15 ══════════ -->
+<h2 id="c15">15 · El taller: método de sesión y skills</h2>
+<p>El sistema no se construyó a golpe de chat: hay un método. Cada sesión con el asistente (Claude Code) arranca,
+trabaja y cierra con <em>skills</em> — runbooks ejecutables en <code>.claude/skills/</code> que codifican lo que antes
+se reconstruía de memoria. La regla de diseño es la misma que la del agente: <strong>las lecciones se convierten en
+gates, no en párrafos</strong>. El "horno nocturno" (un target curado olvidado quemando CPU 36 horas) es hoy un
+<code>trap EXIT</code> en <code>chaos_arc.sh</code> y un paso obligatorio de <code>/chaos-run</code>; el doble
+mordisco del tag de deploy equivocado es hoy el Paso 0 de <code>/ship</code>.</p>
+
+<h3>El ciclo de sesión (las 3 originales)</h3>
+<div class="tbl"><table>
+<tr><th>Skill</th><th>Cuándo</th><th>Qué hace</th></tr>
+<tr><td><code>/start</code></td><td>Al abrir sesión</td><td>Reconstruye contexto (método + roadmap docs/07 + última bitácora) y propone el micro-objetivo del día. Cero contexto manual.</td></tr>
+<tr><td><code>/log</code></td><td>Al cerrar (y antes de un compact)</td><td>Bitácora cruda en docs_sesion/: hecho, gotchas, decisiones con su porqué, siguiente. Append-only.</td></tr>
+<tr><td><code>/promote</code></td><td>Al consolidar (fin de fase)</td><td>Destila las bitácoras <code>promoted: false</code> a los docs canónicos (07, CLAUDE.md, 01-06, 11…) + vault, y las marca promovidas.</td></tr>
+</table></div>
+
+<h3>Las 6 operativas (añadidas 2026-07-07)</h3>
+<div class="tbl"><table>
+<tr><th>Skill</th><th>Cuándo</th><th>Qué codifica (y de qué lección nace)</th></tr>
+<tr><td><code>/ship</code></td><td>Cada deploy</td><td>Build + deploy con disciplina de tags: el tag es el short SHA del commit que <em>buildeó</em> — nunca el build ID, nunca rebuild para "cuadrar tags". Nace de dos mordiscos reales (ImagePullBackOff; bucle de tags del 07-06).</td></tr>
+<tr><td><code>/chaos-run</code></td><td>Cada run en cluster</td><td>Pre-vuelo (imagen viva, Redis sin residuos), port-forwards completos, secuencia esperada en logs (snapshot → seal → grounded=1.0 → veredicto), screenshots Gate 8 en el momento, y teardown <em>verificado</em> como último gate. Nace del horno nocturno.</td></tr>
+<tr><td><code>/eval</code></td><td>Mediciones formales</td><td>Qué eval requiere cluster, reanudación tras preemption de Spot (<code>--use-cache</code>), modo R4 (incidents poblados vs vacío, ojo a docs contaminantes) y cierre obligatorio en docs/10. "Se publica el número que salió, no el esperado."</td></tr>
+<tr><td><code>/ensayo</code></td><td>Días previos al chapter</td><td>Entrevistador hostil: una pregunta → respuesta de Jay → corrección contra lo que el sistema HACE (regla anti-humo). Detecta overclaims antes que la audiencia (p.ej. durabilidad Redis sin AOF, F-06).</td></tr>
+<tr><td><code>/quality</code></td><td>Sesiones de calidad</td><td>El playbook docs/08 hecho invocable: scan de 8 dimensiones con el prompt prehecho → triage por severidad → N fixes con tests en ~20-45 min → cierre en docs/11.</td></tr>
+<tr><td><code>/review-senior</code></td><td>Cierre de fase / hito</td><td>Auditoría con persona de arquitecto externo: nota /10 comparada con la anterior, findings F-xx continuando la serie, accionables a docs/11. El ritual que llevó el proyecto de 5.9 a 7.1.</td></tr>
+</table></div>
+
+<div class="kbox"><h4>Por qué esto es presentable</h4>
+El método es parte del resultado: un ingeniero + un asistente con runbooks ejecutables construyeron y validaron en
+cluster un sistema de 621 tests en microtareas de ~20 minutos. Las skills son al flujo de trabajo lo que el motor de
+reglas es al LLM: la parte determinista que hace fiable a la parte creativa.</div>
+
+<!-- ══════════ GLOSARIO ══════════ -->
+<h2 id="glosario">Glosario</h2>
+<dl>
+<dt>AIOps</dt><dd>Aplicar automatización e inteligencia (aquí: reglas deterministas + un LLM acotado) a la operación de sistemas — detección, diagnóstico y remediación de incidentes.</dd>
+<dt>RAG (Retrieval-Augmented Generation)</dt><dd>En vez de esperar que el modelo "sepa", se recuperan los documentos relevantes (runbooks, incidentes) por similitud semántica y se inyectan en el prompt. El modelo razona sobre conocimiento curado y citable.</dd>
+<dt>Embedding</dt><dd>Vector numérico (768 dims aquí) que representa el significado de un texto; textos parecidos → vectores cercanos (distancia coseno). Los genera nomic-embed-text en Ollama.</dd>
+<dt>p@1 / p@3</dt><dd>Precisión del retrieval: ¿el runbook correcto es el 1º resultado / está en el top-3? Nuestro eval: N=15 alertas etiquetadas.</dd>
+<dt>Grounding / seal</dt><dd>Sustituir lo que el modelo <em>cree</em> del cluster por lo que el cluster <em>dice</em> (snapshot kubectl). El "sellado" sobrescribe target y current_value de la propuesta; sin confirmación del workload, la propuesta se anula y se escala (regla 4.7).</dd>
+<dt>ownerReferences</dt><dd>Campo de K8s que enlaza cada objeto con su controlador (pod→ReplicaSet→Deployment). Resolución determinista de identidad — sin adivinar por el nombre.</dd>
+<dt>Grounded confidence</dt><dd>Confianza derivada de hechos del cluster (razón de terminación + nº de restarts) en vez de la autoevaluación del modelo; la del modelo se conserva como model_confidence para auditoría.</dd>
+<dt>Fail-open / fail-closed</dt><dd>Ante un fallo de dependencia: seguir degradado (fail-open: RAG, Mattermost, stores) o rechazar/parar (fail-closed: ingesta de alertas, auth con ejecución real, cooldown no verificable). La elección por pieza es deliberada: fail-open para informar, fail-closed para actuar.</dd>
+<dt>Redis Streams / consumer group / PEL</dt><dd>Log append-only en Redis (XADD) consumido por un grupo (XREADGROUP); las entradas entregadas sin confirmar (sin XACK) viven en la Pending Entries List — ahí reside la durabilidad: nada entregado se pierde por un crash.</dd>
+<dt>Dead-letter</dt><dd>Stream de cuarentena (aiops:alerts:dead) para entradas que fallaron &gt;3 veces; conserva el payload para forense sin bloquear la cola.</dd>
+<dt>At-least-once</dt><dd>Garantía de entrega: todo se procesa al menos una vez; a cambio, puede haber reprocesos (duplicados), mitigados por la dedup-key.</dd>
+<dt>HMAC-SHA256</dt><dd>Firma criptográfica con secret compartido. Cada botón de Mattermost lleva HMAC(incident_id:action): imposible fabricar un "aprobar" sin el secret; verificación en tiempo constante.</dd>
+<dt>MTTD / MTTR</dt><dd>Mean Time To Detect (startsAt→webhook: 5s) / Mean Time To Respond (startsAt→pipeline completo: dominado por el LLM, 147-213s warm).</dd>
+<dt>Cooldown por workload</dt><dd>SETNX con TTL 600s por deployment: un solo patch automático por ventana; evita que una alerta re-firing encadene duplicaciones "legales" de 2×.</dd>
+<dt>Dry-run</dt><dd>Modo en que el executor loguea sin ejecutar (default de config). El cluster corre con REMEDIATION_DRY_RUN=false; varias salvaguardas fail-closed se activan precisamente al salir de dry-run.</dd>
+<dt>Chaos engineering</dt><dd>Inyectar fallos controlados (OOM, crashloop, bad-image, CPU) para medir la respuesta real del sistema. <code>chaos.sh</code> mide MTTD/MTTR; <code>chaos_arc.sh</code> acompaña el arco completo con teardown garantizado.</dd>
+<dt>Veredicto (R2)</dt><dd>Resultado final de una remediación escrito sobre su incidente en ChromaDB: cured / rolled_back / rollback_failed. Convierte el archivo de incidentes en un corpus que refleja la realidad, incluidos los fracasos (conocimiento negativo).</dd>
+</dl>
+
+<footer>
+AIOps Infrastructure Agent · Libro de estudio v1.1 · generado 2026-07-06, actualizado 2026-07-07 (cap. 15: método y skills) · imagen 0914611 (commits ca159be+0914611, 621 tests) ·
+fuentes: docs/01-14, docs_sesion/estado_de_proyecto.html, bitácoras 07-01→07-06 · documento autocontenido, imprimible
+</footer>
+
+</main>
+</html>

@@ -348,6 +348,72 @@ data:
                 (ns {{ $labels.namespace }}) is in ImagePullBackOff for >1m.
                 Likely cause: wrong image tag, missing registry auth, or unreachable registry.
 
+          # ── Meta-alertas 7-10: el agente se vigila a sí mismo ("quién vigila al
+          # vigilante"). Fluyen por el MISMO pipeline (Alertmanager → webhook → MM)
+          # a propósito: mientras el agente viva, reporta su degradación al canal;
+          # si está caído del todo, lo cubre TargetDown (regla 5 — su endpoint está
+          # en kubernetes-endpoints). Mismo precedente que TargetDown: alertas de
+          # notificación, sin target de remediación estructurada.
+
+          # 7. Backlog en la cola de ingesta — el LLM procesa ~1 alerta/4min en CPU;
+          # depth sostenida >5 durante 10m ≈ >20min de retraso (tormenta o consumer atascado).
+          - alert: AiopsQueueBacklog
+            expr: aiops_queue_depth > 5
+            for: 10m
+            labels:
+              severity: warning
+              team: aiops
+            annotations:
+              summary: "AIOps agent queue backlog ({{ $value }} pending)"
+              description: >
+                The agent's Redis Streams queue has {{ $value | printf "%.0f" }}
+                delivered-but-unacked entries for >10m (LLM throughput is ~1 alert
+                every 4 min on CPU). Likely an alert storm or a stuck consumer.
+
+          # 8. Revert fallido — un patch aplicado quedó SIN revertir tras fallar el
+          # rollback: el único estado del motor que exige intervención manual inmediata.
+          - alert: AiopsRollbackRevertFailed
+            expr: increase(aiops_remediation_rollback_total{outcome="revert_failed"}[15m]) > 0
+            for: 0m
+            labels:
+              severity: critical
+              team: aiops
+            annotations:
+              summary: "AIOps rollback revert FAILED — manual intervention required"
+              description: >
+                A remediation patch was applied, the workload stayed unhealthy AND the
+                automatic revert failed. The patched deployment needs manual attention
+                (target and pre-patch value are in the Rollback FAILED Mattermost message).
+
+          # 9. Poison message en cuarentena — una entrada superó max deliveries (3) y
+          # fue apartada a aiops:alerts:dead con forense. La cola sigue viva; la entrada no.
+          - alert: AiopsDeadLetter
+            expr: increase(aiops_queue_dead_total[15m]) > 0
+            for: 0m
+            labels:
+              severity: warning
+              team: aiops
+            annotations:
+              summary: "AIOps queue dead-lettered an entry"
+              description: >
+                An alert entry failed processing more than 3 times and was quarantined
+                to the aiops:alerts:dead stream with forensics. Inspect the payload.
+
+          # 10. Escalaciones degradadas — Redis caído al escalar: los mensajes salen
+          # SIN botones (el humano no puede aprobar/rechazar desde Mattermost).
+          - alert: AiopsEscalationsDegraded
+            expr: increase(aiops_escalation_store_total{outcome="redis_down"}[15m]) > 0
+            for: 0m
+            labels:
+              severity: warning
+              team: aiops
+            annotations:
+              summary: "AIOps escalations sent without buttons (Redis down)"
+              description: >
+                The agent could not persist a pending escalation in Redis, so the
+                Mattermost message went out without approve/reject buttons. Check the
+                redis pod in arturo-llm-test.
+
 ---
 
 # ── Deployment Prometheus ─────────────────────────────────────────────────────

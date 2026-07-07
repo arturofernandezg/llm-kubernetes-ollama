@@ -45,6 +45,8 @@ Esto permite hacer rollback a una versión anterior:
 kubectl set image deployment/agent agent=.../aiops-agent:abc1234 -n arturo-llm-test
 ```
 
+> **Gotcha del commit solo-manifiesto** (2026-07-06): el tag de deploy es el short SHA del commit que **buildeó**, no el último commit. Un commit que solo bumpea `k8s/deployment-agent.yaml` mueve HEAD → si rebuildeas "para cuadrar el tag" sale uno nuevo (p.ej. `0914611`, hijo de `ca159be`) que invalida su propio manifiesto → bucle. Salida: **NO rebuildear**. `0914611` = mismo código que `ca159be` (solo cambia el YAML del deployment) → se despliega `0914611` y el bump del manifiesto se commitea sin rebuild.
+
 ## Ejecución manual del build
 
 ```bash

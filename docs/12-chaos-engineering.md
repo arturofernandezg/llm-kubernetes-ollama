@@ -81,6 +81,22 @@ chmod +x scripts/chaos.sh
 
 El script hace dry-run antes del apply, registra T0, sondea pods y logs del agente, e imprime la tabla de resultados.
 
+### Arco completo (escalate → approve → veredicto): `chaos_arc.sh`
+
+`scripts/chaos.sh` **no sirve** para el arco de remediación (C-04: su cleanup ~300s lo corta a mitad). Para el arco existe `scripts/chaos_arc.sh` (2026-07-06, consecuencia del "horno nocturno"):
+
+```bash
+# Arco OOM completo (~10-15min). Cuando llegue la escalación a Mattermost, pulsa Aprobar.
+./scripts/chaos_arc.sh
+
+# Conservar el target para inspección (las claves Redis se limpian igual)
+./scripts/chaos_arc.sh --keep
+```
+
+Qué hace: **pre-vuelo** (agente ready, imagen desplegada, Redis sin residuos de runs anteriores) → `kubectl apply` del manifiesto → espera el **veredicto** (`cured`/`rolled_back`/`rollback_failed`) en los logs del re-upsert R2 → **teardown garantizado por `trap EXIT`**: pase lo que pase (veredicto, timeout, Ctrl-C) borra el deployment y limpia `escalation:*`/`rollback:*`/`aiops:cooldown:*` en Redis. El teardown es el **último gate del run, no una tarea posterior** — la lección del 2026-07-06: un target curado a 512Mi olvidado con stress infinito quemó CPU ~36h (HighCPU flapping toda la noche, ~30 diagnósticos LLM molidos, docs basura en ChromaDB).
+
+El manifiesto además lleva `--vm-hang 0` (stress asigna los 100M una vez y duerme para siempre reteniéndolos): a 32Mi sigue OOMeando igual, pero un target **curado** queda residente y silencioso (CPU~0) en vez de moler malloc/free — la defensa en profundidad por si el teardown fallara. *(Comportamiento del lado curado pendiente de primera validación en cluster.)*
+
 ## Métricas Prometheus expuestas
 
 El agente registra las siguientes métricas cuando `namespace == arturo-chaos`:
@@ -150,11 +166,11 @@ La tabla de arriba mide **detección + notificación** (MTTD/MTTR del pipeline).
 
 **Aprendizaje clave — falso rollback por restart benigno:** tras aprobar 512Mi, el health-check dio `healthy=false, reason="pods_restarting: [3]"` y revirtió a 32Mi (`outcome=reverted`). Pero el pod **NO OOMeaba** a 512Mi: los 3 restarts eran del ciclo `stress --timeout 60` (stress sale con exit 0 cada 60s → el contenedor reinicia por término limpio). **El health-check cuenta restarts sin mirar el motivo** → interpretó exit-limpio como crash. Es un **artefacto del manifiesto**, no del sistema: en un OOM real, fix que cura = 0 restarts = healthy; fix que falla = sigue OOMeando = revert (el heurístico es correcto para OOM real). **Fix aplicado**: `k8s/chaos/chaos-oom.yaml` sin `--timeout` (stress infinito → restarts solo significan OOM). **Mejora de producto pendiente (v2.x, C-01 en docs/11)**: el health-check debería mirar `lastState.reason==OOMKilled`, no solo contar restarts.
 
-**Limitación del harness — `scripts/chaos.sh` no observa el arco:** su ciclo de auto-cleanup (~300s) es **más corto que el arco completo** (patch → 300s ventana rollback → veredicto ≈10min) → borra el deployment a mitad → `NotFound` en captura/remediación/rollback, y sin pod vivo el enrichment cae a `skipped` → seal sin grounding. **Para validar el arco: aplicar el manifiesto a mano** (`kubectl apply`); `scripts/chaos.sh` sirve solo para medir MTTD/MTTR de detección (C-04 en docs/11).
+**Limitación del harness — `scripts/chaos.sh` no observa el arco:** su ciclo de auto-cleanup (~300s) es **más corto que el arco completo** (patch → 300s ventana rollback → veredicto ≈10min) → borra el deployment a mitad → `NotFound` en captura/remediación/rollback, y sin pod vivo el enrichment cae a `skipped` → seal sin grounding. (C-04 en docs/11). **Resuelto 2026-07-06**: el arco tiene su propio runner, `scripts/chaos_arc.sh` (ver "Cómo ejecutar"), con pre-vuelo, espera del veredicto y teardown garantizado por `trap EXIT`; `scripts/chaos.sh` queda solo para medir MTTD/MTTR de detección.
 
 **MTTR = techo de hardware:** el LLM (qwen2.5:1.5b en CPU, todo el nodo e2-standard-2 sin GPU) tarda 147-213s warm por diagnóstico y timeoutea a 360s en cold. MTTD sigue en 5s; el MTTR está dominado por la inferencia. No bajable con más CPU (C-05 en docs/11).
 
-**Pendiente**: el veredicto `cured` positivo (solo se tiene `rolled_back`). Con el manifiesto arreglado, el run limpio de S3·b lo cerrará → habilita R4 (gráfica `aiops_feedback_verdict_total` con `cured`+`rolled_back`).
+**Veredicto `cured` — cerrado 2026-07-06 (S3·b)**: run limpio con el manifiesto arreglado sobre la imagen `0914611` (fix R2 paridad humano/auto): OOMKilled puro a 32Mi → escalate (cap 4.6) → approve humano → patch 512Mi → +300s healthy → **`aiops_feedback_verdict_total{outcome="cured"}=1.0`** y el doc en ChromaDB marcado `cured`. Con `cured`+`rolled_back` reales, R4 (gráfica feedback-loop gain) queda habilitado. El veredicto tiene su fila propia en el dashboard Overview ("Bucle de aprendizaje", `aiops_feedback_verdict_total` por outcome) y dos meta-alertas lo respaldan (`AiopsRollbackRevertFailed`, `AiopsDeadLetter` — reglas 7-10 en `k8s/prometheus.yaml`).
 
 ## Visualización en Grafana
 

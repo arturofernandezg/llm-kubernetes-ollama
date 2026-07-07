@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <meta charset="utf-8">
-<title>Review Senior — AIOps Auto-Remediación</title>
+<title>Estado de Proyecto — AIOps Auto-Remediación</title>
 <style>
   :root{
     --paper:#F6F7F6; --ink:#1C2422; --muted:#5A6663; --hair:#D8DEDC;
@@ -173,7 +173,7 @@
 
 <nav>
   <div class="row">
-    <span class="brand">AIOps · Review v2</span>
+    <span class="brand">AIOps · Estado de proyecto</span>
     <a href="#veredicto">§1 Veredicto</a>
     <a href="#negocio">§2 Negocio</a>
     <a href="#llm">§3 El LLM</a>
@@ -188,22 +188,23 @@
 
 <header>
   <div class="wrap">
-    <div class="eyebrow">Review técnica en profundidad · Nivel panel senior de empresa</div>
+    <div class="eyebrow">Estado de proyecto vivo · Nace de la review senior del 2026-07-02, se actualiza en cada hito</div>
     <h1>Auto-remediación en Kubernetes con LLM local: qué aguanta, qué atacarían y qué falta</h1>
-    <p class="lede">Revisión brutal del código del <strong>AIOps Infrastructure Agent</strong> — ~4.500 líneas de Python,
+    <p class="lede">Documento-libro del estado del <strong>AIOps Infrastructure Agent</strong> — ~4.500 líneas de Python,
     16 módulos, 18 manifiestos K8s — con el objetivo puesto en su misión real: <strong>remediar incidentes solos, sin romper nada</strong>.
-    Incluye la arquitectura explicada para que un junior la entienda, los puntos débiles que un panel técnico atacaría,
-    y el roadmap hasta dejarlo como tendría que quedar.</p>
+    El cuerpo es la review senior del 07-02 (arquitectura explicada, puntos débiles, roadmap); los bloques verdes de §7 y las marcas
+    ✓/pendiente registran <strong>por dónde vamos y qué queda</strong>. Última actualización: <strong>2026-07-06</strong>
+    (v2 validada en cluster, arco <code>cured</code> cerrado, mejoras pre-chapter #1/#2/#3/#6 aplicadas).</p>
   </div>
   <div class="wide">
     <div class="meta-strip">
-      <div><span class="k">Fecha</span><div class="v">2026-07-02</div></div>
-      <div><span class="k">Commit revisado</span><div class="v">cb2d1db (main)</div></div>
-      <div><span class="k">Código agente</span><div class="v">4.504 LOC / 16 mód.</div></div>
-      <div><span class="k">Tests</span><div class="v">~535 (mock, gate CI)</div></div>
-      <div><span class="k">Imagen en cluster</span><div class="v">da7aafb (cb2d1db pdte. deploy)</div></div>
-      <div><span class="k">Auditoría previa</span><div class="v">5.9/10 (07-01)</div></div>
-      <div><span class="k">Versión de la review</span><div class="v">v2 · 2026-07-02</div></div>
+      <div><span class="k">Review base</span><div class="v">2026-07-02 (7.1/10)</div></div>
+      <div><span class="k">Última actualización</span><div class="v">2026-07-06</div></div>
+      <div><span class="k">Código agente</span><div class="v">~4.600 LOC / 16 mód.</div></div>
+      <div><span class="k">Tests</span><div class="v">621 (mock, gate CI)</div></div>
+      <div><span class="k">Imagen en cluster</span><div class="v">0914611 (validada 07-06)</div></div>
+      <div><span class="k">Alta abiertos</span><div class="v">1 de 6 (F-06)</div></div>
+      <div><span class="k">Hito</span><div class="v">cured=1.0 · S3·b ✅</div></div>
     </div>
   </div>
 </header>
@@ -1007,7 +1008,7 @@
       <div><div class="n" style="color:var(--warn)">7</div><div class="t" style="color:var(--warn)">Media</div></div>
       <div><div class="n" style="color:var(--low)">5</div><div class="t" style="color:var(--low)">Baja</div></div>
       <div><div class="n" style="color:var(--ok)">3</div><div class="t" style="color:var(--ok)">P0 previos cerrados</div></div>
-      <div><div class="n" style="color:var(--ok)">4</div><div class="t" style="color:var(--ok)">Alta resueltos 07-03</div></div>
+      <div><div class="n" style="color:var(--ok)">5</div><div class="t" style="color:var(--ok)">Alta resueltos (F-01..05)</div></div>
     </div>
 
     <div class="box" style="border-left-color:var(--ok)">
@@ -1019,6 +1020,37 @@
       <strong>F-06</strong> (ambos requieren infra/cluster). En la capa RAG, <strong>F-12</strong> (feedback loop sin gate de calidad)
       está <em>en curso</em>: R1 (retrieval por metadata, p@1 73%→100%) y R3 (higiene de query) hechos, y R2·1 aterriza el fundamento del
       bucle real (outcome provisional → veredicto). Los detalles por hallazgo van marcados abajo.</p>
+    </div>
+
+    <div class="box" style="border-left-color:var(--ok)">
+      <h4>Actualización 2026-07-06 — v2 validada en cluster, arco <code>cured</code> cerrado</h4>
+      <p style="max-width:none"><strong>Cerrado desde la anterior actualización:</strong>
+      <strong>F-03</strong> (todas las llamadas ChromaDB vía <code>asyncio.to_thread</code>, en <code>8a40fdc</code>, corriendo en cluster desde 07-04) —
+      los <strong>5 Alta accionables (F-01..F-05)</strong> están resueltos; solo queda <strong>F-06</strong> de los Alta.
+      <strong>F-12</strong> cerrado en código y validado: R2 (re-upsert del veredicto sobre el mismo doc), R2·3 (retrieval outcome-aware:
+      excluye <code>auto_pending</code>, expone <code>rolled_back</code> como conocimiento negativo etiquetado) y gate E4
+      (<code>incident_worth_ingesting</code>). <strong>S3·b validado en cluster 2026-07-06</strong>: run OOM limpio → escalate (cap 4.6) →
+      approve humano → patch → 300s → <code>aiops_feedback_verdict_total{outcome="cured"}=1.0</code> + doc ChromaDB marcado <code>cured</code>,
+      con el fix de <strong>paridad humano/auto R2</strong> (<code>ca159be</code>: el <code>incident_doc_id</code> viaja en la escalación por Redis;
+      el approve alimenta el bucle de veredicto igual que el auto). Imagen desplegada <code>aiops-agent:0914611</code>, <strong>621 tests verdes</strong>.</p>
+      <p style="max-width:none"><strong>PENDIENTE explícito:</strong>
+      <strong>R4</strong> (métrica feedback-loop gain: <code>eval_retrieval</code> con incidents poblados vs vacío — prerequisito cumplido: ya hay
+      <code>cured</code>+<code>rolled_back</code> reales) ·
+      <strong>F-06</strong> (AOF+PVC en Redis, o degradar el claim de durabilidad en deck/docs) ·
+      <strong>F-11</strong> (incident_id desde la ingesta) · <strong>F-17</strong> (logs+events al enrichment) ·
+      <strong>matriz E1–E6</strong> (<code>docs/14</code>) · <strong>Gate 8</strong> screenshots Grafana restantes ·
+      <strong>commit del manifiesto</strong> <code>k8s/deployment-agent.yaml</code> (tag <code>0914611</code> en working tree, sin rebuild) ·
+      <strong>C-01</strong> (health-check del rollback ciego al motivo del restart) · <strong>C-02</strong> (el approve humano sigue sin sembrar cooldown — verificado en código 07-06) ·
+      pre-flight <code>kubectl auth can-i</code> para comandos free-text (el Forbidden de <code>kubectl top</code> es least-privilege funcionando, pero la validation layer no valida factibilidad).</p>
+      <p style="max-width:none"><strong>Mejoras pre-chapter aplicadas 2026-07-06 (working tree):</strong>
+      <strong>#1 teardown mecánico del chaos</strong> — <code>scripts/chaos_arc.sh</code> (runner del arco completo: pre-vuelo → apply → espera del veredicto → teardown
+      garantizado por <code>trap EXIT</code>: borra el target y limpia <code>escalation:*</code>/<code>rollback:*</code>/<code>aiops:cooldown:*</code>; cierra C-04 y la lección del horno nocturno)
+      + <code>--vm-hang 0</code> en <code>chaos-oom.yaml</code> (un cured olvidado queda residente a CPU~0, validado contra el man page de stress; comportamiento curado pendiente de 1ª validación en cluster) ·
+      <strong>#2 fila Grafana "Bucle de aprendizaje"</strong> en el Overview (<code>aiops_feedback_verdict_total</code> por outcome — stat + acumulado — y salud de la ingesta con el gate E4) ·
+      <strong>#3 meta-alertas 7-10</strong> en <code>prometheus.yaml</code> ("quién vigila al vigilante": <code>AiopsQueueBacklog</code>, <code>AiopsRollbackRevertFailed</code>,
+      <code>AiopsDeadLetter</code>, <code>AiopsEscalationsDegraded</code>) ·
+      <strong>#6 <code>escalation_ttl_minutes</code> a Settings</strong> (C-03: 60→120min, ajustable por env var sin rebuild).
+      Pendiente de Jay: pytest global + <code>kubectl apply</code> de grafana/prometheus + commit.</p>
     </div>
 
     <!-- ALTA -->
@@ -1059,7 +1091,7 @@
 
     <article class="finding crit">
       <header><span class="fid">F-03</span><h4>Cliente ChromaDB síncrono dentro del event loop: puede bloquear liveness y tumbar el pod</h4>
-        <span class="chip crit">Alta</span><span class="chip cat">Resiliencia</span></header>
+        <span class="chip crit">Alta</span><span class="chip cat">Resiliencia</span><span class="chip done">Resuelto</span></header>
       <div class="body">
         <p><code>chromadb.HttpClient</code> es síncrono (requests). <code>retrieve_context</code>, <code>ensure_collections</code>,
         <code>ingest_incident</code> y <code>_query_recent_incidents</code> lo llaman <strong>directamente desde corrutinas</strong>:
@@ -1070,6 +1102,7 @@
         <div class="fix">Envolver toda llamada a chroma en <code>asyncio.to_thread(...)</code> (o un executor dedicado) + timeout explícito
         en el HttpClient. Es mecánico: ~6 call-sites.</div>
         <div class="where">rag.py:350-394 · main.py:793-807, 710-732, 1176-1192</div>
+        <div class="done-note">Hecho 2026-07-04 (en <code>8a40fdc</code>, corriendo en cluster): TODAS las llamadas HTTP de chroma van vía <code>asyncio.to_thread</code> — <code>retrieve_context</code> (bloque <code>_blocking</code> con los filtros R1/R2·3 intactos), <code>ingest_runbook</code>/<code>ingest_incident</code> (helper <code>_upsert</code>), <code>ensure_collections</code> en el lifespan y <code>_query_recent_incidents</code> del slash. +2 tests <code>TestChromaOffloading</code> (spy sobre <code>rag.asyncio.to_thread</code>).</div>
       </div>
     </article>
 
@@ -1195,7 +1228,7 @@
 
     <article class="finding warn">
       <header><span class="fid">F-12</span><h4>Feedback loop RAG sin gate de calidad: envenenamiento a fuego lento</h4>
-        <span class="chip warn">Media</span><span class="chip cat">ML / Datos</span><span class="chip prog">En curso</span></header>
+        <span class="chip warn">Media</span><span class="chip cat">ML / Datos</span><span class="chip done">Resuelto</span></header>
       <div class="body">
         <p>Cada incidente se persiste en ChromaDB con el diagnóstico <em>del LLM</em> como contenido, incluidos los fallidos y los
         de baja confianza, y ese corpus alimenta los diagnósticos futuros. Sin gate, el sistema aprende de sus propios errores en
@@ -1205,6 +1238,7 @@
         etiquetar el resto como <code>unverified</code> excluido del retrieval. El bucle de aprendizaje completo sigue siendo F4.</div>
         <div class="where">main.py:875-891 (persiste todo diagnóstico) · rag.py:build_incident_document</div>
         <div class="prog-note">F4/RAG en marcha (07-03). <strong>R1</strong>: retrieval guiado por metadata (filtro por <code>error_class</code>, p@1 73%→100%). <strong>R3</strong>: higiene de query (strip del hash de pod). <strong>R2·1</strong> (fundamento del bucle real): la ingesta hoy escribe el <em>outcome provisional</em> (<code>action</code>) antes de saber si el fix curó; ahora <code>build_incident_document</code> acepta <code>doc_id</code> reusable + <code>outcome</code> override, y el <code>RollbackContext</code> lleva el <code>doc_id</code> + resumen de remediación (con round-trip en Redis). Siguiente: <strong>R2·2</strong> re-upsert del mismo doc con el veredicto (<code>cured</code>/<code>rolled_back</code>) + <strong>R2·3</strong> excluir del retrieval lo no verificado — cierra este hallazgo.</div>
+        <div class="done-note">Cerrado 07-03/07-06: <strong>R2</strong> re-upsert del veredicto sobre el MISMO doc (métrica <code>aiops_feedback_verdict_total</code>), <strong>R2·3</strong> retrieval outcome-aware (excluye <code>auto_pending</code> sin fallback; <code>rolled_back</code>/<code>rollback_failed</code> quedan a propósito como conocimiento negativo etiquetado — "FAILED FIX, do not repeat" en el prompt) y <strong>gate E4</strong> (<code>incident_worth_ingesting</code>: confidence 0/ausente → no ingesta). <strong>Validado en cluster 07-04/07-06</strong>: <code>rolled_back</code> y <code>cured</code> reales escritos sobre sus docs, incluido el camino humano tras el fix de paridad (<code>ca159be</code>). Queda <strong>R4</strong>: medir la ganancia del retrieval con incidents poblados (la gráfica del deck).</div>
       </div>
     </article>
 
@@ -1299,6 +1333,77 @@
       <em>gestión de secretos</em>. Respuesta preparada: recovery documentado en la bitácora, guard anti-placeholder en el script (F-16),
       y en el roadmap H2, External Secrets / SealedSecrets como solución estructural.</p>
     </div>
+
+    <h3 style="margin-top:44px">Hallazgos añadidos — análisis 2026-07-06 (contraste código real vs docs)</h3>
+    <p class="lede" style="font-size:15.5px">Segunda pasada sobre el código tras la validación en cluster. Dos hallazgos nuevos de código
+    (numerados N-xx para no pisar la serie F de la review) y las divergencias docs↔código detectadas.</p>
+
+    <article class="finding warn">
+      <header><span class="fid">N-01</span><h4>El consumer de la cola puede morir en silencio con /readyz verde</h4>
+        <span class="chip warn">Media</span><span class="chip cat">Resiliencia</span></header>
+      <div class="body">
+        <p>En <code>consume_loop</code> el try/except interior solo envuelve <code>_ack_and_process</code>; el unpacking
+        <code>for _stream_key, entries in resp</code> queda fuera de todo try. Una respuesta con forma inesperada mataría la task
+        del consumidor sin ruido — y <code>/readyz</code> solo hace ping a Redis, así que el pod seguiría "ready" con las alertas
+        encolándose y nadie drenando. Probabilidad baja, pero es exactamente la pregunta "¿y si se muere el worker?" de un panel SRE.</p>
+        <div class="fix"><code>/readyz</code> comprueba también <code>app.state.consumer_task.done()</code> → 503 (el pod sale de rotación
+        y el restart lo re-arma), o un watchdog en el reclaim periódico que detecte la task muerta y la relance. ~5 líneas + test.</div>
+        <div class="where">streams.py:223-229 (unpacking fuera del try) · main.py:/readyz (solo ping Redis)</div>
+      </div>
+    </article>
+
+    <article class="finding low">
+      <header><span class="fid">N-02</span><h4>El cooldown se consume aunque el patch falle — fail-closed no documentado</h4>
+        <span class="chip low">Baja</span><span class="chip cat">Comportamiento / Docs</span></header>
+      <div class="body">
+        <p>En <code>process_remediation</code> el SETNX del cooldown (F-01) se adquiere <em>antes</em> de
+        <code>capture_pre_patch_value</code>/<code>execute_commands</code>. Si el kubectl falla, el workload queda en cooldown 600s
+        <em>sin patch aplicado</em> → el siguiente re-fire escala a humano en vez de reintentar el auto. Es coherente con el diseño
+        fail-closed (mejor un humano de más que un patch de más), pero la decisión no está escrita en ningún doc.</p>
+        <div class="fix">Documentarlo como comportamiento intencional en la tabla de modos de fallo (opción barata), o liberar la clave
+        cuando <code>execute_results</code> no tiene ningún éxito (opción código, discutible: un fallo de kubectl suele ser persistente).</div>
+        <div class="where">remediation.py:1147-1172 (gate antes del execute)</div>
+      </div>
+    </article>
+
+    <div class="box">
+      <h4>Divergencias docs ↔ código (auditoría 2026-07-06 — "docs reflect reality")</h4>
+      <ul style="font-size:15px;line-height:1.6">
+        <li><strong>C-02 conflacionado en las bitácoras:</strong> la bitácora del 07-04 llama "C-02" al gap R2-humano del <code>doc_id</code>
+        (ya cerrado en <code>ca159be</code>), pero el C-02 de <code>docs/11</code> es <em>"el approve humano no siembra cooldown"</em> —
+        que sigue abierto (verificado: la rama approve de <code>main.py</code> no llama a <code>acquire_workload_cooldown</code>).
+        Al hacer <code>/promote</code>, NO marcar C-02 como cerrado.</li>
+        <li><s><strong>C-03 mal ubicado:</strong> <code>docs/11</code> dice <code>config.py (ESCALATION_TTL_MINUTES=60)</code> pero era una
+        constante hardcodeada en <code>main.py:141</code> — subirla exigía rebuild</s> — <span style="color:var(--ok);font-weight:600">resuelto 07-06</span>:
+        movida a <code>Settings.escalation_ttl_minutes</code> (default 120, env var sin rebuild).</li>
+        <li><strong>CLAUDE.md desfasado en un punto:</strong> "Archivos clave" dice <em>573 funciones de test</em>; real: 616 por grep / 621 por pytest.</li>
+        <li><strong>Docstring de <code>streams.py</code> describe el mundo pre-F2 como presente</strong> ("hoy el webhook dispara BackgroundTask…") —
+        el legacy se retiró el 06-29 y §9.1 recomienda ese módulo como lectura de referencia.</li>
+        <li><strong>Metadata legacy de la app:</strong> <code>FastAPI(description="Extrae parámetros de infraestructura GCP…", version="0.4.0")</code> —
+        la descripción de Fase 0 en el binario de producción (adyacente a F-13).</li>
+      </ul>
+    </div>
+
+    <div class="box">
+      <h4>Mejoras propuestas 2026-07-06 — priorizadas valor-chapter vs esfuerzo</h4>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>#</th><th>Mejora</th><th>Impacto chapter</th><th>Esfuerzo</th><th>Cuándo</th><th>Estado</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Teardown mecánico del chaos (<code>chaos_arc.sh</code> + <code>--vm-hang 0</code>)</td><td>Alto</td><td>Bajo</td><td>Pre-chapter</td><td style="color:var(--ok);font-weight:700">✓ 07-06</td></tr>
+          <tr><td>2</td><td>Fila Grafana "Bucle de aprendizaje" (<code>aiops_feedback_verdict_total</code>)</td><td>Alto</td><td>Bajo</td><td>Pre-chapter</td><td style="color:var(--ok);font-weight:700">✓ 07-06</td></tr>
+          <tr><td>3</td><td>Meta-alertas del propio agente (reglas 7-10)</td><td>Medio-alto</td><td>Bajo</td><td>Pre-chapter</td><td style="color:var(--ok);font-weight:700">✓ 07-06</td></tr>
+          <tr><td>4</td><td>F-06 mínimo: AOF+PVC en Redis (o degradar el claim)</td><td>Alto</td><td>Bajo-medio</td><td>Pre-chapter si cabe (S6)</td><td>pendiente</td></tr>
+          <tr><td>5</td><td>C-02 real: sembrar cooldown en el approve (espejo del auto)</td><td>Medio</td><td>Bajo</td><td>Pre-chapter</td><td>pendiente</td></tr>
+          <tr><td>6</td><td><code>escalation_ttl_minutes</code> a Settings (C-03)</td><td>Medio</td><td>Trivial</td><td>Pre-chapter</td><td style="color:var(--ok);font-weight:700">✓ 07-06</td></tr>
+          <tr><td>7</td><td>Gate de "incidente activo" (colapso de escalaciones por workload: SETNX mientras haya escalación sin decidir → re-fires no re-diagnostican)</td><td>Alto</td><td>Medio</td><td>v2.1</td><td>propuesta</td></tr>
+          <tr><td>8</td><td>Pre-flight <code>kubectl auth can-i</code> (factibilidad además de seguridad)</td><td>Medio</td><td>Bajo-medio</td><td>v2.1</td><td>propuesta</td></tr>
+          <tr><td>9</td><td>C-01: health-check motivo-aware (<code>lastState.reason</code>, patrón ya resuelto en enrichment)</td><td>Medio</td><td>Bajo-medio</td><td>v2.1</td><td>propuesta</td></tr>
+          <tr><td>10</td><td>Watchdog del consumer en <code>/readyz</code> (N-01)</td><td>Medio</td><td>Bajo</td><td>v2.1</td><td>propuesta</td></tr>
+          <tr><td>11</td><td>Higiene pre-R4 del corpus (filtrar ~30 docs HighCPU nocturnos antes del A/B)</td><td>Alto para R4</td><td>Bajo</td><td>Con R4</td><td>propuesta</td></tr>
+          <tr><td>12</td><td>Salida estructurada Ollama (<code>format</code>=schema; grammar-constrained, temp=0 ya puesto; medir latencia CPU)</td><td>Medio</td><td>Bajo</td><td>v2.1</td><td>propuesta</td></tr>
+        </tbody>
+      </table></div>
+    </div>
   </div>
 </section>
 
@@ -1316,10 +1421,10 @@
       <div class="what">
         <h4>Validar lo construido y cerrar la demo</h4>
         <ul>
-          <li><strong>Recuperar secrets</strong> (webhook MM desde el env del pod vivo, token del slash desde MM UI) + guard anti-placeholder en <code>secrets-setup.sh</code>.</li>
-          <li>Desplegar <code>cb2d1db</code> + <strong>chaos OOM del arco completo</strong>: log <code>sealed from cluster snapshot</code>, <code>aiops_enrichment_total{gathered}</code> subiendo, auto sin NotFound, confidence grounded visible en Mattermost.</li>
-          <li>Gate 8: screenshots Grafana con caudal (fila cola + panel enrichment) · matriz E1–E6 de <code>docs/14</code>.</li>
-          <li><code>/promote</code>: 6 bitácoras pendientes; el roadmap aún dice "Eje A siguiente" cuando ya está en <code>cb2d1db</code>.</li>
+          <li><s><strong>Recuperar secrets</strong> (webhook MM desde el env del pod vivo, token del slash desde MM UI) + guard anti-placeholder en <code>secrets-setup.sh</code></s> — <span style="color:var(--ok);font-weight:600">✓ 07-04</span>.</li>
+          <li><s>Desplegar + <strong>chaos OOM del arco completo</strong>: log <code>sealed from cluster snapshot</code>, <code>aiops_enrichment_total{gathered}</code> subiendo, auto sin NotFound, confidence grounded visible en Mattermost</s> — <span style="color:var(--ok);font-weight:600">✓ 07-04 (<code>8a40fdc</code>) + arco <code>cured</code> completo 07-06 (<code>0914611</code>)</span>.</li>
+          <li>Gate 8: screenshots Grafana con caudal (fila cola + panel enrichment) — <span style="color:var(--info);font-weight:600">parcial</span> (MM grounded + MM cured hechos) · matriz E1–E6 de <code>docs/14</code> — <span style="color:var(--warn);font-weight:600">pendiente</span>.</li>
+          <li><code>/promote</code>: bitácoras 07-04/07-06 pendientes (incluye el commit del manifiesto <code>deployment-agent.yaml</code> a <code>0914611</code>) — <span style="color:var(--warn);font-weight:600">pendiente</span>. <strong>R4</strong> (gráfica feedback-loop gain) desbloqueado por el <code>cured</code> — <span style="color:var(--warn);font-weight:600">pendiente</span>.</li>
         </ul>
       </div>
     </div>
@@ -1329,11 +1434,11 @@
         <h4>Cerrar los hallazgos altos de esta review</h4>
         <ul>
           <li><s><strong>F-01</strong> cooldown por workload · <strong>F-02</strong> gate kind==Deployment · <strong>F-05</strong> compensar dedup-key si XADD falla</s> — <span style="color:var(--ok);font-weight:600">✓ hechos 07-03</span>, testeables con mocks.</li>
-          <li><s><strong>F-04</strong> timeout dedicado Mattermost</s> <span style="color:var(--ok);font-weight:600">✓</span> · <strong>F-03</strong> chroma vía <code>asyncio.to_thread</code> — aislamiento de dependencias (F-03 requiere validar en cluster).</li>
-          <li><strong>F-06</strong> decidir la historia de Redis: AOF+PVC, o degradar el claim de durabilidad en docs.</li>
-          <li><strong>F-11</strong> incident_id desde la ingesta, propagado por logs/métricas/ChromaDB.</li>
-          <li><strong>F-17</strong> logs + events en el enrichment — el primer uso nuevo del LLM (§3.3 #1): solo lenguaje, cero riesgo, valor inmediato en cada mensaje.</li>
-          <li><strong>F-12</strong> gate de calidad del feedback loop — <span style="color:var(--info);font-weight:600">en curso</span> (R1/R3 hechos, R2 fundamento 07-03).</li>
+          <li><s><strong>F-04</strong> timeout dedicado Mattermost · <strong>F-03</strong> chroma vía <code>asyncio.to_thread</code></s> — <span style="color:var(--ok);font-weight:600">✓ (F-03 hecho 07-04, en cluster)</span>.</li>
+          <li><strong>F-06</strong> decidir la historia de Redis: AOF+PVC, o degradar el claim de durabilidad en docs — <span style="color:var(--warn);font-weight:600">el único Alta abierto</span>.</li>
+          <li><strong>F-11</strong> incident_id desde la ingesta, propagado por logs/métricas/ChromaDB — <span style="color:var(--warn);font-weight:600">pendiente</span>.</li>
+          <li><strong>F-17</strong> logs + events en el enrichment — el primer uso nuevo del LLM (§3.3 #1): solo lenguaje, cero riesgo, valor inmediato en cada mensaje — <span style="color:var(--warn);font-weight:600">pendiente</span>.</li>
+          <li><s><strong>F-12</strong> gate de calidad del feedback loop</s> — <span style="color:var(--ok);font-weight:600">✓ cerrado (R1/R3/R2/R2·3 + gate E4; veredicto <code>cured</code> validado en cluster 07-06)</span>; queda R4 (medir la ganancia).</li>
           <li><strong>F-15</strong> modularizar <code>main.py</code> (<code>pipeline.py</code> + <code>formatting.py</code>) — <span style="color:var(--info);font-weight:600">backlog aceptado</span>, antes de apilar F5.</li>
         </ul>
       </div>

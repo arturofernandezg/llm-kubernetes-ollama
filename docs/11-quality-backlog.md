@@ -149,7 +149,7 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 
 ## Review senior post-hardening (2026-07-02)
 
-> Segunda review senior sobre `cb2d1db` (post P0/P1): **7.1/10**, 18 hallazgos F-01..F-18. Informe modo-libro: `docs_sesion/2026-07-02-paper-review-senior.html`. Los 6 **Alta** son los pendientes reales; aquí los trabajados + los abiertos relevantes.
+> Segunda review senior sobre `cb2d1db` (post P0/P1): **7.1/10**, 18 hallazgos F-01..F-18. Informe modo-libro: `docs_sesion/estado_de_proyecto.html (antes 2026-07-02-paper-review-senior.html)`. Los 6 **Alta** son los pendientes reales; aquí los trabajados + los abiertos relevantes.
 
 | ID | Severidad | Localización | Descripción | Fix | Estado |
 |---|---|---|---|---|---|
@@ -165,17 +165,19 @@ Workflow: ver `docs/08-code-quality-playbook.md`.
 
 ---
 
-## Hallazgos de la validación v2 en cluster (2026-07-04)
+## Hallazgos de la validación v2 en cluster (2026-07-04 + run `cured` 2026-07-06)
 
-> Del primer run del arco completo en cluster (`8a40fdc`). Ninguno es bloqueante de diseño; todos con causa raíz. Detalle en `docs_sesion/2026-07-04-cluster-validation-v2-f03.md` y `docs/12`.
+> Del arco completo en cluster (`8a40fdc` el 07-04, `0914611` el run `cured` del 07-06). Ninguno es bloqueante de diseño; todos con causa raíz. Detalle en `docs_sesion/2026-07-04-cured-run-r2-human-gap.md`, `docs_sesion/2026-07-06-r2-human-fix-cured-validado.md` y `docs/12`.
 
 | ID | Severidad | Localización | Descripción | Fix | Estado |
 |---|---|---|---|---|---|
-| C-01 | Media | main.py (`check_pod_health` / `_evaluate_rollback`) | **Falso rollback por restart benigno**: el health-check cuenta restarts sin mirar el motivo → un workload que reinicia por exit limpio (no crash) se lee como "no sano" → revierte un fix que curaba. Observado con el manifiesto chaos (`stress --timeout 60`) | Mirar `lastState.reason==OOMKilled` (el motivo real del último término), no solo el contador de restarts. Mitigado hoy quitando `--timeout` del chaos (OOM infinito) | TODO (v2.x) |
+| C-01 | Media | main.py (`check_pod_health` / `_evaluate_rollback`) | **Falso rollback por restart benigno**: el health-check cuenta restarts sin mirar el motivo → un workload que reinicia por exit limpio (no crash) se lee como "no sano" → revierte un fix que curaba. Observado con el manifiesto chaos (`stress --timeout 60`) | Mirar `lastState.reason==OOMKilled` (el motivo real del último término), no solo el contador de restarts. Mitigación (quitar `--timeout` del chaos) ✅ confirmada en el run 07-06 (OOMKilled puro → healthy → `cured`); mejora de producto sigue TODO | TODO (v2.x) |
 | C-02 | Media | remediation.py / main.py (approve path) | **Approve humano no siembra cooldown** → doble escalación misma causa raíz (OOM + CrashLoop del mismo pod) genera dos escalaciones. F-01 solo cubre la rama auto | Sembrar `acquire_workload_cooldown` también en el approve humano (paridad con auto) | TODO (extiende F-01) |
 | C-03 | Baja | config.py (`ESCALATION_TTL_MINUTES=60`) | Aprobar un mensaje MM de hace >60min → `get_escalation` None → "Escalación no encontrada o expirada". No es bug (nos pasó por aprobar 2h tarde) | Subir a 120-240min para demos/ausencias | TODO |
 | C-04 | Baja | scripts/chaos.sh | El ciclo de auto-cleanup (~300s) es más corto que el arco completo (patch → 300s ventana rollback → veredicto ≈10min) → borra el deployment a mitad → `NotFound` en captura/remediación/rollback | Documentado: **para validar el arco, aplicar el manifiesto a mano** (`kubectl apply`), no usar `scripts/chaos.sh` (sirve solo para medir MTTD/MTTR) | DOC (2026-07-04) |
 | C-05 | Info | Ollama / infra | **MTTR dominado por el LLM (techo de hardware)**: qwen2.5:1.5b en CPU tarda 147-213s warm, timeoutea a 360s en cold. Ollama ya usa todo el nodo e2-standard-2 (2 vCPU, sin GPU) | No bajable con más CPU. MTTD=5s. Aceptado; un nodo con GPU lo resolvería | WONTFIX (sandbox) |
+| C-06 | Alta | main.py (approve path) | **Gap R2-humano**: el veredicto `cured`/`rolled_back` de un fix **aprobado por un humano** NO alimentaba el bucle de aprendizaje R2 — `_reupsert_incident_outcome` tiene guarda `if not ctx.doc_id: return` y la rama approve llamaba a `_schedule_rollback_evaluation` sin `doc_id`. No es "2 líneas": `make_incident_doc_id` embebe `time.time()` → el doc_id no es reproducible en el approve, hay que acarrearlo por la escalación en Redis | Campo `incident_doc_id` en `PendingEscalation` (round-trip Redis, back-compat); la rama approve pasa `doc_id`+`remediation` a `_schedule_rollback_evaluation` (espejo del auto); ingest final reusa el mismo doc_id + `auto_pending` | ✅ DONE (`ca159be`, validado en cluster 07-06: `verdict_total{cured}=1.0`) |
+| C-07 | Media | validation.py / remediation.py (seal de comandos free-text) | **Factibilidad ≠ seguridad**: la validation layer clasifica `kubectl top pod`/`top node` como SAFE (read-only), pero al ejecutar da `Forbidden` (la SA no tiene `metrics.k8s.io`; `top node` es cluster-scoped). Visto al aprobar una escalación HighCPU nocturna (camino free-text). No es bug de RBAC — es least-privilege + fail-honest | Pre-flight `kubectl auth can-i` al sellar comandos free-text → los no ejecutables se muestran como "comando sugerido (sin permisos)" en vez de ejecutar-y-fallar. **NO ampliar RBAC** (viola least-privilege + convención sin ClusterRoles) | TODO (backlog) |
 
 ---
 

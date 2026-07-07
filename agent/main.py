@@ -138,7 +138,9 @@ ENRICHMENT_COUNTER = Counter(
 
 # ── Human Escalation State ────────────────────────────────────────────────────
 
-ESCALATION_TTL_MINUTES = 60
+# C-03: sourced from Settings (env var ESCALATION_TTL_MINUTES) so demo/absence windows
+# don't require a rebuild. Module alias kept for readability at the 3 call sites.
+ESCALATION_TTL_MINUTES = settings.escalation_ttl_minutes
 
 
 @dataclass
