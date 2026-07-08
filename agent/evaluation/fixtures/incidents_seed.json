@@ -1,0 +1,42 @@
+{
+  "_meta": {
+    "purpose": "Controlled fixture for the R4 feedback-loop experiment (eval_feedback.py). See docs/10 for the pre-registered protocol.",
+    "synthetic": true,
+    "disclosure": "These incidents are SYNTHETIC fixtures, not production data. They are derived from real chaos-run templates (OOM cured run 2026-07-06 and the rolled_back episodes 2026-07-04), with pods/namespaces anonymized. They exist to run a controlled A/B; they must be disclosed as synthetic in any slide or doc that cites results from them. The real `incidents` collection in the cluster is left untouched — the harness uses a disposable collection.",
+    "provenance": "hand-authored 2026-07-08 by the eval design; mirrors the shape build_incident_document() writes (error_class + outcome + fix_applied + free text)."
+  },
+
+  "retrieval_seed": [
+    {"id": "seed-oom-01", "error_class": "OOMKilled", "outcome": "cured", "fix_applied": "raised memory limit 32Mi->64Mi", "text": "Incident KubePodOOMKilled on container app. Container was OOMKilled repeatedly; memory limit 32Mi exceeded under load. Fix applied: raised resources.limits.memory to 64Mi. Outcome: cured — pod healthy after the wait window, no further OOM."},
+    {"id": "seed-oom-02", "error_class": "OOMKilled", "outcome": "rolled_back", "fix_applied": "raised memory limit 128Mi->256Mi", "text": "Incident KubePodOOMKilled on container worker. Memory limit 128Mi exceeded. Fix applied: raised resources.limits.memory to 256Mi. Outcome: rolled_back — pod kept OOMing after the patch, remediation reverted. Root cause was a memory leak, not an undersized limit."},
+
+    {"id": "seed-crash-01", "error_class": "CrashLoopBackOff", "outcome": "cured", "fix_applied": "corrected missing env var via config", "text": "Incident KubePodCrashLoopBackOff on container api. Container exited non-zero on startup, crash loop. Fix applied: restored the missing DATABASE_URL env var. Outcome: cured — container started cleanly."},
+    {"id": "seed-crash-02", "error_class": "CrashLoopBackOff", "outcome": "cured", "fix_applied": "rolled back bad config revision", "text": "Incident KubePodCrashLoopBackOff on container scheduler. Repeated restarts after a config change. Fix applied: reverted to the previous config revision. Outcome: cured — restarts stopped."},
+
+    {"id": "seed-imgpull-01", "error_class": "ImagePullBackOff", "outcome": "cured", "fix_applied": "fixed image tag", "text": "Incident KubePodImagePullBackOff on container frontend. Image tag pointed to a non-existent registry tag. Fix applied: corrected the image tag to a published version. Outcome: cured — image pulled successfully."},
+    {"id": "seed-imgpull-02", "error_class": "ImagePullBackOff", "outcome": "cured", "fix_applied": "added registry pull secret", "text": "Incident KubePodImagePullBackOff on container batch. Registry authentication failed, private image. Fix applied: attached the imagePullSecret to the service account. Outcome: cured."},
+
+    {"id": "seed-highcpu-01", "error_class": "HighCPU", "outcome": "cured", "fix_applied": "raised cpu limit 250m->500m", "text": "Incident HighCPU on container api. Sustained CPU saturation against a 250m limit. Fix applied: raised resources.limits.cpu to 500m. Outcome: cured — CPU headroom restored."},
+    {"id": "seed-highcpu-02", "error_class": "HighCPU", "outcome": "rolled_back", "fix_applied": "raised cpu limit 500m->1000m", "text": "Incident HighCPU on container ingest. CPU pegged at the 500m limit. Fix applied: raised resources.limits.cpu to 1000m. Outcome: rolled_back — a hot loop kept the CPU saturated regardless of the limit; remediation reverted, code fix required."},
+
+    {"id": "seed-highmem-01", "error_class": "HighMemory", "outcome": "cured", "fix_applied": "raised memory limit 256Mi->512Mi", "text": "Incident HighMemory on container cache. Memory usage approaching the 256Mi limit under traffic. Fix applied: raised resources.limits.memory to 512Mi. Outcome: cured — usage stabilized below the new limit."},
+    {"id": "seed-highmem-02", "error_class": "HighMemory", "outcome": "cured", "fix_applied": "raised memory limit 512Mi->1Gi", "text": "Incident HighMemory on container aggregator. Memory pressure near the 512Mi limit during batch windows. Fix applied: raised resources.limits.memory to 1Gi. Outcome: cured."}
+  ],
+
+  "behavioral": {
+    "note": "3-arm ablation. The ONLY variable that differs between the negative and positive arms is the outcome value (rolled_back vs cured), reflected identically in the incident text and metadata exactly as build_incident_document() writes it. This isolates the outcome LABEL as the causal variable.",
+    "stimulus_alert_id": "oom-002",
+    "stimulus_rationale": "A NEW OOM alert on a different pod/namespace than the seeded incident — tests generalization by error_class, not memorization of an exact string. oom-002 has a context-rich description (see docs/10), so the baseline model reliably proposes the memory bump; that gives the negative-knowledge signal headroom.",
+    "base_incident": {
+      "id": "seed-behavioral-oom",
+      "error_class": "OOMKilled",
+      "fix_applied": "raised memory limit 64Mi->128Mi (2x)",
+      "text_template": "Incident KubePodOOMKilled on container app in a prior deployment. Container was OOMKilled; memory limit 64Mi exceeded. Fix applied: raised resources.limits.memory to 128Mi (2x the previous limit). Outcome: {outcome}."
+    },
+    "arms": [
+      {"name": "control", "outcome": null, "prediction": "proposes the memory bump; confidence unmodified — no memory to consult"},
+      {"name": "negative", "outcome": "rolled_back", "prediction": "SUPPRESSES the memory bump (or drops confidence / cites the prior failure), per DIAGNOSIS_PROMPT rule 'never propose a fix marked as failed'"},
+      {"name": "positive_ablation", "outcome": "cured", "prediction": "does NOT suppress the bump — same as control; isolates the label as causal"}
+    ]
+  }
+}

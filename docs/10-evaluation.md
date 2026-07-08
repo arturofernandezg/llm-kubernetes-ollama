@@ -7,6 +7,47 @@
 
 ---
 
+## Protocolo pre-registrado 2026-07-08 — R4: feedback-loop gain (PENDIENTE DE CORRER)
+
+> **Esto es un protocolo pre-registrado, no un resultado.** Se escribe *antes* de correr para que el número —salga el que salga, incluido un null— sea creíble. Harness: `agent/evaluation/eval_feedback.py`. Fixture: `agent/evaluation/fixtures/incidents_seed.json`. Lo corre Jay en cluster; los resultados se rellenan debajo cuando existan.
+
+**Punto de partida (hallazgo que reencuadra R4):** el plan original ("re-correr `eval_retrieval` con incidents poblados vs vacío") **no puede mover el número**. `eval_retrieval.py` puntúa **solo la colección `runbooks`** (`context["runbooks"]`); `incidents` es una colección separada que ese script nunca lee. Poblar `incidents` no cambia la precisión de runbooks → correrlo literal da línea plana. El valor del bucle de feedback (R2/R2·3) no vive en el retrieval de runbooks, sino en (A) el retrieval de *incidents* y (B) el *comportamiento* del diagnóstico. R4 se mide en esas dos capas.
+
+### Capa A — Precisión de retrieval de incidents (embedding-only, N=15, ~30s)
+Para cada alerta del dataset: ¿la query de `incidents` devuelve un incidente de la **misma `error_class`** en top-k? Colección vacía (medida, no asumida) → baseline; colección con el fixture → medida. Fixture = 10 incidentes sintéticos **declarados** repartidos en 5 clases (para que top-k sea una discriminación real por clase, no trivial). **Claim honesto**: "la memoria surge a la alerta de la clase correcta" — NO "mejora el diagnóstico".
+
+### Capa B — Ablación de conocimiento negativo (LLM en el bucle, la slide de rigor)
+**Hipótesis (H1):** la *etiqueta de outcome* de un incidente recuperado cambia causalmente el diagnóstico. Un precedente `rolled_back` para (OOM, "bump memoria 2×") suprime la re-propuesta del fix fallido (o baja la confianza / cita el fallo previo); un precedente `cured` *idéntico salvo la etiqueta* no lo suprime.
+
+**Diseño — 3 arms, misma alerta-estímulo** (`oom-002`, pod distinto al del fixture → generalización por clase, no memorización). La única variable que cambia entre arms es el contenido de `incidents`:
+
+| Arm | `incidents` | Predicción (pre-registrada) |
+|---|---|---|
+| 0 control | vacío | propone bump memoria; confidence sin modificar |
+| 1 negativo | 1 incident `rolled_back` (OOM, bump 2× no curó) | **suprime** el bump / baja confidence / cita el fallo |
+| 2 ablación | *mismo texto*, etiqueta `cured` | **no** suprime — como arm 0 |
+
+**Resultado limpio** = arm1 ≠ arm0 **y** arm2 ≈ arm0 → lo único que cambió entre 1 y 2 es la palabra `rolled_back` vs `cured` → la etiqueta es causal.
+
+**Métrica de salida (pre-registrada), a nivel de DIAGNÓSTICO, no del motor:** `proposed_action` (¿sigue proponiendo el bump de memoria?), `confidence`, y si el texto menciona el fallo previo. **Por qué a nivel de diagnóstico y no de `decide_action`:** el eval no tiene pod real → `snapshot=None` → el seal marca `target_unresolved` y el motor escalaría **uniformemente** en los 3 arms (regla 4.7), lavando la señal. En prod, un `proposed_action` caído o una confidence bajo el umbral auto es exactamente lo que enruta a ESCALATE. Cada arm se corre `--reps 3` para evidenciar determinismo (temp=0).
+
+**Hipótesis nula explícita (H0) — resultado publicable:** que `qwen2.5:1.5b` **ignore** el conocimiento negativo (arm1 ≈ arm0: sigue proponiendo el fix marcado FAILED). Si sale así, se reporta tal cual: *el 1.5b no explota el conocimiento negativo del prompt; haría falta un modelo superior o un guard determinista en el motor (p.ej. el motor veta re-aplicar un fix que ya se revirtió para ese workload, sin depender de que el LLM obedezca la instrucción)*. El mecanismo (etiqueta FAILED en `diagnosis.py:33` + `format_context_docs`) existe; que el modelo pequeño lo obedezca es justo lo que este experimento mide.
+
+### Legitimidad (por qué es un experimento controlado y no marketing)
+1. **Pre-registro**: esta sección, escrita antes del run.
+2. **Una sola variable** entre arms; `temp=0` determinista.
+3. **Ablación cured-vs-rolled_back**: aísla la *causa* (la etiqueta), no "memoria vs no-memoria".
+4. **Fixture sintético declarado** (`_meta.disclosure`), derivado de runs reales flipeando una etiqueta, versionado y auditable; nunca reverse-engineered para forzar el resultado.
+5. **Reporte por-caso** (N pequeño → tabla de decisiones, no porcentajes) y **disposición a publicar el null**.
+6. **Aislamiento**: colección desechable `incidents_eval_<epoch>`, prod `incidents` intacta, teardown en `finally` (lección horno nocturno).
+
+### Condiciones a registrar en el run
+- Imagen desplegada, modelo (`qwen2.5:1.5b`), fecha, N.
+- **Higiene previa**: los ~30 docs HighCPU free-text del horno nocturno se **limpian de la `incidents` de prod** por higiene (se citarían como precedente basura en HighCPU reales) — independiente de este eval (que usa colección desechable). Registrar el borrado como condición.
+- Declaración de que el fixture es sintético en cualquier slide/doc que cite estos números.
+
+---
+
 ## Actualización 2026-07-03 — R1: retrieval guiado por metadata (`error_class`)
 
 > Realiza la mejora que este mismo doc anticipaba (§"Distancias RAG comprimidas": *"añadir filtrado por metadata (`error_class`) en las queries"*). En vez de pelear la separabilidad del embedding, se **ancla la clase de error que la propia alerta ya nombra**. `retrieve_context` ya aceptaba `metadata_filter` pero producción nunca lo pasaba. Nuevo en `rag.py`: `ALERTNAME_TO_ERROR_CLASS` + `error_class_for_alertname()` + `runbook_filter_for_alert()`; `main.py` construye el filtro una vez y lo pasa a las dos llamadas de retrieval. **Two-stage**: query filtrada por clase; si el filtro no matchea ningún runbook (clase desconocida/mismatch) cae a query semántica sin filtro → nunca devuelve contexto vacío por un filtro que erró.
