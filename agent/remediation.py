@@ -12,7 +12,7 @@ revert_patch() vuelve al valor capturado en PrePatchSnapshot.
 import asyncio
 import re
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from config import logger, settings
@@ -64,6 +64,7 @@ class PodHealthStatus:
     reason: str
     observed_phases: list[str]
     observed_restarts: list[int]
+    observed_reasons: list[str] = field(default_factory=list)  # lastState.terminated.reason per pod
 
 
 # ── Patrones de clasificación ─────────────────────────────────────────────────
@@ -923,7 +924,11 @@ async def capture_pre_patch_value(proposed_action: dict) -> PrePatchSnapshot | N
 async def check_pod_health(snapshot: PrePatchSnapshot) -> PodHealthStatus:
     """Check if pods matching snapshot.selector are healthy after a remediation patch.
 
-    Healthy = all pods have phase==Running and restartCount==0.
+    Healthy = all pods have phase==Running and no crash-class restart: a restart only
+    counts against health when lastState.terminated.reason is a real failure
+    (_FAILURE_REASONS). A benign restart — clean exit, reason "Completed", e.g. a batch
+    container that finished — must NOT trigger a rollback of a fix that was curing (C-01:
+    false rollback observed with the chaos manifest's `stress --timeout 60`).
     In dry-run, always returns healthy=True (no real patch was executed).
     """
     if settings.remediation_dry_run:
@@ -935,7 +940,7 @@ async def check_pod_health(snapshot: PrePatchSnapshot) -> PodHealthStatus:
         proc = await asyncio.create_subprocess_exec(
             "kubectl", "get", "pods", "-n", snapshot.namespace,
             "-l", snapshot.selector,
-            "-o", "jsonpath={range .items[*]}{.status.phase}|{.status.containerStatuses[0].restartCount};{end}",
+            "-o", "jsonpath={range .items[*]}{.status.phase}|{.status.containerStatuses[0].restartCount}|{.status.containerStatuses[0].lastState.terminated.reason};{end}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -962,11 +967,12 @@ async def check_pod_health(snapshot: PrePatchSnapshot) -> PodHealthStatus:
 
     phases: list[str] = []
     restarts: list[int] = []
+    reasons: list[str] = []
     for entry in raw.split(";"):
         entry = entry.strip()
         if not entry:
             continue
-        parts = entry.split("|", 1)
+        parts = entry.split("|", 2)
         phase = parts[0] if parts else ""
         try:
             restart_count = int(parts[1]) if len(parts) > 1 else 0
@@ -974,6 +980,7 @@ async def check_pod_health(snapshot: PrePatchSnapshot) -> PodHealthStatus:
             restart_count = 0
         phases.append(phase)
         restarts.append(restart_count)
+        reasons.append(parts[2] if len(parts) > 2 else "")
 
     if not phases:
         return PodHealthStatus(
@@ -981,22 +988,35 @@ async def check_pod_health(snapshot: PrePatchSnapshot) -> PodHealthStatus:
         )
 
     unhealthy = [p for p in phases if p != "Running"]
-    restarting = [r for r in restarts if r > 0]
+    # C-01: only crash-class restarts (real failure reason) count against health.
+    # A clean-exit restart (reason "Completed", or none) reverting a curing fix was
+    # the false-rollback failure mode observed in cluster (2026-07-04).
+    failure_restarting = [
+        (r, reason) for r, reason in zip(restarts, reasons)
+        if r > 0 and reason in _FAILURE_REASONS
+    ]
+    benign_restarting = [r for r, reason in zip(restarts, reasons)
+                         if r > 0 and reason not in _FAILURE_REASONS]
 
     if unhealthy:
         return PodHealthStatus(
             healthy=False, reason=f"pods_not_running: {unhealthy}",
-            observed_phases=phases, observed_restarts=restarts,
+            observed_phases=phases, observed_restarts=restarts, observed_reasons=reasons,
         )
-    if restarting:
+    if failure_restarting:
         return PodHealthStatus(
-            healthy=False, reason=f"pods_restarting: {restarting}",
-            observed_phases=phases, observed_restarts=restarts,
+            healthy=False, reason=f"pods_restarting: {failure_restarting}",
+            observed_phases=phases, observed_restarts=restarts, observed_reasons=reasons,
         )
 
+    if benign_restarting:
+        logger.info(
+            "check_pod_health: restarts with benign last-state reason ignored (C-01)",
+            extra={"restarts": benign_restarting, "reasons": reasons},
+        )
     return PodHealthStatus(
-        healthy=True, reason="all_pods_running_no_restarts",
-        observed_phases=phases, observed_restarts=restarts,
+        healthy=True, reason="all_pods_running_no_failure_restarts",
+        observed_phases=phases, observed_restarts=restarts, observed_reasons=reasons,
     )
 
 

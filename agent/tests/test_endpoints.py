@@ -1854,6 +1854,57 @@ class TestApproveStructuredParity:
         assert r.status_code == 200
         mock_sched.assert_not_called()
 
+    def test_approve_structured_seeds_cooldown(self, api_client):
+        """C-02 (extiende F-01): el approve humano siembra el cooldown del workload —
+        una segunda alerta de la misma causa raíz (OOM + CrashLoop del mismo pod) no
+        auto-patchea encima del patch aprobado ni duplica la escalación."""
+        self._seed("st-cd-1")
+        ok = MagicMock(success=True)
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value=[ok]), \
+             patch("main.results_to_log", return_value="[OK] kubectl set resources ..."), \
+             patch("main.capture_pre_patch_value", new_callable=AsyncMock, return_value=MagicMock()), \
+             patch("main._schedule_rollback_evaluation", new_callable=AsyncMock), \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve", "incident_id": "st-cd-1"},
+            })
+        assert r.status_code == 200
+        assert "aiops:cooldown:arturo-prod/engine" in self.fake_redis._store
+
+    def test_approve_failed_execution_does_not_seed_cooldown(self, api_client):
+        """Un approve cuya ejecución falla no consume la ventana: el retry inmediato
+        (humano o auto) sigue abierto."""
+        self._seed("st-cd-2")
+        failed = MagicMock(success=False)
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value=[failed]), \
+             patch("main.results_to_log", return_value="[FAILED] ..."), \
+             patch("main.capture_pre_patch_value", new_callable=AsyncMock, return_value=MagicMock()), \
+             patch("main._schedule_rollback_evaluation", new_callable=AsyncMock), \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "approve", "incident_id": "st-cd-2"},
+            })
+        assert r.status_code == 200
+        assert "aiops:cooldown:arturo-prod/engine" not in self.fake_redis._store
+
+    def test_approve_cooldown_seed_failure_is_fail_soft(self, api_client):
+        """El seed del cooldown es best-effort: si Redis falla ahí, el approve ya ejecutó —
+        la respuesta sigue siendo 200 y el rollback se programa igual."""
+        self._seed("st-cd-3")
+        ok = MagicMock(success=True)
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value=[ok]), \
+             patch("main.results_to_log", return_value="[OK] kubectl set resources ..."), \
+             patch("main.capture_pre_patch_value", new_callable=AsyncMock, return_value=MagicMock()), \
+             patch("main.acquire_workload_cooldown", new_callable=AsyncMock, side_effect=RuntimeError("redis down")), \
+             patch("main._schedule_rollback_evaluation", new_callable=AsyncMock) as mock_sched, \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "approve", "incident_id": "st-cd-3"},
+            })
+        assert r.status_code == 200
+        mock_sched.assert_called_once()
+
     def test_approve_non_structured_unchanged(self, api_client):
         """Sin proposed_action estructurado el approve no captura snapshot ni programa rollback."""
         _seed_redis(self.fake_redis, "ns-1")

@@ -54,6 +54,24 @@ td:first-child,th:first-child{text-align:left}
 .bar{position:fixed;left:0;bottom:0;height:4px;background:var(--orange);transition:width .18s}
 .twocol-list{columns:2;column-gap:2.2em}
 .quote{font-size:1.55rem;line-height:1.45;color:var(--fg);max-width:920px}
+/* Arc replay — animación CSS-only; reinicia cada vez que la slide pasa a display:flex */
+.arc-tag{display:inline-block;align-self:flex-start;color:var(--orange2);font-size:.95rem;font-weight:700;letter-spacing:.03em;border:1px solid var(--orange);border-radius:999px;padding:.32em .95em;margin-bottom:.9em;background:#1a0f07}
+.arc{position:relative;display:flex;flex-direction:column;gap:.72em;max-width:1060px;padding-left:.3em}
+.arc::before{content:"";position:absolute;left:11px;top:14px;bottom:14px;width:2px;background:var(--line);transform:scaleY(0);transform-origin:top;animation:arcrail 3.4s linear both}
+@keyframes arcrail{to{transform:scaleY(1)}}
+.arc-step{display:flex;align-items:flex-start;gap:1.05em;opacity:0;transform:translateX(-10px);animation:arcin .5s ease-out both}
+.arc-step:nth-child(1){animation-delay:.1s}
+.arc-step:nth-child(2){animation-delay:.7s}
+.arc-step:nth-child(3){animation-delay:1.3s}
+.arc-step:nth-child(4){animation-delay:1.9s}
+.arc-step:nth-child(5){animation-delay:2.5s}
+.arc-step:nth-child(6){animation-delay:3.1s}
+@keyframes arcin{to{opacity:1;transform:none}}
+.arc-dot{flex:0 0 auto;width:24px;height:24px;border-radius:50%;background:var(--panel);border:2px solid var(--orange);margin-top:.1em;z-index:1}
+.s-engine .arc-dot{border-color:var(--yellow)}
+.s-cured .arc-dot{border-color:var(--green);box-shadow:0 0 0 5px rgba(87,194,139,.16)}
+.arc-body b{color:var(--fg);font-size:1.16rem;display:block;margin-bottom:.05em}
+.arc-body span{color:var(--muted);font-size:1.04rem;line-height:1.4}
 @media (max-width:900px){
   .cols2,.cols3,.statrow{grid-template-columns:1fr}
   h1{font-size:2.7rem} h2{font-size:1.8rem}
@@ -130,14 +148,15 @@ td:first-child,th:first-child{text-align:left}
           <h2>El motor dispone: por qué no es un LLM con kubectl libre</h2>
           <div class="statrow">
             <div class="stat"><b>9</b><span>reglas en cascada</span></div>
-            <div class="stat"><b>≤2×</b><span>cap del cambio (regla 4.6)</span></div>
+            <div class="stat"><b>≤2×</b><span>cambio máximo en automático (regla 4.6); más → humano</span></div>
             <div class="stat"><b>HMAC</b><span>callbacks Mattermost</span></div>
             <div class="stat"><b>fail-closed</b><span>auth y cooldown</span></div>
           </div>
           <div class="cols2">
-            <div class="card green"><h3>Re-sourcing: el modelo propone, el motor dispone</h3><ul><li>El motor <strong>sella</strong> name/ns/container con la verdad del cluster.</li><li>Sintetiza el comando (determinista, reversible por snapshot).</li><li>Auto solo si estructurado, subir-solo y en el allow-list <code>arturo-</code>.</li></ul></div>
+            <div class="card green"><h3>Re-sourcing: el modelo propone, el motor dispone</h3><ul><li>El motor <strong>sella</strong> name/ns/container con la verdad del cluster.</li><li>Sintetiza el comando (determinista, reversible por snapshot).</li><li><strong>Hoy el auto ejecuta un único caso: subir el límite de <code>memory</code> de un Deployment</strong> (CPU tras un flag, apagado). Todo lo demás escala o sugiere.</li></ul></div>
             <div class="card red"><h3>Lo bloqueado o escalado</h3><ul><li>Comandos destructivos o desconocidos (blacklist regex).</li><li>Target fantasma o <code>kind≠Deployment</code> → escala (regla 4.7).</li><li>Cooldown por workload: un patch por ventana (corta el patch-storm).</li></ul></div>
           </div>
+          <p class="note"><strong>El criterio del auto no es la alerta, es el arreglo</strong> — y exige tres cosas a la vez: target <strong>confirmable</strong> desde el cluster, acción <strong>acotada y reversible</strong>, y resultado <strong>verificable</strong> (<code>cured</code>/<code>rolled_back</code>). Hoy solo subir un límite de memoria cumple las tres; lo que falla una pata, escala.</p>
         </section>
 <section class="slide">
           <h2>El sistema aprende de lo que hace</h2>
@@ -148,12 +167,25 @@ td:first-child,th:first-child{text-align:left}
               <ul>
                 <li>Tras remediar, se programa una evaluación de rollback.</li>
                 <li>El veredicto <code>cured</code> / <code>rolled_back</code> re-marca el doc en ChromaDB.</li>
-                <li>Los fracasos se conservan como <em>conocimiento negativo</em> recuperable.</li>
+                <li>Los fracasos se conservan como <em>conocimiento negativo</em> <strong>recuperable</strong> (medido: Capa A).</li>
                 <li><strong>Paridad humano/auto</strong>: aprobar en Mattermost alimenta el mismo bucle.</li>
               </ul>
-              <p class="note">Validado E2E en cluster (06-jul): <code>aiops_feedback_verdict_total{outcome="cured"}=1</code>. Cuantificar el <em>feedback-loop gain</em> es el siguiente paso medible.</p>
+              <p class="note">Validado E2E en cluster (06-jul): <code>aiops_feedback_verdict_total{outcome="cured"}=1</code>. Cuantificado el 08-jul (slide siguiente): la memoria emerge a la clase correcta; que el modelo la <em>explote</em> es otra historia.</p>
             </div>
           </div>
+        </section>
+<section class="slide">
+          <h2>El arco completo, en movimiento</h2>
+          <div class="arc-tag">&#9654; Replay de un run real &middot; cluster GKE &middot; 06-jul-2026 &middot; valores capturados, no simulados</div>
+          <div class="arc">
+            <div class="arc-step s-alert"><span class="arc-dot"></span><div class="arc-body"><b>1 &middot; Salta la alerta</b><span>Pod <code>OOMKilled</code> &rarr; Prometheus &rarr; Alertmanager &rarr; webhook. MTTD del pipeline: <strong>~5 s</strong>.</span></div></div>
+            <div class="arc-step s-ground"><span class="arc-dot"></span><div class="arc-body"><b>2 &middot; El cluster informa</b><span>Snapshot antes del LLM: <code>memory=32Mi</code>, <code>restarts=6</code>, identidad del workload por <code>ownerReferences</code>.</span></div></div>
+            <div class="arc-step s-llm"><span class="arc-dot"></span><div class="arc-body"><b>3 &middot; El modelo razona</b><span>Diagnóstico JSON sobre los hechos + runbook: subir <code>memory</code>. El LLM propone <code>512Mi</code>.</span></div></div>
+            <div class="arc-step s-engine"><span class="arc-dot"></span><div class="arc-body"><b>4 &middot; El motor dispone</b><span>Sella <code>current=32Mi</code> del cluster (<code>grounded=1.0</code>). El sistema solo actúa <strong>por su cuenta</strong> en cambios de hasta <strong>&times;2</strong>. El modelo pide <code>512Mi</code> = <strong>16&times;</strong> &rarr; ni lo aplica solo ni lo recorta a la callada &rarr; <span class="pill warn">ESCALA a un humano</span>.</span></div></div>
+            <div class="arc-step s-human"><span class="arc-dot"></span><div class="arc-body"><b>5 &middot; Human-in-the-loop</b><span>Un humano ve un pod muriendo con unos irrisorios <code>32Mi</code> (donde &times;2 volvería a petar) y aprueba subir a <code>512Mi</code> &mdash; con el comando ya preparado y firma <code>approve</code> HMAC-SHA256 &rarr; patch.</span></div></div>
+            <div class="arc-step s-cured"><span class="arc-dot"></span><div class="arc-body"><b>6 &middot; Veredicto que cierra el bucle</b><span>+300 s &rarr; el pod queda sano a <code>512Mi</code> &rarr; <code>aiops_feedback_verdict_total{outcome="cured"}=1</code> &middot; doc ChromaDB re-marcado <span class="pill ok">cured</span>.</span></div></div>
+          </div>
+          <p class="note">Seis etapas, cada una desconfiando de la anterior. En directo el LLM 1.5b en CPU tarda ~150-270 s; aquí ves el arco que se validó E2E, sin la espera del hardware.</p>
         </section>
 <section class="slide">
           <h2>El modelo razona: retrieval evaluado</h2>
@@ -168,6 +200,32 @@ td:first-child,th:first-child{text-align:left}
             <div class="stat"><b>+37%</b><span>confianza relativa</span></div>
           </div>
           <p class="note">Determinista donde se puede, semántico como fallback.</p>
+        </section>
+<section class="slide">
+          <h2>¿Sirve de algo que el sistema recuerde? Dos preguntas</h2>
+          <div class="cols2">
+            <div class="card green">
+              <h3>1 &middot; ¿Encuentra casos pasados parecidos?</h3>
+              <p><strong>Sí.</strong> Ante un incidente nuevo, ¿rescata de su memoria uno del mismo tipo?</p>
+              <div class="statrow" style="grid-template-columns:1fr 1fr">
+                <div class="stat"><b>0% &rarr; 46.7%</b><span>acierta el tipo: sin memoria &rarr; con memoria</span></div>
+                <div class="stat"><b>0% &rarr; 60%</b><span>si vale con los dos más parecidos</span></div>
+              </div>
+              <p class="note">Sin memoria no encuentra nada; con ella acierta el tipo ~la mitad de las veces. La memoria <strong>emerge</strong>.</p>
+            </div>
+            <div class="card red">
+              <h3>2 &middot; ¿Le hace caso el modelo?</h3>
+              <p><strong>No</strong>, a este tamaño. Le doy el mismo aviso OOM tres veces, cambiando solo lo que "recuerda":</p>
+              <table>
+                <tr><th>Lo que el modelo recuerda</th><th>Qué propone</th><th>Confianza</th></tr>
+                <tr><td>nada</td><td>subir memoria</td><td>0.80</td></tr>
+                <tr><td>&laquo;subir memoria <strong>no</strong> funcionó&raquo;</td><td>subir memoria</td><td>0.80</td></tr>
+                <tr><td>&laquo;subir memoria <strong>sí</strong> funcionó&raquo;</td><td>subir memoria</td><td>0.80</td></tr>
+              </table>
+              <p class="note">Las tres respuestas, idénticas: el modelo pequeño <strong>ignora</strong> lo que pasó antes.</p>
+            </div>
+          </div>
+          <p class="note"><strong>Y por eso el diseño es el correcto:</strong> la seguridad no depende de que el modelo recuerde sus fracasos &mdash; la impone el motor. Anoté este resultado (incluido que saliera &laquo;no&raquo;) <em>antes</em> de medirlo: un resultado honesto vale más que uno bonito.</p>
         </section>
 <section class="slide">
           <h2>Seguridad y guardarraíles</h2>
@@ -208,7 +266,7 @@ td:first-child,th:first-child{text-align:left}
 <section class="slide">
           <h2>Evidencia en cluster (no en la teoría)</h2>
           <div class="cols2">
-            <div class="card green"><h3>Grounding real (04-jul)</h3><ul><li><code>current_value=32Mi</code> vino del snapshot, no del LLM (<code>grounded=1.0</code>).</li><li>Safety cap 4.6: LLM pidió 512Mi (16×) → el motor escaló a 2×, no clampó a ciegas.</li></ul></div>
+            <div class="card green"><h3>Grounding real (04-jul)</h3><ul><li><code>current_value=32Mi</code> vino del snapshot, no del LLM (<code>grounded=1.0</code>).</li><li>Safety cap 4.6: el LLM pidió 512Mi (16×). El motor no lo recortó ni lo aplicó solo: lo escaló a un humano, que aprobó subir a 512Mi.</li></ul></div>
             <div class="card blue"><h3>Ciclo completo (06-jul)</h3><ul><li>Human-in-the-loop E2E: approve HMAC OK → patch persiste.</li><li>Arco <code>cured</code> completo → doc ChromaDB re-marcado + métrica.</li></ul></div>
           </div>
           <p class="note">Todos los hallazgos del run tienen causa raíz documentada; ninguno bloquea el diseño.</p>
@@ -219,7 +277,8 @@ td:first-child,th:first-child{text-align:left}
             <div class="card red"><h3>Latencia = techo de hardware</h3><p>qwen2.5:1.5b en CPU ~150-270 s. El pipeline detecta en segundos; el diagnóstico lo limita el hardware, no el diseño. Palanca: GPU o modelo desplegable mayor.</p></div>
             <div class="card orange"><h3>Durabilidad de Redis</h3><p>El estado vive en Redis, pero sin AOF+PVC no sobrevive a la pérdida del pod. No reclamo durabilidad fuerte sobre memoria volátil: es trabajo pendiente (F-06).</p></div>
             <div class="card orange"><h3>Dataset acotado</h3><p>N=15 alertas: suficiente para validar el filtro R1, corto para afirmar estadística. Ampliar a 30-50.</p></div>
-            <div class="card blue"><h3>Feedback-loop gain</h3><p>El bucle está vivo (veredictos reales en ChromaDB). Falta <em>cuantificar</em> la mejora de retrieval con incidentes poblados vs vacío.</p></div>
+            <div class="card blue"><h3>El modelo pequeño no explota la memoria</h3><p>Medido (Capa B): el 1.5b ignora la etiqueta <code>cured</code>/<code>rolled_back</code>. El bucle guarda y recupera el conocimiento negativo, pero explotarlo pide un modelo mayor o un guard en el motor. Lo digo, no lo escondo.</p></div>
+            <div class="card orange"><h3>Fuera de memoria: seguro y con contexto ✓, curación no medida</h3><p>Para CrashLoop/ImagePull/HighCPU está medido que el runbook recuperado es el correcto (p@1 100%) y que los comandos son seguros (100% SAFE) — <strong>no</strong> que el fix sugerido cure. Safety ≠ correctness; solo memoria está validado E2E como <code>cured</code>.</p></div>
           </div>
           <p class="note">Si la idea mereciera seguir, el paso natural sería probarla sobre alertas reales de un equipo y ver si de verdad ahorra tiempo. Hoy es una hipótesis, no una promesa.</p>
         </section>

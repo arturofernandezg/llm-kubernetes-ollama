@@ -44,6 +44,7 @@ from remediation import (
     process_remediation, execute_commands, results_to_log, RemediationAction,
     capture_pre_patch_value, check_pod_health, revert_patch, PrePatchSnapshot,
     _limit_resource, seal_proposed_action, ground_confidence, is_structured_remediation,
+    acquire_workload_cooldown,
 )
 from enrichment import gather_incident_context
 from utils import backoff_delay
@@ -1243,6 +1244,24 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
                 "safe_commands": incident.safe_commands,
                 "blocked_commands": [],
             }
+            if (
+                is_structured_remediation(incident.diagnosis)
+                and any(r.success for r in execute_results)
+                and redis_client is not None
+            ):
+                # C-02 (extiende F-01): seed the workload cooldown on human approve too.
+                # The human is never gated by it (their judgment overrides), but the
+                # window must exist so a second alert for the same root cause (OOM +
+                # CrashLoop of the same pod) doesn't auto-patch on top of this patch
+                # or raise a duplicate escalation. Fail-soft: the approve already ran.
+                try:
+                    pa = incident.diagnosis["proposed_action"]
+                    await acquire_workload_cooldown(redis_client, pa["namespace"], pa["name"])
+                except Exception as exc:
+                    logger.warning(
+                        "Cooldown seed failed after human approve",
+                        extra={"incident_id": incident.incident_id, "error": str(exc)},
+                    )
             if (
                 settings.remediation_rollback_enabled
                 and pre_patch_snapshot is not None

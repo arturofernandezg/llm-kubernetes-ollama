@@ -25,6 +25,13 @@ class FakeRedis:
     async def setex(self, key: str, ttl: int, value: str) -> None:
         self._store[key] = value
 
+    async def set(self, key: str, value: str, nx: bool = False, ex: int | None = None):
+        """Mirror redis.asyncio set(nx=, ex=): None if NX blocked, True if written."""
+        if nx and key in self._store:
+            return None
+        self._store[key] = value
+        return True
+
     async def get(self, key: str) -> str | None:
         return self._store.get(key)
 

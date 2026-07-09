@@ -1090,7 +1090,7 @@ class TestCheckPodHealth:
     async def test_all_running_zero_restarts_is_healthy(self, monkeypatch):
         monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
         monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
-        proc = _make_proc(stdout=b"Running|0;Running|0;", returncode=0)
+        proc = _make_proc(stdout=b"Running|0|;Running|0|;", returncode=0)
         with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             result = await check_pod_health(self._snapshot())
         assert result.healthy is True
@@ -1100,21 +1100,56 @@ class TestCheckPodHealth:
     async def test_pending_pod_is_unhealthy(self, monkeypatch):
         monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
         monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
-        proc = _make_proc(stdout=b"Pending|0;", returncode=0)
+        proc = _make_proc(stdout=b"Pending|0|;", returncode=0)
         with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             result = await check_pod_health(self._snapshot())
         assert result.healthy is False
         assert "Pending" in result.reason
 
     @pytest.mark.asyncio
-    async def test_restart_count_nonzero_is_unhealthy(self, monkeypatch):
+    async def test_failure_restart_is_unhealthy(self, monkeypatch):
+        """A restart whose lastState reason is crash-class (OOMKilled) → not cured → rollback."""
         monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
         monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
-        proc = _make_proc(stdout=b"Running|3;", returncode=0)
+        proc = _make_proc(stdout=b"Running|3|OOMKilled;", returncode=0)
         with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             result = await check_pod_health(self._snapshot())
         assert result.healthy is False
         assert result.observed_restarts == [3]
+        assert result.observed_reasons == ["OOMKilled"]
+
+    @pytest.mark.asyncio
+    async def test_benign_restart_is_healthy(self, monkeypatch):
+        """C-01: clean-exit restart (reason Completed) must NOT read as unhealthy —
+        it was reverting fixes that were curing (chaos `stress --timeout 60`)."""
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"Running|2|Completed;", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await check_pod_health(self._snapshot())
+        assert result.healthy is True
+        assert result.observed_reasons == ["Completed"]
+
+    @pytest.mark.asyncio
+    async def test_restart_without_reason_is_healthy(self, monkeypatch):
+        """No lastState.terminated.reason (empty jsonpath field) → no failure evidence → healthy."""
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"Running|1|;", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await check_pod_health(self._snapshot())
+        assert result.healthy is True
+
+    @pytest.mark.asyncio
+    async def test_mixed_pods_one_failure_restart_is_unhealthy(self, monkeypatch):
+        """One healthy pod + one crash-class restarting pod → the incident is not cured."""
+        monkeypatch.setattr("remediation.settings.remediation_dry_run", False)
+        monkeypatch.setattr("remediation.settings.remediation_command_timeout", 30)
+        proc = _make_proc(stdout=b"Running|0|;Running|4|Error;", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            result = await check_pod_health(self._snapshot())
+        assert result.healthy is False
+        assert "pods_restarting" in result.reason
 
     @pytest.mark.asyncio
     async def test_no_pods_found_is_unhealthy(self, monkeypatch):
