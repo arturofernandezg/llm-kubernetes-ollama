@@ -1,0 +1,467 @@
+{
+  "date": "2026-07-08",
+  "model": "qwen2.5:1.5b",
+  "eval_collection": "incidents_eval_1783521403",
+  "fixture_disclosure": "These incidents are SYNTHETIC fixtures, not production data. They are derived from real chaos-run templates (OOM cured run 2026-07-06 and the rolled_back episodes 2026-07-04), with pods/namespaces anonymized. They exist to run a controlled A/B; they must be disclosed as synthetic in any slide or doc that cites results from them. The real `incidents` collection in the cluster is left untouched \u2014 the harness uses a disposable collection.",
+  "layer_a_retrieval": {
+    "top_k": 2,
+    "empty": {
+      "label": "empty",
+      "total": 15,
+      "precision_at_1": 0.0,
+      "precision_at_2": 0.0,
+      "hits_at_1": 0,
+      "hits_at_2": 0,
+      "details": [
+        {
+          "alert_id": "crashloop-001",
+          "expected_class": "CrashLoopBackOff",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "crashloop-002",
+          "expected_class": "CrashLoopBackOff",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "crashloop-003",
+          "expected_class": "CrashLoopBackOff",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highcpu-001",
+          "expected_class": "HighCPU",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highcpu-002",
+          "expected_class": "HighCPU",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highcpu-003",
+          "expected_class": "HighCPU",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highmemory-001",
+          "expected_class": "HighMemory",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highmemory-002",
+          "expected_class": "HighMemory",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "imagepull-001",
+          "expected_class": "ImagePullBackOff",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "imagepull-002",
+          "expected_class": "ImagePullBackOff",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "oom-001",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "oom-002",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "oom-003",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "oom-004",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "oom-005",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [],
+          "hit_at_1": false,
+          "hit_at_2": false
+        }
+      ]
+    },
+    "seeded": {
+      "label": "seeded",
+      "total": 15,
+      "precision_at_1": 0.467,
+      "precision_at_2": 0.6,
+      "hits_at_1": 7,
+      "hits_at_2": 9,
+      "details": [
+        {
+          "alert_id": "crashloop-001",
+          "expected_class": "CrashLoopBackOff",
+          "retrieved_classes": [
+            "CrashLoopBackOff",
+            "OOMKilled"
+          ],
+          "hit_at_1": true,
+          "hit_at_2": true
+        },
+        {
+          "alert_id": "crashloop-002",
+          "expected_class": "CrashLoopBackOff",
+          "retrieved_classes": [
+            "ImagePullBackOff",
+            "OOMKilled"
+          ],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "crashloop-003",
+          "expected_class": "CrashLoopBackOff",
+          "retrieved_classes": [
+            "OOMKilled",
+            "OOMKilled"
+          ],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highcpu-001",
+          "expected_class": "HighCPU",
+          "retrieved_classes": [
+            "OOMKilled",
+            "OOMKilled"
+          ],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highcpu-002",
+          "expected_class": "HighCPU",
+          "retrieved_classes": [
+            "OOMKilled",
+            "OOMKilled"
+          ],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highcpu-003",
+          "expected_class": "HighCPU",
+          "retrieved_classes": [
+            "OOMKilled",
+            "OOMKilled"
+          ],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highmemory-001",
+          "expected_class": "HighMemory",
+          "retrieved_classes": [
+            "OOMKilled",
+            "OOMKilled"
+          ],
+          "hit_at_1": false,
+          "hit_at_2": false
+        },
+        {
+          "alert_id": "highmemory-002",
+          "expected_class": "HighMemory",
+          "retrieved_classes": [
+            "OOMKilled",
+            "HighMemory"
+          ],
+          "hit_at_1": false,
+          "hit_at_2": true
+        },
+        {
+          "alert_id": "imagepull-001",
+          "expected_class": "ImagePullBackOff",
+          "retrieved_classes": [
+            "OOMKilled",
+            "ImagePullBackOff"
+          ],
+          "hit_at_1": false,
+          "hit_at_2": true
+        },
+        {
+          "alert_id": "imagepull-002",
+          "expected_class": "ImagePullBackOff",
+          "retrieved_classes": [
+            "ImagePullBackOff",
+            "OOMKilled"
+          ],
+          "hit_at_1": true,
+          "hit_at_2": true
+        },
+        {
+          "alert_id": "oom-001",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [
+            "OOMKilled",
+            "HighMemory"
+          ],
+          "hit_at_1": true,
+          "hit_at_2": true
+        },
+        {
+          "alert_id": "oom-002",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [
+            "OOMKilled",
+            "OOMKilled"
+          ],
+          "hit_at_1": true,
+          "hit_at_2": true
+        },
+        {
+          "alert_id": "oom-003",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [
+            "OOMKilled",
+            "OOMKilled"
+          ],
+          "hit_at_1": true,
+          "hit_at_2": true
+        },
+        {
+          "alert_id": "oom-004",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [
+            "OOMKilled",
+            "OOMKilled"
+          ],
+          "hit_at_1": true,
+          "hit_at_2": true
+        },
+        {
+          "alert_id": "oom-005",
+          "expected_class": "OOMKilled",
+          "retrieved_classes": [
+            "OOMKilled",
+            "OOMKilled"
+          ],
+          "hit_at_1": true,
+          "hit_at_2": true
+        }
+      ]
+    }
+  },
+  "layer_b_behavioral": {
+    "stimulus_alert_id": "oom-002",
+    "reps_per_arm": 3,
+    "arms": [
+      {
+        "name": "control",
+        "seeded_outcome": null,
+        "prediction": "proposes the memory bump; confidence unmodified \u2014 no memory to consult",
+        "reps": [
+          {
+            "proposes_action": true,
+            "field": "resources.limits.memory",
+            "proposes_memory_bump": true,
+            "current_value": "256Mi",
+            "new_value": "512Mi",
+            "confidence": 0.8,
+            "risk": "medium",
+            "mentions_prior_failure": false,
+            "commands": [
+              "kubectl set resources deployment redis-master-0 -n caching --containers=redis --limits=memory=512Mi,cpu=500m"
+            ],
+            "rag_sources": [
+              "runbook-oomkilled-001"
+            ]
+          },
+          {
+            "proposes_action": true,
+            "field": "resources.limits.memory",
+            "proposes_memory_bump": true,
+            "current_value": "256Mi",
+            "new_value": "512Mi",
+            "confidence": 0.8,
+            "risk": "medium",
+            "mentions_prior_failure": false,
+            "commands": [
+              "kubectl set resources deployment redis-master-0 -n caching --containers=redis --limits=memory=512Mi,cpu=500m"
+            ],
+            "rag_sources": [
+              "runbook-oomkilled-001"
+            ]
+          },
+          {
+            "proposes_action": true,
+            "field": "resources.limits.memory",
+            "proposes_memory_bump": true,
+            "current_value": "256Mi",
+            "new_value": "512Mi",
+            "confidence": 0.8,
+            "risk": "medium",
+            "mentions_prior_failure": false,
+            "commands": [
+              "kubectl set resources deployment redis-master-0 -n caching --containers=redis --limits=memory=512Mi,cpu=500m"
+            ],
+            "rag_sources": [
+              "runbook-oomkilled-001"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "negative",
+        "seeded_outcome": "rolled_back",
+        "prediction": "SUPPRESSES the memory bump (or drops confidence / cites the prior failure), per DIAGNOSIS_PROMPT rule 'never propose a fix marked as failed'",
+        "reps": [
+          {
+            "proposes_action": true,
+            "field": "resources.limits.memory",
+            "proposes_memory_bump": true,
+            "current_value": "256Mi",
+            "new_value": "512Mi",
+            "confidence": 0.8,
+            "risk": "high",
+            "mentions_prior_failure": false,
+            "commands": [
+              "kubectl describe pod redis-master-0 -n caching",
+              "kubectl top pod -n caching",
+              "kubectl logs redis-master-0 --previous"
+            ],
+            "rag_sources": [
+              "runbook-oomkilled-001",
+              "seed-behavioral-oom"
+            ]
+          },
+          {
+            "proposes_action": true,
+            "field": "resources.limits.memory",
+            "proposes_memory_bump": true,
+            "current_value": "256Mi",
+            "new_value": "512Mi",
+            "confidence": 0.8,
+            "risk": "high",
+            "mentions_prior_failure": false,
+            "commands": [
+              "kubectl describe pod redis-master-0 -n caching",
+              "kubectl top pod -n caching",
+              "kubectl logs redis-master-0 --previous"
+            ],
+            "rag_sources": [
+              "runbook-oomkilled-001",
+              "seed-behavioral-oom"
+            ]
+          },
+          {
+            "proposes_action": true,
+            "field": "resources.limits.memory",
+            "proposes_memory_bump": true,
+            "current_value": "256Mi",
+            "new_value": "512Mi",
+            "confidence": 0.8,
+            "risk": "high",
+            "mentions_prior_failure": false,
+            "commands": [
+              "kubectl describe pod redis-master-0 -n caching",
+              "kubectl top pod -n caching",
+              "kubectl logs redis-master-0 --previous"
+            ],
+            "rag_sources": [
+              "runbook-oomkilled-001",
+              "seed-behavioral-oom"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "positive_ablation",
+        "seeded_outcome": "cured",
+        "prediction": "does NOT suppress the bump \u2014 same as control; isolates the label as causal",
+        "reps": [
+          {
+            "proposes_action": true,
+            "field": "resources.limits.memory",
+            "proposes_memory_bump": true,
+            "current_value": "256Mi",
+            "new_value": "512Mi",
+            "confidence": 0.8,
+            "risk": "medium",
+            "mentions_prior_failure": false,
+            "commands": [
+              "kubectl set resources deployment redis-master-0 -n caching --limits=memory=512Mi,cpu=500m"
+            ],
+            "rag_sources": [
+              "runbook-oomkilled-001",
+              "seed-behavioral-oom"
+            ]
+          },
+          {
+            "proposes_action": true,
+            "field": "resources.limits.memory",
+            "proposes_memory_bump": true,
+            "current_value": "256Mi",
+            "new_value": "512Mi",
+            "confidence": 0.8,
+            "risk": "medium",
+            "mentions_prior_failure": false,
+            "commands": [
+              "kubectl set resources deployment redis-master-0 -n caching --limits=memory=512Mi,cpu=500m"
+            ],
+            "rag_sources": [
+              "runbook-oomkilled-001",
+              "seed-behavioral-oom"
+            ]
+          },
+          {
+            "proposes_action": true,
+            "field": "resources.limits.memory",
+            "proposes_memory_bump": true,
+            "current_value": "256Mi",
+            "new_value": "512Mi",
+            "confidence": 0.8,
+            "risk": "medium",
+            "mentions_prior_failure": false,
+            "commands": [
+              "kubectl set resources deployment redis-master-0 -n caching --limits=memory=512Mi,cpu=500m"
+            ],
+            "rag_sources": [
+              "runbook-oomkilled-001",
+              "seed-behavioral-oom"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

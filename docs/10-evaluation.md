@@ -7,7 +7,7 @@
 
 ---
 
-## Protocolo pre-registrado 2026-07-08 — R4: feedback-loop gain (PENDIENTE DE CORRER)
+## Protocolo pre-registrado 2026-07-08 — R4: feedback-loop gain (CORRIDO — resultados abajo)
 
 > **Esto es un protocolo pre-registrado, no un resultado.** Se escribe *antes* de correr para que el número —salga el que salga, incluido un null— sea creíble. Harness: `agent/evaluation/eval_feedback.py`. Fixture: `agent/evaluation/fixtures/incidents_seed.json`. Lo corre Jay en cluster; los resultados se rellenan debajo cuando existan.
 
@@ -45,6 +45,30 @@ Para cada alerta del dataset: ¿la query de `incidents` devuelve un incidente de
 - Imagen desplegada, modelo (`qwen2.5:1.5b`), fecha, N.
 - **Higiene previa**: los ~30 docs HighCPU free-text del horno nocturno se **limpian de la `incidents` de prod** por higiene (se citarían como precedente basura en HighCPU reales) — independiente de este eval (que usa colección desechable). Registrar el borrado como condición.
 - Declaración de que el fixture es sintético en cualquier slide/doc que cite estos números.
+
+### Resultados 2026-07-08 (run en cluster, `qwen2.5:1.5b`, N=15, 3 reps/arm)
+Salida: `agent/evaluation_results/feedback_2026-07-08.json`.
+
+**Capa A — POSITIVO.** La memoria emerge a la clase correcta:
+
+| Colección `incidents` | p@1 | p@2 |
+|---|---|---|
+| vacía (arranque en frío) | 0.0% | 0.0% |
+| poblada (fixture) | **46.7%** | **60.0%** |
+
+De un incidente nuevo, el retrieval devuelve uno de su misma `error_class` ~la mitad de las veces (p@1); desde cero era imposible. El número absoluto es modesto (fixture sintético pequeño de 10 incidentes en 5 clases) — el claim es el **delta desde 0**, no la magnitud.
+
+**Capa B — NULL (el pre-registrado en H0).** Los 3 arms son **idénticos**:
+
+| Arm | etiqueta | propone bump mem | avg confidence | menciona el fallo |
+|---|---|---|---|---|
+| control | — | 3/3 | 0.80 | 0/3 |
+| negativo | `rolled_back` | 3/3 | 0.80 | 0/3 |
+| positivo (ablación) | `cured` | 3/3 | 0.80 | 0/3 |
+
+`qwen2.5:1.5b` **ignora la etiqueta de outcome**: propone el mismo bump con la misma confianza y no cita el fallo previo, sea el precedente `rolled_back` o `cured`. Se cumple H0 tal cual se pre-registró.
+
+**Interpretación (honesta, para el deck y la defensa):** el bucle **guarda y recupera** el conocimiento negativo (Capa A ✓), pero el modelo pequeño **no lo explota** para modificar su diagnóstico (Capa B null). No es un fallo del diseño: **refuerza** la tesis "el motor dispone" — la seguridad no depende de que el LLM recuerde sus fracasos, la impone el motor determinista. Palancas para mover la Capa B: (1) modelo mayor, o (2) **guard determinista** que vete re-aplicar un fix ya revertido para ese workload (independiente de que el LLM obedezca la instrucción `FAILED FIX` de `diagnosis.py:33`). Un null pre-registrado se publica: es más creíble que un positivo forzado.
 
 ---
 
