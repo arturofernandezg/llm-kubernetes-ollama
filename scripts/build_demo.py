@@ -17,21 +17,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "demo"
 
-TITLE = "AIOps Infrastructure Agent"
+TITLE = "Observz"
 SUBTITLE = "Diagnóstico y remediación asistida de incidencias en Kubernetes"
 AUTHOR = "Arturo Fernández"
-DATE = "2026-07-07"
+DATE = "2026-07-10"
 SUBJECT = "Presentación a chapter · MasOrange / Telecable"
 
 # Fuente única de números — evita el drift de literales dispersos por slides.
 STATS = {
-    "tests": "621",
+    "tests": "683",  # def test_ en agent/tests/ (17 ficheros) — confirmar verde con pytest full antes de presentar
     "runbooks": "16",
     "p1_before": "73%", "p1_after": "100%",
     "p3_before": "87%", "p3_after": "100%",
     "eval_n": "15",
     "conf_rag": "0.86", "conf_zero": "0.63",
-    "audit_before": "5.9", "audit_after": "7.1",
     "chaos_experiments": "4",
     "cap": "2×",
     # R4 feedback-loop gain (medido 08-jul, fixture sintético declarado)
@@ -269,6 +268,7 @@ def slides() -> list[str]:
                 <li>Snapshot: container, limits, phase, restart_count, last_state_reason.</li>
                 <li>Identidad por <code>ownerReferences</code> (pod→ReplicaSet→Deployment).</li>
                 <li>Los hechos entran al prompt como sección <strong>CLUSTER FACTS</strong>.</li>
+                <li>Logs y eventos recientes del pod, en bloques aparte (<strong>RECENT LOGS / EVENTS</strong>): texto observado, separado de los hechos sellados.</li>
                 <li>La <em>confianza</em> se deriva del cluster, no del modelo.</li>
               </ul>
               <p class="note">En el ejemplo: <strong>100% grounded del cluster</strong>; el modelo decía 65%. Fail-soft: si el <code>kubectl</code> falla, nunca bloquea el pipeline.</p>
@@ -287,7 +287,7 @@ def slides() -> list[str]:
           </div>
           <div class="cols2">
             <div class="card green"><h3>Re-sourcing: el modelo propone, el motor dispone</h3><ul><li>El motor <strong>sella</strong> name/ns/container con la verdad del cluster.</li><li>Sintetiza el comando (determinista, reversible por snapshot).</li><li><strong>Hoy el auto ejecuta un único caso: subir el límite de <code>memory</code> de un Deployment</strong> (CPU tras un flag, apagado). Todo lo demás escala o sugiere.</li></ul></div>
-            <div class="card red"><h3>Lo bloqueado o escalado</h3><ul><li>Comandos destructivos o desconocidos (blacklist regex).</li><li>Target fantasma o <code>kind≠Deployment</code> → escala (regla 4.7).</li><li>Cooldown por workload: un patch por ventana (corta el patch-storm).</li></ul></div>
+            <div class="card red"><h3>Lo bloqueado o escalado</h3><ul><li>Comandos destructivos o desconocidos (blacklist regex).</li><li>Target fantasma o <code>kind≠Deployment</code> → escala (regla 4.7).</li><li>Cooldown por workload: un patch por ventana (corta el patch-storm).</li><li>Pre-flight de permisos en lo free-text (<code>kubectl auth can-i</code>): lo que RBAC deniega se ofrece como sugerencia, nunca como botón que fallaría al ejecutar.</li></ul></div>
           </div>
           <p class="note"><strong>El criterio del auto no es la alerta, es el arreglo</strong> — y exige tres cosas a la vez: target <strong>confirmable</strong> desde el cluster, acción <strong>acotada y reversible</strong>, y resultado <strong>verificable</strong> (<code>cured</code>/<code>rolled_back</code>). Hoy solo subir un límite de memoria cumple las tres; lo que falla una pata, escala.</p>
         </section>""",
@@ -304,8 +304,9 @@ def slides() -> list[str]:
                 <li>El veredicto <code>cured</code> / <code>rolled_back</code> re-marca el doc en ChromaDB.</li>
                 <li>Los fracasos se conservan como <em>conocimiento negativo</em> <strong>recuperable</strong> (medido: Capa A).</li>
                 <li><strong>Paridad humano/auto</strong>: aprobar en Mattermost alimenta el mismo bucle.</li>
+                <li>Y las alertas que se resuelven sin veredicto también cuentan: correlación por fingerprint &rarr; outcome <code>resolved_observed</code> + MTTR observado.</li>
               </ul>
-              <p class="note">Validado E2E en cluster (06-jul): <code>aiops_feedback_verdict_total{{outcome="cured"}}=1</code>. Cuantificado el 08-jul (slide siguiente): la memoria emerge a la clase correcta; que el modelo la <em>explote</em> es otra historia.</p>
+              <p class="note">Validado E2E en cluster (06-jul): <code>aiops_feedback_verdict_total{{outcome="cured"}}=1</code>. Cuantificado el 08-jul (más adelante): la memoria emerge a la clase correcta.</p>
             </div>
           </div>
         </section>""",
@@ -366,7 +367,7 @@ def slides() -> list[str]:
               <p class="note">Las tres respuestas, idénticas: el modelo pequeño <strong>ignora</strong> lo que pasó antes.</p>
             </div>
           </div>
-          <p class="note"><strong>Y por eso el diseño es el correcto:</strong> la seguridad no depende de que el modelo recuerde sus fracasos &mdash; la impone el motor. Anoté este resultado (incluido que saliera &laquo;no&raquo;) <em>antes</em> de medirlo: un resultado honesto vale más que uno bonito.</p>
+          <p class="note"><strong>Y por eso el diseño es el correcto:</strong> la seguridad no depende de que el modelo recuerde sus fracasos &mdash; la impone el motor. El resultado (incluido el &laquo;no&raquo;) quedó pre-registrado antes de la medición.</p>
         </section>""",
 
         # 9 · Seguridad de plataforma
@@ -386,18 +387,6 @@ def slides() -> list[str]:
           <p class="note"><b>MTTD pipeline</b> (firing → webhook) es de segundos. El <b>MTTR</b> está dominado por el <strong>hardware</strong> — el LLM 1.5b en CPU tarda ~150-270 s —, no por el sistema. Los 4 experimentos escalan a humano: esperado por los gates de seguridad.</p>
         </section>""",
 
-        # 11 · Auditoría honesta — el foso
-        f"""<section class="slide">
-          <h2>Auditoría honesta: {STATS['audit_before']} → {STATS['audit_after']}</h2>
-          <p class="quote">Encontré tres razones para rechazar mi propio sistema. Las cerré.</p>
-          <div class="cols3">
-            <div class="card red"><h3>Auth fail-open</h3><p>Un secret vacío dejaba pasar remediación no autenticada. Ahora rechaza (401) con <code>DRY_RUN=false</code>.</p></div>
-            <div class="card red"><h3>Rollback volátil</h3><p>Un reinicio a mitad de ventana dejaba el patch aplicado para siempre. Ahora se persiste en Redis y se re-arma.</p></div>
-            <div class="card red"><h3>Grounding ausente</h3><p>El LLM inventaba el valor actual. Ahora el snapshot del cluster sella la identidad y el valor.</p></div>
-          </div>
-          <p class="note">Me auditué el proyecto con lente de arquitecto senior: la nota pasó de {STATS['audit_before']} a {STATS['audit_after']} cerrando 3 P0 + hallazgos F-xx. Prefiero enseñar eso a esconderlo.</p>
-        </section>""",
-
         # 12 · Observabilidad
         f"""<section class="slide">
           <h2>Observabilidad del propio sistema</h2>
@@ -408,14 +397,14 @@ def slides() -> list[str]:
           <div class="chips">
             <span class="chip">aiops_diagnosis_total</span><span class="chip">aiops_enrichment_total</span>
             <span class="chip">aiops_queue_* (cola F2)</span><span class="chip">aiops_feedback_verdict_total</span>
-            <span class="chip">aiops_chaos_* (MTTD/MTTR)</span>
+            <span class="chip">aiops_chaos_* (MTTD/MTTR)</span><span class="chip">aiops_incident_resolution_* (MTTR observado)</span>
           </div>
           <p class="note">Cada decisión del pipeline emite métrica: grounding, cola, remediación, veredicto. Zero black-box.</p>
         </section>""",
 
         # 13 · Evidencia en cluster
         """<section class="slide">
-          <h2>Evidencia en cluster (no en la teoría)</h2>
+          <h2>Evidencia en cluster</h2>
           <div class="cols2">
             <div class="card green"><h3>Grounding real (04-jul)</h3><ul><li><code>current_value=32Mi</code> vino del snapshot, no del LLM (<code>grounded=1.0</code>).</li><li>Safety cap 4.6: el LLM pidió 512Mi (16×). El motor no lo recortó ni lo aplicó solo: lo escaló a un humano, que aprobó subir a 512Mi.</li></ul></div>
             <div class="card blue"><h3>Ciclo completo (06-jul)</h3><ul><li>Human-in-the-loop E2E: approve HMAC OK → patch persiste.</li><li>Arco <code>cured</code> completo → doc ChromaDB re-marcado + métrica.</li></ul></div>
@@ -425,13 +414,13 @@ def slides() -> list[str]:
 
         # 14 · Límites honestos + qué quedaría por hacer
         """<section class="slide">
-          <h2>Límites honestos, y qué quedaría por comprobar</h2>
+          <h2>Límites conocidos, y qué quedaría por comprobar</h2>
           <div class="cols2">
             <div class="card red"><h3>Latencia = techo de hardware</h3><p>qwen2.5:1.5b en CPU ~150-270 s. El pipeline detecta en segundos; el diagnóstico lo limita el hardware, no el diseño. Palanca: GPU o modelo desplegable mayor.</p></div>
-            <div class="card orange"><h3>Durabilidad de Redis</h3><p>El estado vive en Redis, pero sin AOF+PVC no sobrevive a la pérdida del pod. No reclamo durabilidad fuerte sobre memoria volátil: es trabajo pendiente (F-06).</p></div>
+            <div class="card orange"><h3>Durabilidad de Redis</h3><p>El estado vive en Redis, pero sin AOF+PVC no sobrevive a la pérdida del pod. Trabajo pendiente (F-06).</p></div>
             <div class="card orange"><h3>Dataset acotado</h3><p>N=15 alertas: suficiente para validar el filtro R1, corto para afirmar estadística. Ampliar a 30-50.</p></div>
-            <div class="card blue"><h3>El modelo pequeño no explota la memoria</h3><p>Medido (Capa B): el 1.5b ignora la etiqueta <code>cured</code>/<code>rolled_back</code>. El bucle guarda y recupera el conocimiento negativo, pero explotarlo pide un modelo mayor o un guard en el motor. Lo digo, no lo escondo.</p></div>
-            <div class="card orange"><h3>Fuera de memoria: seguro y con contexto ✓, curación no medida</h3><p>Para CrashLoop/ImagePull/HighCPU está medido que el runbook recuperado es el correcto (p@1 100%) y que los comandos son seguros (100% SAFE) — <strong>no</strong> que el fix sugerido cure. Safety ≠ correctness; solo memoria está validado E2E como <code>cured</code>.</p></div>
+            <div class="card blue"><h3>El modelo pequeño no explota la memoria</h3><p>Medido (Capa B): el 1.5b ignora la etiqueta <code>cured</code>/<code>rolled_back</code>. El bucle guarda y recupera el conocimiento negativo, pero explotarlo pide un modelo mayor o un guard en el motor.</p></div>
+            <div class="card orange"><h3>Fuera de memoria: seguro y con contexto ✓, curación no medida</h3><p>Para CrashLoop/ImagePull/HighCPU está medido que el runbook recuperado es el correcto (p@1 100%) y que los comandos son seguros (100% SAFE) — <strong>no</strong> que el fix sugerido cure. Safety ≠ correctness; solo memoria está validado E2E como <code>cured</code>. El bucle observacional ya da un outcome (<code>resolved_observed</code> + MTTR) a estas clases — pendiente de validar en cluster.</p></div>
           </div>
           <p class="note">Si la idea mereciera seguir, el paso natural sería probarla sobre alertas reales de un equipo y ver si de verdad ahorra tiempo. Hoy es una hipótesis, no una promesa.</p>
         </section>""",
@@ -439,11 +428,11 @@ def slides() -> list[str]:
         # 15 · Cierre
         f"""<section class="slide">
           <h2>Cierre</h2>
-          <p class="quote">El cluster informa, el modelo razona, el motor dispone. Un prototipo construido despacio, con la seguridad y la honestidad sobre lo que hace (y lo que no) como principio.</p>
+          <p class="quote">El cluster informa, el modelo razona, el motor dispone. Un prototipo construido despacio y con la seguridad como principio.</p>
           <div class="statrow">
             <div class="stat"><b>{STATS['runbooks']}</b><span>runbooks RAG</span></div>
             <div class="stat"><b>{STATS['tests']}</b><span>tests (verde)</span></div>
-            <div class="stat"><b>{STATS['audit_before']}→{STATS['audit_after']}</b><span>nota de auditoría</span></div>
+            <div class="stat"><b>{STATS['chaos_experiments']}</b><span>experimentos chaos E2E</span></div>
             <div class="stat"><b>{STATS['p1_after']}</b><span>precision@1 retrieval</span></div>
           </div>
         </section>""",
@@ -454,13 +443,12 @@ GUION = [
     ("1. Apertura", "Abre sin disculpas pero sin humos: es un prototipo de prácticas, una prueba de concepto para ver si la idea es viable. La tesis 'el cluster informa, el modelo razona, el motor dispone' es el hilo. Lo construí y lo validé en un cluster real."),
     ("2. El problema", "Enmarca la pregunta que quisiste explorar: cuando salta una alerta, el contexto está disperso. ¿Puede un LLM ayudar a juntarlo y proponer el arreglo sin ser una caja negra con permisos? No vendas dolor de negocio: cuenta por qué te pareció interesante."),
     ("3. Las tres capas", "Este es el hilo conductor. Cada capa desconfía de la anterior: el grounding aporta hechos del cluster, el LLM razona sobre ellos, el motor re-fuente y decide. El LLM nunca ejecuta."),
-    ("4. Grounding", "Insiste en el keystone: el valor actual y la identidad del workload vienen del snapshot de kubectl, no del modelo. Enseña la captura del 100% grounded frente al 65% del modelo."),
-    ("5. Motor y seguridad", "Explica el re-sourcing: el motor sella la identidad, acota el cambio a ≤2× y decide auto/escalar/sugerir. Auth fail-closed, cooldown por workload, rollback durable en Redis."),
-    ("6. Aprendizaje", "El bucle está cerrado y validado: el veredicto cured re-marca el doc en ChromaDB, y aprobar en Mattermost alimenta el mismo bucle (paridad humano/auto)."),
+    ("4. Grounding", "Insiste en el keystone: el valor actual y la identidad del workload vienen del snapshot de kubectl, no del modelo. Enseña la captura del 100% grounded frente al 65% del modelo. Nuevo (F-17): el snapshot también trae logs recientes (con --previous si el contenedor murió — ahí está la traza del OOM) y eventos del pod, en bloques separados de los hechos estructurados para no diluir su autoridad."),
+    ("5. Motor y seguridad", "Explica el re-sourcing: el motor sella la identidad, acota el cambio a ≤2× y decide auto/escalar/sugerir. Auth fail-closed, cooldown por workload, rollback durable en Redis. Nuevo (C-07): los comandos free-text se pre-vuelan con kubectl auth can-i — lo que RBAC deniega se ofrece como sugerencia sin botón (factibilidad ≠ seguridad, sin ampliar permisos)."),
+    ("6. Aprendizaje", "El bucle está cerrado y validado: el veredicto cured re-marca el doc en ChromaDB, y aprobar en Mattermost alimenta el mismo bucle (paridad humano/auto). Nuevo (R5, en código): las alertas resolved se correlan por fingerprint con su incidente → outcome resolved_observed + métrica de MTTR para los casos sin veredicto. Señal débil que nunca pisa la fuerte del rollback."),
     ("6·b. El arco en movimiento (la demo)", "Aquí está la demo. Es un replay real del run del 06-jul, no una simulación — dilo explícitamente. Deja correr la animación sola; si necesitas repetirla, retrocede una slide y avanza. Narra las 6 etapas al ritmo en que aparecen: alerta, grounding, LLM, motor que sella y escala, approve humano, veredicto cured. Mensaje: cada capa desconfía de la anterior y el LLM nunca ejecuta."),
     ("6·c. ¿Sirve la memoria? (dos preguntas)", "Cuéntalo como dos preguntas encadenadas. Primera: ¿encuentra casos pasados parecidos? Sí — de 0% a 46.7%: sin memoria no rescata nada, con ella acierta el tipo la mitad de las veces. Segunda: ¿le hace caso el modelo? No, a este tamaño — le di el mismo aviso OOM tres veces (sin memoria / recordando que subir memoria NO funcionó / recordando que SÍ funcionó) y propuso lo mismo las tres. Remátalo: y por eso el diseño es correcto — la seguridad la pone el motor, no la memoria del modelo. Y lo escribí antes de medir, incluido que saliera 'no'. Un resultado honesto vale más que uno bonito."),
-    ("7. Auditoría honesta", "Este es el foso. Cuenta que una auto-auditoría subió la nota de 5.9 a 7.1 cerrando 3 P0 (auth, rollback, grounding). Madurez sobre features vistosas."),
-    ("8. Límites y cierre", "Sé concreto con los límites: latencia = techo de hardware, durabilidad de Redis pendiente (F-06), dataset N=15, y el borde de la remediación: fuera de memoria está medido que el contexto es correcto y los comandos seguros, NO que el fix cure (safety ≠ correctness). Apóyate en el criterio de las tres patas de la slide del motor: confirmable + acotado/reversible + verificable — solo memoria cumple las tres hoy, y por eso solo eso es auto. Di, sin sobrevenderlo, que si mereciera seguir el paso natural sería probarlo sobre alertas reales y medir si ahorra tiempo — hoy es una hipótesis. Cierra con la tesis y los 621 tests. La credibilidad sube al decir dónde están los bordes."),
+    ("7. Límites y cierre", "Sé concreto con los límites: latencia = techo de hardware, durabilidad de Redis pendiente (F-06), dataset N=15, y el borde de la remediación: fuera de memoria está medido que el contexto es correcto y los comandos seguros, NO que el fix cure (safety ≠ correctness). Apóyate en el criterio de las tres patas de la slide del motor: confirmable + acotado/reversible + verificable — solo memoria cumple las tres hoy, y por eso solo eso es auto. Di, sin sobrevenderlo, que si mereciera seguir el paso natural sería probarlo sobre alertas reales y medir si ahorra tiempo — hoy es una hipótesis. Cierra con la tesis y los 681 tests. La credibilidad sube al decir dónde están los bordes."),
 ]
 
 QA = [
@@ -473,8 +461,9 @@ QA = [
     ("¿Reclamas durabilidad con el estado en Redis?", "No del todo, y lo digo abiertamente. El estado (escalaciones, rollback) se persiste en Redis y se re-arma al reinicio, pero sin AOF+PVC no sobrevive a la pérdida del pod. Es el hallazgo F-06 del backlog: o lo endurezco con AOF+PVC o degrado el claim. Prefiero no reclamar durabilidad fuerte sobre memoria volátil."),
     ("El ×2 era tu regla de seguridad. ¿No la rompe aprobar un 16×?", "No, porque el ×2 no es un techo absoluto: es la frontera de lo que el sistema hace SOLO. Cambios de hasta ×2 se aplican en automático; cualquier salto mayor no lo ejecuta la máquina, lo manda a un humano con el comando ya preparado. En el run el pod moría con 32Mi —un límite irrisorio—; recortarlo a 64Mi casi seguro volvería a petar, así que una persona miró el contexto y aprobó 512Mi. La regla hizo justo su trabajo: impedir que la máquina hiciera un 16× a la callada. Como refinamiento, la escalación podría además sugerir el valor conservador (×2) como opción por defecto — está en el backlog."),
     ("¿Por qué en automático solo remedia memoria? ¿No es muy poco?", "Es poco a propósito, y el criterio es explícito: una acción solo entra en el camino auto si cumple tres condiciones a la vez — el target se puede confirmar desde el cluster (el seal), la acción es acotada y reversible (≤2×, snapshot de rollback), y el resultado es verificable (cured/rolled_back). Subir un límite de memoria cumple las tres. Un CrashLoop de config no cumple la primera, y para casi nada no-memoria existe hoy una acción acotada genérica. Antes de ampliar el catálogo, lo honesto es ampliar la medición: extender el veredicto a las remediaciones humanas por clase, y promover a auto solo lo que demuestre curar."),
-    ("¿Los comandos que sugiere para un CrashLoop o un ImagePull funcionan?", "Lo que está medido: el runbook recuperado es el correcto (p@1 100%) y los comandos son 100% SAFE frente al 25% de zero-shot. Lo que NO está medido es que ese fix cure — safety no es correctness, y solo memoria está validada E2E como cured. Además esos comandos son texto libre del LLM, no sellados por el motor, y hoy no hay pre-flight de permisos (está en backlog: anotarlos con kubectl auth can-i antes de mostrarlos). Por eso ese camino nunca es auto: es asistencia al humano, y lo presento como tal."),
-    ("Si el sistema propone factible pero no seguro, ¿qué gana?", "La seguridad. La capa de validación valida seguridad, no factibilidad — que kubectl top diera Forbidden por least-privilege no es una vía para saltarse un gate. Ante la duda, escala al humano con el comando ya preparado."),
+    ("¿Los comandos que sugiere para un CrashLoop o un ImagePull funcionan?", "Lo que está medido: el runbook recuperado es el correcto (p@1 100%) y los comandos son 100% SAFE frente al 25% de zero-shot. Lo que NO está medido es que ese fix cure — safety no es correctness, y solo memoria está validada E2E como cured. Además esos comandos son texto libre del LLM, no sellados por el motor; pasan un pre-flight de permisos (kubectl auth can-i) y los que RBAC deniega se muestran como sugerencia sin botón, en vez de fallar al ejecutar. Por eso ese camino nunca es auto: es asistencia al humano, y lo presento como tal."),
+    ("Si el sistema no ejecuta la mayoría de fixes, ¿cómo sabe si lo que sugirió funcionó?", "Con dos señales de distinta fuerza. La fuerte: el veredicto del rollback (cured/rolled_back), que el motor verifica mirando la salud real del pod — solo existe en el camino auto/approve. La observacional (R5): cuando Alertmanager manda el resolved, se correla por fingerprint con el incidente que lo disparó → métrica de tiempo de resolución y outcome resolved_observed para los que no tenían veredicto. Es señal débil (la causa no está verificada: pudo arreglarlo un humano o auto-sanarse) y por eso nunca pisa a la fuerte — pero da un outcome real y barato para todas las clases de alerta, no solo memoria."),
+    ("Si el sistema propone factible pero no seguro, ¿qué gana?", "La seguridad. La capa de validación valida seguridad, no factibilidad — que kubectl top diera Forbidden por least-privilege no es una vía para saltarse un gate. La factibilidad se comprueba aparte: antes de ofrecer botones, cada comando free-text se pre-vuela con kubectl auth can-i y lo denegado se muestra como sugerencia — sin ampliar RBAC. Ante la duda, escala al humano con el comando ya preparado."),
     ("¿Esto toca producción real?", "Es un cluster GKE real del proyecto, no docker-compose, con observabilidad y CI reales. Los fallos se inyectan en un namespace aislado (arturo-chaos) y toda la escritura está acotada a arturo-* sin ClusterRoles de escritura, para no afectar a nadie más en el cluster compartido."),
     ("¿Por qué no usar Datadog u otra herramienta comercial?", "Existen y para muchos casos serían la respuesta. Yo no intentaba competir con ellas: quería explorar como ejercicio si se podía hacer algo self-hosted, con el LLM local (los datos no salen del cluster) y una capa de decisión que fuera código propio y auditable. El valor era sobre todo aprender construyéndolo."),
     ("¿Esto ahorra tiempo/dinero? ¿Tienes ROI?", "No, y no voy a inventarlo: es un prototipo de prácticas. Lo que sí tengo instrumentado son las métricas para medirlo (tiempo de diagnóstico, % de alertas pre-diagnosticadas) si algún día se probara con alertas reales. Prometer un número hoy sería deshonesto."),
