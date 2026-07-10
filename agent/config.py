@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     remediation_rollback_timeout: int = 300  # seconds to wait before evaluating rollback
     remediation_rollback_grace: int = 30     # seconds for pod rollout before health check
     remediation_cooldown_seconds: int = 600  # per-workload auto-remediation cooldown (> rollback window: one auto patch per workload per window, breaks patch loops)
+    # R5 (observational learning loop): how long an active incident stays correlatable
+    # by fingerprint so a later Alertmanager `resolved` can close it (outcome
+    # resolved_observed + MTTR metric). Generous — an alert may take a while to clear;
+    # on expiry we simply lose the resolution signal (fail-open).
+    incident_correlation_ttl_seconds: int = 3600
 
     # Enrichment (v2 Eje A / P0·1 — grounding) — gather de estado K8s ANTES del LLM.
     # "El cluster informa, el modelo razona": current_value/target salen del snapshot,

@@ -38,6 +38,7 @@ from rag import (
     make_incident_doc_id, incident_worth_ingesting, COLLECTION_INCIDENTS,
     INCIDENT_OUTCOME_PENDING, INCIDENT_OUTCOME_CURED,
     INCIDENT_OUTCOME_ROLLED_BACK, INCIDENT_OUTCOME_ROLLBACK_FAILED,
+    INCIDENT_OUTCOME_RESOLVED_OBSERVED,
 )
 from diagnosis import generate_diagnosis
 from remediation import (
@@ -49,6 +50,7 @@ from remediation import (
 from enrichment import gather_incident_context
 from utils import backoff_delay
 from escalation_store import store_escalation, get_escalation, delete_escalation, count_escalations
+from incident_index import record_active_incident, pop_active_incident
 from rollback_store import store_rollback, delete_rollback, list_rollbacks
 from streams import (
     enqueue_alert, ensure_group, consume_loop, reclaim_pending, QUEUE_PROCESSED,
@@ -86,7 +88,23 @@ FEEDBACK_COUNTER = Counter(
 FEEDBACK_VERDICT_COUNTER = Counter(
     "aiops_feedback_verdict_total",
     "Incident outcomes re-upserted after the rollback verdict",
-    ["outcome"],  # "cured" | "rolled_back" | "rollback_failed"
+    ["outcome"],  # "cured" | "rolled_back" | "rollback_failed" | "resolved_observed"
+)
+
+# R5 (observational loop): the "did it ever clear, and how long did it take?" signal.
+# Fed by Alertmanager `resolved` alerts correlated back to their firing incident by
+# fingerprint. Closes the loop for EVERY alert class, including the non-auto ones the
+# rollback verdict never sees (escalated / suggested-only).
+INCIDENT_RESOLUTION_COUNTER = Counter(
+    "aiops_incident_resolution_total",
+    "Resolved alerts correlated back to a firing incident",
+    ["correlated"],  # "hit" (matched an active incident) | "miss" (no active incident)
+)
+INCIDENT_RESOLUTION_HISTOGRAM = Histogram(
+    "aiops_incident_resolution_seconds",
+    "Seconds from incident ingest to the matching Alertmanager `resolved` alert",
+    ["error_class"],
+    buckets=[60, 180, 300, 600, 1800, 3600],
 )
 
 # ── Métricas Chaos Engineering ───────────────────────────────────────────────
@@ -257,6 +275,54 @@ async def _reupsert_incident_outcome(ctx: RollbackContext, outcome: str) -> None
         FEEDBACK_VERDICT_COUNTER.labels(outcome=outcome).inc()
     except Exception as exc:
         logger.warning("Failed to re-upsert incident verdict %s: %s", ctx.doc_id, exc)
+        FEEDBACK_COUNTER.labels(outcome="verdict_failed").inc()
+
+
+async def _correlate_resolution(fingerprint: str) -> None:
+    """R5 (observational loop): an Alertmanager `resolved` alert arrived — close the
+    matching active incident. Always emits the resolution-time metric on a hit; for
+    incidents the auto rollback loop does NOT own (awaits_verdict=False) it also
+    re-upserts the ChromaDB doc as resolved_observed. Fail-open: any error is swallowed
+    so the resolved-alert webhook is never affected."""
+    record = await pop_active_incident(fingerprint, app.state.redis)
+    if record is None:
+        INCIDENT_RESOLUTION_COUNTER.labels(correlated="miss").inc()
+        return
+    INCIDENT_RESOLUTION_COUNTER.labels(correlated="hit").inc()
+
+    error_class = record.get("error_class", "unknown")
+    elapsed: float | None
+    try:
+        elapsed = max(0.0, time.time() - float(record.get("started_at", 0)))
+        INCIDENT_RESOLUTION_HISTOGRAM.labels(error_class=error_class).observe(elapsed)
+    except (TypeError, ValueError):
+        elapsed = None
+
+    # The rollback verdict owns the outcome for auto-remediated incidents (cured /
+    # rolled_back). A weaker observational signal must never overwrite it, so R5 only
+    # writes an outcome for incidents that never entered that loop.
+    if record.get("awaits_verdict"):
+        return
+    doc_id = record.get("doc_id")
+    metadata = record.get("metadata")
+    text = record.get("text")
+    if not (doc_id and metadata and text):
+        return
+    try:
+        metadata = {**metadata, "outcome": INCIDENT_OUTCOME_RESOLVED_OBSERVED}
+        note = (
+            f"Resolution: alert cleared after {int(elapsed)}s (observed via Alertmanager resolved)"
+            if elapsed is not None
+            else "Resolution: alert cleared (observed via Alertmanager resolved)"
+        )
+        await ingest_incident(
+            doc_id=doc_id, text=f"{text}\n{note}", metadata=metadata,
+            http_client=app.state.http_client,
+            chroma_client=app.state.chroma_client,
+        )
+        FEEDBACK_VERDICT_COUNTER.labels(outcome=INCIDENT_OUTCOME_RESOLVED_OBSERVED).inc()
+    except Exception as exc:
+        logger.warning("Failed to re-upsert resolved incident %s: %s", doc_id, exc)
         FEEDBACK_COUNTER.labels(outcome="verdict_failed").inc()
 
 
@@ -682,6 +748,14 @@ def _extract_alert_meta(alert: AlertItem) -> tuple[str, str, str, str]:
     )
 
 
+def _alert_fingerprint(alert: AlertItem) -> str:
+    """Correlation key shared by the firing (enqueue dedup + R5 index) and resolved
+    (R5 close-out) paths. Single source so the two sides never diverge — a mismatch
+    would silently break resolution correlation."""
+    _, alert_name, pod, namespace = _extract_alert_meta(alert)
+    return f"{alert_name}:{namespace}:{pod}"
+
+
 def _format_diagnosis_message(
     alert: AlertItem,
     diagnosis: dict | None,
@@ -995,6 +1069,23 @@ async def _process_alert_with_diagnosis(
                     http_client=http_client, chroma_client=chroma_client,
                 )
                 FEEDBACK_COUNTER.labels(outcome="persisted").inc()
+                # R5: index the active incident by fingerprint so a later Alertmanager
+                # `resolved` can close it. awaits_verdict=rollback_scheduled → the
+                # rollback loop owns the outcome (resolution only emits the metric,
+                # never overwrites cured/rolled_back).
+                await record_active_incident(
+                    _alert_fingerprint(alert),
+                    {
+                        "doc_id": doc_id,
+                        "error_class": metadata["error_class"],
+                        "started_at": time.time(),
+                        "awaits_verdict": rollback_scheduled,
+                        "text": text,
+                        "metadata": metadata,
+                    },
+                    settings.incident_correlation_ttl_seconds,
+                    redis_client,
+                )
             except Exception as exc:
                 logger.warning("Failed to persist incident for %s: %s", alert_name, exc)
                 FEEDBACK_COUNTER.labels(outcome="failed").inc()
@@ -1137,8 +1228,7 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
                 logger.error("Cannot enqueue alert %s — Redis unavailable", alert_name)
                 WEBHOOK_COUNTER.labels(status="error").inc()
                 raise HTTPException(status_code=503, detail="alert queue unavailable")
-            _, _, pod, namespace = _extract_alert_meta(alert)
-            fingerprint = f"{alert_name}:{namespace}:{pod}"
+            fingerprint = _alert_fingerprint(alert)
             try:
                 entry_id = await enqueue_alert(
                     app.state.redis, alert.model_dump_json(), fingerprint,
@@ -1154,10 +1244,12 @@ async def handle_alert_webhook(payload: AlertmanagerPayload, background_tasks: B
                 )
                 DEDUP_COUNTER.labels(alertname=alert_name).inc()
         else:
-            # Resolved alerts: simple notification, no diagnosis needed
+            # Resolved alerts: notify + R5 close-out (correlate by fingerprint back to
+            # the firing incident → resolution metric + resolved_observed outcome).
             severity, _, pod, namespace = _extract_alert_meta(alert)
             msg = f"🟢 **[RESOLVED] [{severity}] {alert_name}** | Pod: `{pod}` | NS: `{namespace}`"
             background_tasks.add_task(send_mattermost_alert, msg)
+            background_tasks.add_task(_correlate_resolution, _alert_fingerprint(alert))
         
     WEBHOOK_COUNTER.labels(status="success").inc()
     return {
@@ -1279,6 +1371,11 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
                     remediation=remediation_for_feedback,
                 )
                 rollback_scheduled = True
+                # R5: the rollback verdict now owns this incident's outcome (the doc was
+                # indexed as awaits_verdict=False at escalate/diagnosis time). Drop the
+                # observational entry so a later `resolved` can't overwrite the
+                # cured/rolled_back verdict with the weaker resolved_observed.
+                await pop_active_incident(_alert_fingerprint(incident.alert_item), app.state.redis)
         except Exception as exc:
             logger.error("Command execution failed for incident %s: %s", incident.incident_id, exc)
             log = f"ERROR: {exc}"

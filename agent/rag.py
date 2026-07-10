@@ -241,6 +241,11 @@ INCIDENT_OUTCOME_PENDING = "auto_pending"       # patch applied, verdict not yet
 INCIDENT_OUTCOME_CURED = "cured"                # pod healthy after the wait window
 INCIDENT_OUTCOME_ROLLED_BACK = "rolled_back"    # still failing → reverted
 INCIDENT_OUTCOME_ROLLBACK_FAILED = "rollback_failed"  # unhealthy AND revert failed
+# R5 (observational loop): the alert stopped firing (Alertmanager `resolved`) for an
+# incident that did NOT enter the auto rollback loop (escalated / suggested-only). A
+# real, cheap outcome for every alert class — the cause is unverified (human, self-heal)
+# so it is weaker than `cured`, but far better than a stuck-provisional precedent.
+INCIDENT_OUTCOME_RESOLVED_OBSERVED = "resolved_observed"
 
 
 def make_incident_doc_id(alertname: str) -> str:
