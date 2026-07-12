@@ -356,6 +356,119 @@ def validate_commands(commands: list[str]) -> list[dict]:
     return results
 
 
+# ── C-07: feasibility pre-flight (factibilidad ≠ seguridad) ───────────────────
+# La validation layer clasifica `kubectl top pod` como SAFE (read-only), pero bajo
+# least-privilege la SA no tiene `metrics.k8s.io` → Forbidden al ejecutar. Un pre-flight
+# `kubectl auth can-i` mueve el fallo de "ejecutar-y-fallar" a "sugerir sin permiso".
+# Solo aplica al camino free-text (comandos del LLM ofrecidos en la escalación); el
+# comando estructurado del motor es determinista y conocido-ejecutable → nunca pasa por aquí.
+
+# Recursos cluster-scoped → `auth can-i` sin `-n`.
+_CLUSTER_SCOPED_RESOURCES = frozenset({
+    "node", "nodes", "namespace", "namespaces", "pv", "persistentvolume",
+    "persistentvolumes", "clusterrole", "clusterroles", "nodes.metrics.k8s.io",
+})
+
+
+def auth_can_i_args(cmd: str) -> tuple[str, str, bool] | None:
+    """Map a read-only kubectl command to (verb, resource, cluster_scoped) for
+    `kubectl auth can-i`, or None when the command needs no RBAC check (e.g. version)
+    or cannot be parsed (→ caller assumes executable, fail-open).
+
+    Deliberately narrow: only the SAFE command shapes (describe/get/logs/top/version).
+    `top pod` maps to the metrics.k8s.io resource — the exact command that classifies
+    SAFE yet is Forbidden under least-privilege.
+    """
+    if not isinstance(cmd, str) or not cmd.strip():
+        return None
+    try:
+        tokens = shlex.split(cmd.strip())
+    except ValueError:
+        return None
+    if len(tokens) < 2 or tokens[0] != "kubectl":
+        return None
+
+    sub = tokens[1]
+    # Positional resource = first non-flag token after the subcommand.
+    rest = [t for t in tokens[2:] if not t.startswith("-")]
+    resource = rest[0].lower() if rest else ""
+
+    if sub == "version":
+        return None  # server version needs no RBAC
+    if sub == "logs":
+        return ("get", "pods", False)  # pods/log subresource ≈ get pods
+    if sub == "top":
+        if resource in ("node", "nodes"):
+            return ("get", "nodes.metrics.k8s.io", True)
+        return ("get", "pods.metrics.k8s.io", False)  # default: pod metrics
+    if sub in ("describe", "get"):
+        if not resource:
+            return None
+        return ("get", resource, resource in _CLUSTER_SCOPED_RESOURCES)
+    return None
+
+
+async def check_command_executable(cmd: str, namespace: str | None) -> bool:
+    """Pre-flight a free-text command with `kubectl auth can-i`. Returns False ONLY on an
+    explicit "no" (RBAC denies it); True otherwise — unparseable, no-RBAC-needed, or any
+    error/timeout (fail-open: never block a command just because the check itself failed)."""
+    mapped = auth_can_i_args(cmd)
+    if mapped is None:
+        return True
+    verb, resource, cluster_scoped = mapped
+
+    args = ["auth", "can-i", verb, resource]
+    if not cluster_scoped and namespace:
+        args += ["-n", namespace]
+
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "kubectl", *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, _ = await asyncio.wait_for(
+            proc.communicate(), timeout=settings.enrichment_timeout,
+        )
+    except asyncio.CancelledError:
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        raise
+    except Exception as exc:
+        if proc is not None:
+            try:
+                proc.kill()
+                await proc.communicate()
+            except Exception:
+                pass
+        logger.warning("auth can-i exception (assuming executable)", extra={"cmd_args": args, "error": str(exc)})
+        return True
+
+    verdict = stdout_bytes.decode(errors="replace").strip().lower()
+    # Only a clear "no" downgrades the command; anything else stays executable (fail-open).
+    return verdict != "no"
+
+
+async def partition_by_permission(
+    commands: list[str], namespace: str | None,
+) -> tuple[list[str], list[str]]:
+    """Split free-text commands into (executable, denied) via check_command_executable.
+    Order-preserving. A denied command is one RBAC explicitly refuses — surfaced to the
+    human as a suggestion instead of being offered for approval (and failing on run)."""
+    executable: list[str] = []
+    denied: list[str] = []
+    for cmd in commands:
+        if await check_command_executable(cmd, namespace):
+            executable.append(cmd)
+        else:
+            denied.append(cmd)
+    return executable, denied
+
+
 def is_structured_remediation(diagnosis: dict) -> bool:
     """True if proposed_action is a bounded, reversible, engine-authorable limit raise.
 
@@ -402,6 +515,51 @@ def is_structured_remediation(diagnosis: dict) -> bool:
     if current_amount <= 0:
         return False
     return new_amount > current_amount
+
+
+def structured_command_variants(diagnosis: dict) -> list[dict]:
+    """Approvable command variants for a structured escalation (C-08).
+
+    A structured remediation escalates (instead of auto-remediating) chiefly via rule 4.6:
+    the model proposed new_value > 2×current. There the human is the arbiter between two
+    well-formed, engine-built commands — the interactive form of "el modelo propone, el
+    motor dispone":
+      - "engine": the deterministic 2×current bound (safe, recommended — shown first)
+      - "model":  the model's proposed value (the overshoot the tutor rule flagged)
+
+    Each variant carries the callback `action` used to sign its button (`approve_engine` /
+    `approve_model` — distinct HMAC per command, so the choice can't be flipped in transit).
+
+    Returns [] when the diagnosis isn't a structured remediation. Returns a single "model"
+    variant under the legacy `approve` action when the two values coincide (the common
+    auto-capped case: new_value already == 2×current) or the current value can't be doubled
+    — the caller then renders one approve button exactly as before (back-compat).
+    """
+    if not is_structured_remediation(diagnosis):
+        return []
+    pa = diagnosis["proposed_action"]
+
+    def _cmd(value: str) -> str:
+        return build_set_resources_command(
+            pa["name"], pa["namespace"], pa["container"], pa["field"], value,
+        )
+
+    model_value = pa["new_value"]
+    single = [{"id": "model", "action": "approve", "value": model_value, "command": _cmd(model_value)}]
+
+    engine_value = _double_limit_value(pa.get("current_value", ""))
+    parser = _LIMIT_FIELD_PARSERS.get(pa.get("field"))
+    if engine_value is None or parser is None:
+        return single
+    try:
+        if parser(engine_value) == parser(model_value):
+            return single  # no distinct safe alternative — one button, as before
+    except ValueError:
+        return single
+    return [
+        {"id": "engine", "action": "approve_engine", "value": engine_value, "command": _cmd(engine_value)},
+        {"id": "model", "action": "approve_model", "value": model_value, "command": _cmd(model_value)},
+    ]
 
 
 def seal_proposed_action(diagnosis: dict, snapshot) -> None:

@@ -121,13 +121,31 @@ def format_cluster_facts(snapshot) -> str:
         rendered = ", ".join(f"{k}={v}" for k, v in limits.items())
         lines.append(f"- container '{container}' limits: {rendered}")
 
-    if not lines:
+    # F-17: free-text signals — the LLM reasons over these in language (never executed).
+    # Rendered as separate blocks so structured facts stay unambiguous above.
+    events = getattr(snapshot, "recent_events", None) or []
+    logs_tail = getattr(snapshot, "logs_tail", None)
+
+    if not lines and not events and not logs_tail:
         return ""
 
-    return (
-        "\n--- CLUSTER FACTS (observed, authoritative — trust over your own guesses) ---\n"
-        + "\n".join(lines) + "\n"
-    )
+    block = ""
+    if lines:
+        block += (
+            "\n--- CLUSTER FACTS (observed, authoritative — trust over your own guesses) ---\n"
+            + "\n".join(lines) + "\n"
+        )
+    if events:
+        block += (
+            "\n--- RECENT EVENTS (observed, newest last) ---\n"
+            + "\n".join(f"- {e}" for e in events) + "\n"
+        )
+    if logs_tail:
+        block += (
+            "\n--- RECENT LOGS (pod log tail, observed) ---\n"
+            + logs_tail + "\n"
+        )
+    return block
 
 
 def build_alert_text(alert_labels: dict, alert_annotations: dict, status: str) -> str:

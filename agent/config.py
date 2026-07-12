@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # no del modelo. Fail-soft: si falla, se degrada a diagnóstico LLM-only.
     enrichment_enabled: bool = True
     enrichment_timeout: int = 10  # segundos por query kubectl (corto; best-effort, no crítico)
+    # F-17: logs+events del pod al snapshot/prompt — el 1er uso genuinamente NUEVO del LLM
+    # (razona sobre lenguaje libre, cero ejecución). Acotados para no inflar el prompt ni
+    # el gasto del token budget; fail-soft como el resto del gather.
+    enrichment_log_tail_lines: int = 20    # nº de líneas de `kubectl logs --tail`
+    enrichment_log_max_chars: int = 2000   # cap duro del blob de logs en el prompt
+    enrichment_events_limit: int = 5       # nº de eventos recientes del pod
 
     # Human escalation callback URL (Fase 3 — botones interactivos Mattermost)
     # URL base del agente accesible desde Mattermost (intra-cluster FQDN)

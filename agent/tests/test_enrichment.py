@@ -19,6 +19,8 @@ from enrichment import (
     IncidentSnapshot,
     _controller_owner,
     _kubectl_json,
+    _gather_logs,
+    _gather_events,
     _select_container,
     gather_incident_context,
 )
@@ -316,3 +318,135 @@ class TestControllerOwner:
     def test_none_or_empty(self):
         assert _controller_owner(None) is None
         assert _controller_owner([]) is None
+
+
+# ── F-17: logs + events (free-text signals for the LLM) ───────────────────────
+
+class TestGatherLogs:
+    """_gather_logs: --previous on a crashed container, fallback to current, caps."""
+
+    def _snap(self, **kw) -> IncidentSnapshot:
+        return IncidentSnapshot(namespace="ns", pod="p", container="app", **kw)
+
+    @pytest.mark.asyncio
+    async def test_current_logs_when_no_crash(self, monkeypatch):
+        calls = []
+        async def fake_text(*args):
+            calls.append(list(args))
+            return "line1\nline2\n"
+        monkeypatch.setattr("enrichment._kubectl_text", fake_text)
+        out = await _gather_logs(self._snap(restart_count=0, last_state_reason=None))
+        assert out == "line1\nline2"
+        assert "--previous" not in calls[0]
+        assert "-c" in calls[0] and "app" in calls[0]
+
+    @pytest.mark.asyncio
+    async def test_previous_logs_when_crashed(self, monkeypatch):
+        calls = []
+        async def fake_text(*args):
+            calls.append(list(args))
+            return "crash trace"
+        monkeypatch.setattr("enrichment._kubectl_text", fake_text)
+        out = await _gather_logs(self._snap(last_state_reason="OOMKilled", restart_count=3))
+        assert out == "crash trace"
+        assert "--previous" in calls[0]
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_current_when_previous_absent(self, monkeypatch):
+        results = [None, "current logs"]
+        calls = []
+        async def fake_text(*args):
+            calls.append(list(args))
+            return results.pop(0)
+        monkeypatch.setattr("enrichment._kubectl_text", fake_text)
+        out = await _gather_logs(self._snap(last_state_reason="Error", restart_count=1))
+        assert out == "current logs"
+        assert "--previous" in calls[0] and "--previous" not in calls[1]
+
+    @pytest.mark.asyncio
+    async def test_capped_to_max_chars(self, monkeypatch):
+        monkeypatch.setattr("enrichment.settings.enrichment_log_max_chars", 10)
+        async def fake_text(*args):
+            return "x" * 100
+        monkeypatch.setattr("enrichment._kubectl_text", fake_text)
+        out = await _gather_logs(self._snap(restart_count=0))
+        assert len(out) == 10
+
+    @pytest.mark.asyncio
+    async def test_none_when_blank_or_failed(self, monkeypatch):
+        async def fake_blank(*args):
+            return "   \n  "
+        monkeypatch.setattr("enrichment._kubectl_text", fake_blank)
+        assert await _gather_logs(self._snap(restart_count=0)) is None
+
+        async def fake_none(*args):
+            return None
+        monkeypatch.setattr("enrichment._kubectl_text", fake_none)
+        assert await _gather_logs(self._snap(restart_count=0)) is None
+
+
+class TestGatherEvents:
+    """_gather_events: newest-last render, limit, fail-soft."""
+
+    def _snap(self) -> IncidentSnapshot:
+        return IncidentSnapshot(namespace="ns", pod="p", container="app")
+
+    @pytest.mark.asyncio
+    async def test_rendered_newest_last(self, monkeypatch):
+        events = {"items": [
+            {"type": "Normal", "reason": "Scheduled", "message": "assigned to node"},
+            {"type": "Warning", "reason": "BackOff", "message": "Back-off restarting"},
+        ]}
+        async def fake_json(*args):
+            return events
+        monkeypatch.setattr("enrichment._kubectl_json", fake_json)
+        out = await _gather_events(self._snap())
+        assert out == ["Normal/Scheduled: assigned to node",
+                       "Warning/BackOff: Back-off restarting"]
+
+    @pytest.mark.asyncio
+    async def test_limit_keeps_last_n(self, monkeypatch):
+        monkeypatch.setattr("enrichment.settings.enrichment_events_limit", 2)
+        events = {"items": [{"type": "Normal", "reason": str(i), "message": f"m{i}"}
+                            for i in range(5)]}
+        async def fake_json(*args):
+            return events
+        monkeypatch.setattr("enrichment._kubectl_json", fake_json)
+        assert await _gather_events(self._snap()) == ["Normal/3: m3", "Normal/4: m4"]
+
+    @pytest.mark.asyncio
+    async def test_skips_blank_messages(self, monkeypatch):
+        events = {"items": [{"type": "Normal", "reason": "X", "message": "  "},
+                            {"type": "Warning", "reason": "Y", "message": "real"}]}
+        async def fake_json(*args):
+            return events
+        monkeypatch.setattr("enrichment._kubectl_json", fake_json)
+        assert await _gather_events(self._snap()) == ["Warning/Y: real"]
+
+    @pytest.mark.asyncio
+    async def test_failsoft_returns_empty(self, monkeypatch):
+        async def fake_json(*args):
+            return None
+        monkeypatch.setattr("enrichment._kubectl_json", fake_json)
+        assert await _gather_events(self._snap()) == []
+
+
+class TestGatherWiresLogsAndEvents:
+    """gather_incident_context populates logs_tail + recent_events end-to-end."""
+
+    @pytest.mark.asyncio
+    async def test_snapshot_carries_logs_and_events(self, monkeypatch):
+        monkeypatch.setattr("enrichment.settings.enrichment_enabled", True)
+        pod = _pod_json(  # bare pod, single container, no crash
+            containers=[_spec_container("app", memory="256Mi")],
+            statuses=[{"name": "app", "restartCount": 0}],
+        )
+        events = {"items": [{"type": "Warning", "reason": "BackOff", "message": "restarting"}]}
+        pod_proc = _make_proc(stdout=json.dumps(pod).encode(), returncode=0)
+        logs_proc = _make_proc(stdout=b"boom\n", returncode=0)
+        events_proc = _make_proc(stdout=json.dumps(events).encode(), returncode=0)
+        side = AsyncMock(side_effect=[pod_proc, logs_proc, events_proc])
+        with patch("enrichment.asyncio.create_subprocess_exec", new=side):
+            snap = await gather_incident_context({"namespace": "ns", "pod": "p"})
+        assert snap.logs_tail == "boom"
+        assert snap.recent_events == ["Warning/BackOff: restarting"]

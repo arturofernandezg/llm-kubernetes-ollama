@@ -209,6 +209,30 @@ class TestFormatClusterFacts:
         snap = IncidentSnapshot(namespace="arturo-x", pod="p", gather_ok=True)
         assert format_cluster_facts(snap) == ""
 
+    def test_renders_events_and_logs(self):
+        """F-17: recent events + log tail get their own labelled blocks."""
+        snap = IncidentSnapshot(
+            namespace="arturo-x", pod="p", gather_ok=True, container="app",
+            phase="Running",
+            recent_events=["Warning/BackOff: Back-off restarting failed container"],
+            logs_tail="Traceback (most recent call last):\nMemoryError",
+        )
+        out = format_cluster_facts(snap)
+        assert "RECENT EVENTS" in out
+        assert "Back-off restarting failed container" in out
+        assert "RECENT LOGS" in out
+        assert "MemoryError" in out
+
+    def test_events_or_logs_alone_still_render(self):
+        """Free-text signals are enough on their own — no structured facts required."""
+        snap = IncidentSnapshot(
+            namespace="arturo-x", pod="p", gather_ok=True,
+            logs_tail="OOM kill",
+        )
+        out = format_cluster_facts(snap)
+        assert "RECENT LOGS" in out
+        assert "CLUSTER FACTS" not in out  # nothing structured to show
+
 
 # ── generate_diagnosis tests ──────────────────────────────────────────────────
 

@@ -103,47 +103,48 @@ async def send_escalation_with_buttons(
     callback_base_url: str,
     channel: str | None = None,
     webhook_secret: str = "",
+    approve_variants: list[dict[str, str]] | None = None,
 ) -> bool:
     """
     Envía mensaje Mattermost con botones interactivos Aprobar/Rechazar.
     Mattermost llamará a {callback_base_url}/webhook/action cuando el usuario
     haga clic, con el incident_id en el contexto para identificar la escalación.
+
+    C-08: `approve_variants` (cada uno {"action", "label"}) renderiza un botón de
+    aprobación por variante — el humano arbitra entre el valor del modelo y la ×2
+    determinista del motor. Cada botón firma su propia `action` (HMAC distinto por
+    comando). Sin `approve_variants` → un único botón "Ejecutar remediación" (back-compat).
     """
     if len(attachment_text) > _MAX_TEXT_LENGTH:
         attachment_text = attachment_text[:_MAX_TEXT_LENGTH] + "…"
     action_url = f"{callback_base_url}/webhook/action"
+
+    def _button(action: str, label: str) -> dict[str, Any]:
+        return {
+            "id": action,
+            "name": label,
+            "integration": {
+                "url": action_url,
+                "context": {
+                    "action": action,
+                    "incident_id": incident_id,
+                    "hmac_token": make_hmac_token(incident_id, action, webhook_secret) if webhook_secret else None,
+                },
+            },
+        }
+
+    if approve_variants:
+        approve_buttons = [_button(v["action"], v["label"]) for v in approve_variants]
+    else:
+        approve_buttons = [_button("approve", _BTN_APPROVE_LABEL)]
+
     payload: dict[str, Any] = {
         "text": header,
         "attachments": [
             {
                 "color": _ATTACHMENT_COLOUR,
                 "text": attachment_text,
-                "actions": [
-                    {
-                        "id": "approve",
-                        "name": _BTN_APPROVE_LABEL,
-                        "integration": {
-                            "url": action_url,
-                            "context": {
-                                "action": "approve",
-                                "incident_id": incident_id,
-                                "hmac_token": make_hmac_token(incident_id, "approve", webhook_secret) if webhook_secret else None,
-                            },
-                        },
-                    },
-                    {
-                        "id": "reject",
-                        "name": _BTN_REJECT_LABEL,
-                        "integration": {
-                            "url": action_url,
-                            "context": {
-                                "action": "reject",
-                                "incident_id": incident_id,
-                                "hmac_token": make_hmac_token(incident_id, "reject", webhook_secret) if webhook_secret else None,
-                            },
-                        },
-                    },
-                ],
+                "actions": approve_buttons + [_button("reject", _BTN_REJECT_LABEL)],
             }
         ],
     }

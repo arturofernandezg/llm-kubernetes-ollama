@@ -41,6 +41,9 @@ class IncidentSnapshot:
     workload_kind: str | None = None    # Deployment | StatefulSet | DaemonSet
     workload_name: str | None = None
     match_labels: dict[str, str] = field(default_factory=dict)
+    # F-17: free-text signals for the LLM to reason over (language only, never executed).
+    logs_tail: str | None = None            # last N log lines (--previous if the container died)
+    recent_events: list[str] = field(default_factory=list)  # "Type/Reason: message" per event
     gather_ok: bool = False
 
     def current_limit(self, container: str | None = None, resource: str = "memory") -> str | None:
@@ -98,6 +101,96 @@ async def _kubectl_json(*args: str) -> dict | None:
     except (ValueError, UnicodeDecodeError) as exc:
         logger.warning("enrichment: kubectl output not JSON", extra={"cmd_args": list(args), "error": str(exc)})
         return None
+
+
+async def _kubectl_text(*args: str) -> str | None:
+    """Run `kubectl <args>` and return stdout as text. Fail-soft — returns None, never raises.
+
+    Sibling of _kubectl_json for commands whose output is not JSON (logs). Same safe
+    argv invocation, short timeout, and child reaping on failure/timeout.
+    """
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "kubectl", *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=settings.enrichment_timeout,
+        )
+    except asyncio.CancelledError:
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        raise
+    except Exception as exc:
+        if proc is not None:
+            try:
+                proc.kill()
+                await proc.communicate()
+            except Exception:
+                pass
+        logger.warning("enrichment: kubectl text exception", extra={"cmd_args": list(args), "error": str(exc)})
+        return None
+
+    if proc.returncode != 0:
+        logger.info(
+            "enrichment: kubectl text non-zero",
+            extra={"cmd_args": list(args), "stderr": stderr_bytes.decode(errors="replace").strip()[:200]},
+        )
+        return None
+
+    return stdout_bytes.decode(errors="replace")
+
+
+async def _gather_logs(snapshot: IncidentSnapshot) -> str | None:
+    """Best-effort `kubectl logs --tail`, capped in lines and chars. Uses --previous when
+    the container last terminated (OOM/crash) — that is where the useful trace lives, the
+    fresh container often logs nothing. Fail-soft: returns None, never raises."""
+    args = [
+        "logs", snapshot.pod, "-n", snapshot.namespace,
+        f"--tail={settings.enrichment_log_tail_lines}",
+    ]
+    if snapshot.container:
+        args += ["-c", snapshot.container]
+    # A recorded termination reason (or a restart) means the current container is a fresh
+    # replacement — the crash trace is in the previous instance.
+    if snapshot.last_state_reason or (snapshot.restart_count or 0) > 0:
+        args.append("--previous")
+
+    text = await _kubectl_text(*args)
+    if text is None and "--previous" in args:
+        # No previous container (e.g. first crash not yet restarted) → fall back to current.
+        args.remove("--previous")
+        text = await _kubectl_text(*args)
+    if not text or not text.strip():
+        return None
+    return text.strip()[-settings.enrichment_log_max_chars:]
+
+
+async def _gather_events(snapshot: IncidentSnapshot) -> list[str]:
+    """Best-effort recent Kubernetes events for the pod, newest last, as "Type/Reason: message"
+    strings. Fail-soft: returns [] on any failure."""
+    events_json = await _kubectl_json(
+        "get", "events", "-n", snapshot.namespace,
+        "--field-selector", f"involvedObject.name={snapshot.pod}",
+        "--sort-by=.lastTimestamp", "-o", "json",
+    )
+    if not events_json:
+        return []
+    items = events_json.get("items", []) or []
+    rendered: list[str] = []
+    for ev in items[-settings.enrichment_events_limit:]:
+        reason = ev.get("reason", "")
+        etype = ev.get("type", "")
+        message = (ev.get("message", "") or "").strip()
+        if not message:
+            continue
+        rendered.append(f"{etype}/{reason}: {message}" if (etype or reason) else message)
+    return rendered
 
 
 def _container_states(pod_json: dict) -> dict[str, dict]:
@@ -235,6 +328,11 @@ async def gather_incident_context(labels: dict[str, str]) -> IncidentSnapshot:
 
     await _resolve_workload(snapshot, pod_json)
 
+    # F-17: free-text signals (logs + events) for the LLM. Best-effort — each is fail-soft
+    # on its own; a failure leaves the field empty and never blocks the gather.
+    snapshot.logs_tail = await _gather_logs(snapshot)
+    snapshot.recent_events = await _gather_events(snapshot)
+
     logger.info(
         "enrichment: snapshot gathered",
         extra={
@@ -242,6 +340,7 @@ async def gather_incident_context(labels: dict[str, str]) -> IncidentSnapshot:
             "phase": snapshot.phase, "restart_count": snapshot.restart_count,
             "last_state_reason": snapshot.last_state_reason,
             "workload_kind": snapshot.workload_kind, "workload_name": snapshot.workload_name,
+            "has_logs": snapshot.logs_tail is not None, "events_count": len(snapshot.recent_events),
         },
     )
     return snapshot

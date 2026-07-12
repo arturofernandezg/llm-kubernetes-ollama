@@ -32,7 +32,11 @@ from remediation import (
     parse_cpu_to_millicores,
     implies_pod_restart,
     is_structured_remediation,
+    structured_command_variants,
     build_set_resources_command,
+    auth_can_i_args,
+    check_command_executable,
+    partition_by_permission,
     seal_proposed_action,
     derive_confidence,
     ground_confidence,
@@ -2214,3 +2218,163 @@ class TestProcessRemediationStructuredCommand:
         monkeypatch.setattr("remediation.settings.remediation_enabled", True)
         result = await process_remediation(mock_diagnosis_result())
         assert result["structured_command"] is None
+
+
+# ── C-08: model-vs-engine command variants for a structured escalation ────────
+
+class TestStructuredCommandVariants:
+    """structured_command_variants offers the human the model value AND the ×2 bound."""
+
+    def _diag(self, current_value: str, new_value: str) -> dict:
+        return {"proposed_action": {
+            "kind": "Deployment", "name": "engine", "namespace": "arturo-prod",
+            "container": "app", "field": "resources.limits.memory",
+            "current_value": current_value, "new_value": new_value,
+        }}
+
+    def test_two_variants_when_model_overshoots(self):
+        # OOM at 32Mi, model proposes 512Mi (16×) → escalated by rule 4.6. Human arbitrates.
+        variants = structured_command_variants(self._diag("32Mi", "512Mi"))
+        assert [v["id"] for v in variants] == ["engine", "model"]  # engine (safe) first
+        assert [v["action"] for v in variants] == ["approve_engine", "approve_model"]
+        assert variants[0]["value"] == "64Mi"    # deterministic 2×current
+        assert variants[1]["value"] == "512Mi"   # the model's proposal
+        assert variants[0]["command"] == (
+            "kubectl set resources deployment engine -n arturo-prod "
+            "--containers=app --limits=memory=64Mi"
+        )
+        assert variants[1]["command"].endswith("--limits=memory=512Mi")
+
+    def test_single_variant_when_model_equals_double(self):
+        # Model already at exactly 2×current → no distinct safe alternative → one button.
+        variants = structured_command_variants(self._diag("256Mi", "512Mi"))
+        assert len(variants) == 1
+        assert variants[0]["id"] == "model"
+        assert variants[0]["action"] == "approve"   # legacy single-button action
+        assert variants[0]["value"] == "512Mi"
+
+    def test_single_variant_when_current_not_doubleable(self):
+        # current_value the memory parser accepts ("1e3Mi" → 1000Mi) but the quantity
+        # regex of _double_limit_value rejects → no engine ×2 → single model button.
+        # (A fully unparseable current like "weird" never gets here: it already fails
+        # is_structured_remediation → [] — covered by test_empty_when_not_structured.)
+        d = self._diag("512Mi", "1Gi")
+        d["proposed_action"]["current_value"] = "1e3Mi"
+        variants = structured_command_variants(d)
+        assert len(variants) == 1
+        assert variants[0]["action"] == "approve"
+
+    def test_empty_when_not_structured(self):
+        # Lowering a limit is not a structured remediation → no variants at all.
+        assert structured_command_variants(self._diag("512Mi", "256Mi")) == []
+        # Foreign namespace (outside the arturo- allow-list) is not structured either.
+        d = self._diag("32Mi", "512Mi")
+        d["proposed_action"]["namespace"] = "kube-system"
+        assert structured_command_variants(d) == []
+
+
+# ── C-07: feasibility pre-flight (kubectl auth can-i) ─────────────────────────
+
+def _canari_proc(stdout: bytes, returncode: int = 0):
+    proc = MagicMock()
+    proc.returncode = returncode
+    proc.communicate = AsyncMock(return_value=(stdout, b""))
+    proc.kill = MagicMock()
+    return proc
+
+
+class TestAuthCanIArgs:
+    """auth_can_i_args maps a SAFE command to (verb, resource, cluster_scoped) or None."""
+
+    def test_top_pod_maps_to_metrics_resource(self):
+        assert auth_can_i_args("kubectl top pod engine -n arturo-x") == ("get", "pods.metrics.k8s.io", False)
+
+    def test_top_node_is_cluster_scoped(self):
+        assert auth_can_i_args("kubectl top node") == ("get", "nodes.metrics.k8s.io", True)
+
+    def test_get_pods_namespaced(self):
+        assert auth_can_i_args("kubectl get pods -n arturo-x") == ("get", "pods", False)
+
+    def test_describe_maps_to_get(self):
+        assert auth_can_i_args("kubectl describe deployment web") == ("get", "deployment", False)
+
+    def test_get_nodes_cluster_scoped(self):
+        assert auth_can_i_args("kubectl get nodes") == ("get", "nodes", True)
+
+    def test_logs_maps_to_pods(self):
+        assert auth_can_i_args("kubectl logs engine-pod -n x") == ("get", "pods", False)
+
+    def test_version_needs_no_check(self):
+        assert auth_can_i_args("kubectl version") is None
+
+    def test_unchecked_shapes_return_none(self):
+        assert auth_can_i_args("kubectl set resources deployment web ...") is None
+        assert auth_can_i_args("helm install foo") is None
+        assert auth_can_i_args("") is None
+        assert auth_can_i_args("kubectl get") is None  # no resource
+
+
+class TestCheckCommandExecutable:
+    @pytest.mark.asyncio
+    async def test_explicit_no_is_denied(self):
+        with patch("remediation.asyncio.create_subprocess_exec",
+                   new=AsyncMock(return_value=_canari_proc(b"no\n", returncode=1))):
+            assert await check_command_executable("kubectl top pod p -n x", "x") is False
+
+    @pytest.mark.asyncio
+    async def test_yes_is_executable(self):
+        with patch("remediation.asyncio.create_subprocess_exec",
+                   new=AsyncMock(return_value=_canari_proc(b"yes\n", returncode=0))):
+            assert await check_command_executable("kubectl get pods -n x", "x") is True
+
+    @pytest.mark.asyncio
+    async def test_uncheckable_command_skips_kubectl(self):
+        exec_mock = AsyncMock()
+        with patch("remediation.asyncio.create_subprocess_exec", new=exec_mock):
+            assert await check_command_executable("kubectl version", "x") is True
+        exec_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_subprocess_error_is_fail_open(self):
+        with patch("remediation.asyncio.create_subprocess_exec",
+                   new=AsyncMock(side_effect=OSError("no kubectl"))):
+            assert await check_command_executable("kubectl top pod p -n x", "x") is True
+
+    @pytest.mark.asyncio
+    async def test_cluster_scoped_omits_namespace(self):
+        captured = {}
+        async def fake_exec(*args, **kwargs):
+            captured["args"] = args
+            return _canari_proc(b"yes\n", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=fake_exec):
+            await check_command_executable("kubectl top node", "arturo-x")
+        assert "-n" not in captured["args"]
+        assert "nodes.metrics.k8s.io" in captured["args"]
+
+    @pytest.mark.asyncio
+    async def test_namespaced_includes_namespace(self):
+        captured = {}
+        async def fake_exec(*args, **kwargs):
+            captured["args"] = args
+            return _canari_proc(b"yes\n", returncode=0)
+        with patch("remediation.asyncio.create_subprocess_exec", new=fake_exec):
+            await check_command_executable("kubectl top pod p", "arturo-x")
+        assert "-n" in captured["args"] and "arturo-x" in captured["args"]
+
+
+class TestPartitionByPermission:
+    @pytest.mark.asyncio
+    async def test_splits_executable_and_denied(self):
+        async def fake_check(cmd, ns):
+            return "top" not in cmd  # deny top, allow the rest
+        with patch("remediation.check_command_executable", new=fake_check):
+            ok, denied = await partition_by_permission(
+                ["kubectl get pods -n x", "kubectl top pod p -n x"], "x")
+        assert ok == ["kubectl get pods -n x"]
+        assert denied == ["kubectl top pod p -n x"]
+
+    @pytest.mark.asyncio
+    async def test_all_executable(self):
+        with patch("remediation.check_command_executable", new=AsyncMock(return_value=True)):
+            ok, denied = await partition_by_permission(["kubectl get pods"], "x")
+        assert ok == ["kubectl get pods"] and denied == []

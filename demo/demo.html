@@ -80,7 +80,7 @@ td:first-child,th:first-child{text-align:left}
   .shot,.shot.side{max-width:90vw;max-height:42vh}
 }
 </style></head><body><section class="slide">
-          <div class="kicker">Presentación a chapter · MasOrange / Telecable</div>
+          <div class="kicker">MasOrange / Telecable</div>
           <h1>Observz</h1>
           <p class="subtitle">Diagnóstico y remediación asistida de incidencias en Kubernetes</p>
           <p class="quote">El cluster informa, el modelo razona, el motor dispone.</p>
@@ -94,7 +94,6 @@ td:first-child,th:first-child{text-align:left}
             <div class="card orange"><h3>La pregunta</h3><p>¿Puede un LLM ayudar a juntar ese contexto y proponer el arreglo, sin convertirse en una caja negra con permisos sobre el cluster?</p></div>
             <div class="card blue"><h3>Restricciones del entorno</h3><p>Datos dentro del cluster, sin API externa y con recursos limitados. Quería ver si el enfoque era viable en esas condiciones, no en un notebook.</p></div>
           </div>
-          <p class="note">El objetivo no era un producto: era una prueba de concepto para ver si la idea merecería desarrollarse.</p>
         </section>
 <section class="slide">
           <h2>La idea, y por qué ahora</h2>
@@ -240,7 +239,8 @@ td:first-child,th:first-child{text-align:left}
 <section class="slide">
           <h2>Validación E2E con chaos engineering</h2>
           <table><tr><th>Experimento</th><th>for:</th><th>MTTD pipeline</th><th>MTTR pipeline</th><th>conf.</th><th>outcome</th><th>T_detect</th></tr><tr><td>OOMKilled</td><td>0m</td><td>5.0 s</td><td>205.4 s</td><td>0.95</td><td><span class='pill warn'>escalate</span></td><td>39 s</td></tr><tr><td>CrashLoopBackOff</td><td>5m</td><td>5.0 s</td><td>205.7 s</td><td>0.95</td><td><span class='pill warn'>escalate</span></td><td>195 s</td></tr><tr><td>ImagePullBackOff</td><td>1m</td><td>5.1 s</td><td>252.1 s</td><td>0.80</td><td><span class='pill warn'>escalate</span></td><td>171 s</td></tr><tr><td>HighCPU</td><td>5m</td><td>10.1 s</td><td>206.7 s</td><td>0.00</td><td><span class='pill warn'>suggest_only</span></td><td>609 s</td></tr></table>
-          <p class="note"><b>MTTD pipeline</b> (firing → webhook) es de segundos. El <b>MTTR</b> está dominado por el <strong>hardware</strong> — el LLM 1.5b en CPU tarda ~150-270 s —, no por el sistema. Los 4 experimentos escalan a humano: esperado por los gates de seguridad.</p>
+          <div class="card green" style="margin-top:1rem"><h3>Arco completo de remediación — validado E2E (06-jul)</h3><p>La tabla mide <strong>detección</strong> (MTTD/MTTR del pipeline). El arco de <strong>remediación</strong> es otra medición: OOMKilled 32Mi &rarr; escalate (cap 4.6) &rarr; approve humano &rarr; patch 512Mi &rarr; +300 s sano &rarr; <span class="pill ok">cured</span> · <code>aiops_feedback_verdict_total{outcome="cured"}=1</code>.</p></div>
+          <p class="note"><b>MTTD pipeline</b> (firing → webhook) es de segundos. El <b>MTTR</b> está dominado por el <strong>hardware</strong> — el LLM 1.5b en CPU tarda ~150-270 s —, no por el sistema. Los 4 experimentos escalan o sugieren por los gates de seguridad; el arco completo cierra en <code>cured</code>.</p>
         </section>
 <section class="slide">
           <h2>Observabilidad del propio sistema</h2>

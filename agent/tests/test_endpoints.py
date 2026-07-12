@@ -601,6 +601,65 @@ class TestWebhookWithDiagnosis:
         sent_msg = mock_mm.call_args[0][0]
         assert "OOMKilled" in sent_msg
 
+    def test_escalate_all_denied_becomes_suggestion(self, api_client):
+        """C-07: an ESCALATE whose only command is RBAC-denied → no buttons, shown as suggestion."""
+        from remediation import RemediationAction
+        alert = AlertItem(**FIRING_PAYLOAD["alerts"][0])
+        denied = "kubectl top pod engine-pod -n arturo-x"
+        remediation_result = {
+            "action": RemediationAction.ESCALATE, "execution_log": "",
+            "blocked_commands": [], "safe_commands": [denied], "structured_command": None,
+        }
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value=remediation_result), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.partition_by_permission", new=AsyncMock(return_value=([], [denied]))), \
+             patch("main.send_escalation_with_buttons", new_callable=AsyncMock) as mock_buttons, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock) as mock_mm:
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client(), AsyncMock())
+            )
+
+        mock_buttons.assert_not_called()
+        mock_mm.assert_called_once()
+        sent = mock_mm.call_args[0][0]
+        assert "no tiene permisos" in sent and "top pod" in sent
+
+    def test_escalate_partial_denied_filters_approvable(self, api_client):
+        """C-07: a denied command is dropped from the approvable set; the OK one keeps its buttons."""
+        from remediation import RemediationAction
+        alert = AlertItem(**FIRING_PAYLOAD["alerts"][0])
+        ok_cmd = "kubectl get pods -n arturo-x"
+        denied = "kubectl top pod engine-pod -n arturo-x"
+        remediation_result = {
+            "action": RemediationAction.ESCALATE, "execution_log": "",
+            "blocked_commands": [], "safe_commands": [ok_cmd, denied], "structured_command": None,
+        }
+        with patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=mock_diagnosis_result()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value=remediation_result), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.store_escalation", new=AsyncMock(return_value=True)) as mock_store, \
+             patch("main.partition_by_permission", new=AsyncMock(return_value=([ok_cmd], [denied]))), \
+             patch("main.send_escalation_with_buttons", new_callable=AsyncMock) as mock_buttons, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            import asyncio
+            from main import _process_alert_with_diagnosis
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client(), AsyncMock())
+            )
+
+        mock_buttons.assert_called_once()
+        body = mock_buttons.call_args.kwargs["attachment_text"]
+        assert "get pods" in body                       # approvable
+        assert "no tiene permisos" in body and "top pod" in body  # denied as suggestion
+        # the persisted escalation carries ONLY the approvable command
+        stored_payload = mock_store.call_args[0][1]
+        assert stored_payload["safe_commands"] == [ok_cmd]
+
 
 class TestFormatDiagnosisMessage:
     """Tests de _format_diagnosis_message()."""
@@ -890,6 +949,127 @@ class TestActionCallbackEndpoint:
                 "context": {"action": "reject", "incident_id": "hmac-005"},
             })
         assert r.status_code == 200
+
+
+class TestCommandVariantEscalation:
+    """C-08: a structured escalation with model overshoot offers two engine-built buttons."""
+
+    def setup_method(self):
+        self.fake_redis = FakeRedis()
+        app.state.redis = self.fake_redis
+
+    def teardown_method(self):
+        app.state.redis = None
+
+    def _structured_diagnosis(self):
+        d = mock_diagnosis_result()
+        d["proposed_action"] = {
+            "kind": "Deployment", "name": "engine", "namespace": "arturo-x",
+            "container": "app", "field": "resources.limits.memory",
+            "current_value": "32Mi", "new_value": "512Mi",  # 16× → escalated by rule 4.6
+        }
+        return d
+
+    def test_structured_escalation_offers_model_and_engine_buttons(self, api_client):
+        from remediation import RemediationAction
+        from enrichment import IncidentSnapshot
+        alert = AlertItem(**FIRING_PAYLOAD["alerts"][0])
+        model_cmd = ("kubectl set resources deployment engine -n arturo-x "
+                     "--containers=app --limits=memory=512Mi")
+        remediation_result = {
+            "action": RemediationAction.ESCALATE, "execution_log": "",
+            "blocked_commands": [], "safe_commands": [], "structured_command": model_cmd,
+        }
+        # gather returns gather_ok=False → seal leaves the diagnosis untouched (no cluster).
+        no_cluster = IncidentSnapshot(namespace="arturo-x", pod="engine-0")
+        with patch("main.gather_incident_context", new=AsyncMock(return_value=no_cluster)), \
+             patch("main.retrieve_context", new_callable=AsyncMock, return_value=mock_rag_context()), \
+             patch("main.generate_diagnosis", new_callable=AsyncMock, return_value=self._structured_diagnosis()), \
+             patch("main.process_remediation", new_callable=AsyncMock, return_value=remediation_result), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             patch("main.store_escalation", new=AsyncMock(return_value=True)) as mock_store, \
+             patch("main.send_escalation_with_buttons", new_callable=AsyncMock) as mock_buttons, \
+             patch("main.send_mattermost_alert", new_callable=AsyncMock):
+            asyncio.get_event_loop().run_until_complete(
+                _process_alert_with_diagnosis(alert, AsyncMock(), mock_chroma_client(), AsyncMock())
+            )
+
+        mock_buttons.assert_called_once()
+        variants = mock_buttons.call_args.kwargs["approve_variants"]
+        assert [v["action"] for v in variants] == ["approve_engine", "approve_model"]
+        body = mock_buttons.call_args.kwargs["attachment_text"]
+        assert "memory=64Mi" in body and "memory=512Mi" in body  # both candidates shown
+        stored = mock_store.call_args[0][1]
+        assert stored["command_variants"] == {
+            "approve_engine": ("kubectl set resources deployment engine -n arturo-x "
+                               "--containers=app --limits=memory=64Mi"),
+            "approve_model": model_cmd,
+        }
+
+
+class TestCommandVariantCallback:
+    """C-08: the approve handler runs the command bound to the clicked variant button."""
+
+    def setup_method(self):
+        self.fake_redis = FakeRedis()
+        app.state.redis = self.fake_redis
+
+    def teardown_method(self):
+        app.state.redis = None
+
+    def _seed_variant_escalation(self, incident_id):
+        engine_cmd = ("kubectl set resources deployment engine -n arturo-x "
+                      "--containers=app --limits=memory=64Mi")
+        model_cmd = ("kubectl set resources deployment engine -n arturo-x "
+                     "--containers=app --limits=memory=512Mi")
+        alert = AlertItem(
+            status="firing",
+            labels={"alertname": "KubePodOOMKilled", "pod": "engine-0", "namespace": "arturo-x"},
+            annotations={}, startsAt="2026-05-06T10:00:00Z",
+        )
+        esc = PendingEscalation(
+            incident_id=incident_id, alert_item=alert,
+            # No proposed_action → not a structured remediation → no rollback/snapshot path,
+            # isolating the variant-command selection under test.
+            diagnosis={"diagnosis": "OOM", "confidence": 0.9, "risk": "high"},
+            safe_commands=[engine_cmd, model_cmd],
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=60),
+            command_variants={"approve_engine": engine_cmd, "approve_model": model_cmd},
+        )
+        self.fake_redis.set_raw(f"escalation:{incident_id}", json.dumps(_escalation_to_dict(esc)))
+        return engine_cmd, model_cmd
+
+    def test_approve_model_runs_model_command(self, api_client):
+        _, model_cmd = self._seed_variant_escalation("var-model")
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value="[DRY-RUN] done") as mock_exec, \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve_model", "incident_id": "var-model"},
+            })
+        assert r.status_code == 200
+        mock_exec.assert_called_once_with([model_cmd])
+
+    def test_approve_engine_runs_engine_command(self, api_client):
+        engine_cmd, _ = self._seed_variant_escalation("var-engine")
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value="[DRY-RUN] done") as mock_exec, \
+             patch("main.ingest_incident", new_callable=AsyncMock):
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve_engine", "incident_id": "var-engine"},
+            })
+        assert r.status_code == 200
+        mock_exec.assert_called_once_with([engine_cmd])
+
+    def test_variant_hmac_is_bound_per_action(self, api_client):
+        """A token signed for approve_engine must NOT authorize approve_model (integrity)."""
+        self._seed_variant_escalation("var-hmac")
+        engine_token = make_hmac_token("var-hmac", "approve_engine", "test-secret")
+        with patch.object(main.settings, "webhook_secret", "test-secret"):
+            r = api_client.post("/webhook/action", json={
+                "context": {"action": "approve_model", "incident_id": "var-hmac", "hmac_token": engine_token},
+            })
+        assert r.status_code == 401
 
 
 class TestCleanupExpiredEscalations:

@@ -45,7 +45,7 @@ from remediation import (
     process_remediation, execute_commands, results_to_log, RemediationAction,
     capture_pre_patch_value, check_pod_health, revert_patch, PrePatchSnapshot,
     _limit_resource, seal_proposed_action, ground_confidence, is_structured_remediation,
-    acquire_workload_cooldown,
+    acquire_workload_cooldown, partition_by_permission, structured_command_variants,
 )
 from enrichment import gather_incident_context
 from utils import backoff_delay
@@ -174,6 +174,11 @@ class PendingEscalation:
     # with the rollback verdict (make_incident_doc_id embeds time.time() → not
     # reproducible at approve time, minutes later). Empty for pre-R2 escalations.
     incident_doc_id: str = ""
+    # C-08: callback-action → engine-built command for each approve variant
+    # ({"approve_engine": ..., "approve_model": ...} for a two-button choice, or
+    # {"approve": ...} for the single-button case). The approve handler runs the command
+    # keyed by the clicked action; empty for pre-C-08 escalations → falls back to safe_commands.
+    command_variants: dict[str, str] = field(default_factory=dict)
 
 
 # ── Rollback State ────────────────────────────────────────────────────────────
@@ -222,6 +227,7 @@ def _escalation_to_dict(esc: PendingEscalation) -> dict:
         "safe_commands": esc.safe_commands,
         "expires_at": esc.expires_at.isoformat(),
         "incident_doc_id": esc.incident_doc_id,
+        "command_variants": esc.command_variants,
     }
 
 
@@ -234,6 +240,7 @@ def _dict_to_escalation(data: dict) -> PendingEscalation:
         safe_commands=data["safe_commands"],
         expires_at=datetime.fromisoformat(data["expires_at"]),
         incident_doc_id=data.get("incident_doc_id", ""),
+        command_variants=data.get("command_variants", {}),
     )
 
 
@@ -832,8 +839,36 @@ def _format_escalation_header(alert: AlertItem) -> str:
     return f"⚠️ **[{severity}] ESCALATION REQUIRED — {alert_name}** | Pod: `{pod}` | NS: `{namespace}`"
 
 
-def _format_escalation_body(diagnosis: dict, remediation: dict) -> str:
-    """Cuerpo del attachment (sin botones) para el mensaje de escalación."""
+def _variant_button_label(variant: dict) -> str:
+    """Mattermost button label for a C-08 approve variant."""
+    if variant["id"] == "engine":
+        return f"✅ ×2 motor ({variant['value']})"
+    return f"⚠️ Valor modelo ({variant['value']})"
+
+
+def _variant_body_label(variant: dict) -> str:
+    """Attachment-body heading for a C-08 approve variant."""
+    if variant["id"] == "engine":
+        return "**Opción A — ×2 determinista del motor (recomendado, requiere aprobación):**"
+    return "**Opción B — valor propuesto por el modelo (requiere aprobación):**"
+
+
+def _format_escalation_body(
+    diagnosis: dict,
+    remediation: dict,
+    denied_commands: list[str] | None = None,
+    command_variants: list[dict] | None = None,
+) -> str:
+    """Cuerpo del attachment (sin botones) para el mensaje de escalación.
+
+    C-07: los comandos que RBAC deniega (denied_commands) se muestran como *sugerencias*
+    (el agente no puede ejecutarlos) y quedan fuera del set aprobable — evita ofrecer un
+    botón que ejecutaría-y-fallaría (`kubectl top` Forbidden bajo least-privilege).
+
+    C-08: con dos `command_variants` (valor del modelo vs ×2 del motor) el cuerpo muestra un
+    bloque etiquetado por variante para que el humano lea qué ejecuta cada botón.
+    """
+    denied_commands = denied_commands or []
     confidence_pct = int(diagnosis.get("confidence", 0.0) * 100)
     risk = diagnosis.get("risk", "high").upper()
 
@@ -847,15 +882,30 @@ def _format_escalation_body(diagnosis: dict, remediation: dict) -> str:
         conf_line,
     ]
 
-    structured_cmd = remediation.get("structured_command")
-    safe_cmds = [structured_cmd] if structured_cmd else remediation.get("safe_commands", [])
-    if safe_cmds:
-        cmds_str = "\n".join(safe_cmds)
-        label = (
-            "**Comando determinista del motor (requiere aprobación):**"
-            if structured_cmd else "**Comandos propuestos (requieren aprobación):**"
+    if command_variants and len(command_variants) > 1:
+        # C-08: two engine-built candidates — the human arbitrates model vs. deterministic ×2.
+        for v in command_variants:
+            parts.append(f"{_variant_body_label(v)}\n```\n{v['command']}\n```")
+    else:
+        structured_cmd = remediation.get("structured_command")
+        if structured_cmd:
+            approvable = [structured_cmd]
+        else:
+            approvable = [c for c in remediation.get("safe_commands", []) if c not in denied_commands]
+        if approvable:
+            cmds_str = "\n".join(approvable)
+            label = (
+                "**Comando determinista del motor (requiere aprobación):**"
+                if structured_cmd else "**Comandos propuestos (requieren aprobación):**"
+            )
+            parts.append(f"{label}\n```\n{cmds_str}\n```")
+
+    if denied_commands:
+        denied_str = "\n".join(denied_commands)
+        parts.append(
+            "**Comandos sugeridos (el agente no tiene permisos para ejecutarlos):**\n"
+            f"```\n{denied_str}\n```"
         )
-        parts.append(f"{label}\n```\n{cmds_str}\n```")
 
     return "\n".join(parts)
 
@@ -1097,14 +1147,41 @@ async def _process_alert_with_diagnosis(
         # source with the auto path — v2: what the human approves is exactly what runs), never
         # the model's free-text commands.
         structured_cmd = remediation_result.get("structured_command") if remediation_result else None
-        if (
-            remediation_result is not None
-            and remediation_result["action"] == RemediationAction.ESCALATE
-            and (structured_cmd or remediation_result.get("safe_commands"))
-        ):
+        # C-07: for a free-text escalation, pre-flight the commands with `auth can-i` — the
+        # RBAC-denied ones (e.g. `kubectl top`, Forbidden under least-privilege) become
+        # suggestions instead of approvable buttons that would execute-and-fail. The engine's
+        # structured command is deterministic/known-good and skips the check.
+        esc_commands: list[str] = []
+        denied_cmds: list[str] = []
+        # C-08: for a structured escalation, offer the human both engine-built candidates
+        # (deterministic ×2 vs the model's value) as separate approve buttons when they
+        # differ — the interactive "el modelo propone, el motor dispone". One button (as
+        # before) when they coincide. variants carry the callback action for each button.
+        variants: list[dict] = []
+        command_variants: dict[str, str] = {}
+        approve_variants: list[dict[str, str]] | None = None
+        if remediation_result is not None and remediation_result["action"] == RemediationAction.ESCALATE:
+            if structured_cmd:
+                variants = structured_command_variants(diagnosis)
+                if not variants:
+                    # Belt-and-braces: process_remediation derives structured_cmd from this
+                    # same sealed diagnosis, so variants can only be empty if the two ever
+                    # diverge — keep the engine command approvable under the legacy action.
+                    variants = [{"id": "model", "action": "approve", "value": "", "command": structured_cmd}]
+                esc_commands = [v["command"] for v in variants]
+                command_variants = {v["action"]: v["command"] for v in variants}
+                if len(variants) > 1:
+                    approve_variants = [
+                        {"action": v["action"], "label": _variant_button_label(v)} for v in variants
+                    ]
+            elif remediation_result.get("safe_commands"):
+                esc_commands, denied_cmds = await partition_by_permission(
+                    remediation_result["safe_commands"], namespace,
+                )
+
+        if esc_commands:
             incident_id = str(uuid.uuid4())
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=ESCALATION_TTL_MINUTES)
-            esc_commands = [structured_cmd] if structured_cmd else remediation_result["safe_commands"]
             esc = PendingEscalation(
                 incident_id=incident_id,
                 alert_item=alert,
@@ -1112,6 +1189,7 @@ async def _process_alert_with_diagnosis(
                 safe_commands=esc_commands,
                 expires_at=expires_at,
                 incident_doc_id=incident_doc_id or "",
+                command_variants=command_variants,
             )
             ttl_seconds = ESCALATION_TTL_MINUTES * 60
             stored = False
@@ -1125,10 +1203,14 @@ async def _process_alert_with_diagnosis(
                 )
                 await send_escalation_with_buttons(
                     header=_format_escalation_header(alert),
-                    attachment_text=_format_escalation_body(diagnosis, remediation_result),
+                    attachment_text=_format_escalation_body(
+                        diagnosis, remediation_result, denied_commands=denied_cmds,
+                        command_variants=variants,
+                    ),
                     incident_id=incident_id,
                     callback_base_url=settings.agent_callback_url,
                     webhook_secret=settings.webhook_secret,
+                    approve_variants=approve_variants,
                 )
             else:
                 # Redis unavailable — send degraded message without buttons
@@ -1140,6 +1222,14 @@ async def _process_alert_with_diagnosis(
                 await send_mattermost_alert(msg + "\n\n_⚠️ Botones interactivos no disponibles (Redis caído)_")
         else:
             msg = _format_diagnosis_message(alert, diagnosis, remediation_result, llm_timeout=_llm_timeout)
+            # C-07: an ESCALATE whose only commands were RBAC-denied lands here (no approvable
+            # command) — surface them as suggestions so the human still sees what to check.
+            if denied_cmds:
+                denied_str = "\n".join(f"- `{c}`" for c in denied_cmds)
+                msg += (
+                    "\n\n**Comandos sugeridos (el agente no tiene permisos para ejecutarlos):**\n"
+                    + denied_str
+                )
             await send_mattermost_alert(msg)
 
     except Exception as exc:
@@ -1316,7 +1406,15 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
     action = payload.context.action
 
     rollback_scheduled = False
-    if action == "approve":
+    if action in ("approve", "approve_engine", "approve_model"):
+        # C-08: run the command bound to the clicked button. A two-button escalation carries
+        # {approve_engine, approve_model}; a single-button one carries {approve} (or is empty
+        # for a pre-C-08 escalation → fall back to safe_commands). Same target either way —
+        # only the value differs; the rollback safety net (below) is value-agnostic.
+        commands_to_run = (
+            [incident.command_variants[action]]
+            if action in incident.command_variants else incident.safe_commands
+        )
         # Human/auto parity (v2 Eje A): for a structured remediation the stored command IS
         # the engine synthesis, so the human path gets the same safety net as the auto path —
         # pre-patch snapshot (from the sealed target) + scheduled rollback evaluation.
@@ -1327,13 +1425,13 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             except Exception as exc:
                 logger.warning("Pre-patch snapshot failed for %s: %s", incident.incident_id, exc)
         try:
-            execute_results = await execute_commands(incident.safe_commands)
+            execute_results = await execute_commands(commands_to_run)
             log = results_to_log(execute_results)
             REMEDIATION_COUNTER.labels(action="human_approved").inc()
             remediation_for_feedback = {
                 "action": RemediationAction.AUTO_REMEDIATE,
                 "execution_log": log,
-                "safe_commands": incident.safe_commands,
+                "safe_commands": commands_to_run,
                 "blocked_commands": [],
             }
             if (
@@ -1383,7 +1481,7 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             remediation_for_feedback = {
                 "action": RemediationAction.AUTO_REMEDIATE,
                 "execution_log": log,
-                "safe_commands": incident.safe_commands,
+                "safe_commands": commands_to_run,
                 "blocked_commands": [],
             }
         decision_line = f"\n---\n✅ **Remediación APROBADA** por @{user}\n```\n{log}\n```"

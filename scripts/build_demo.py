@@ -21,7 +21,7 @@ TITLE = "Observz"
 SUBTITLE = "Diagnóstico y remediación asistida de incidencias en Kubernetes"
 AUTHOR = "Arturo Fernández"
 DATE = "2026-07-10"
-SUBJECT = "Presentación a chapter · MasOrange / Telecable"
+SUBJECT = "MasOrange / Telecable"
 
 # Fuente única de números — evita el drift de literales dispersos por slides.
 STATS = {
@@ -216,7 +216,6 @@ def slides() -> list[str]:
             <div class="card orange"><h3>La pregunta</h3><p>¿Puede un LLM ayudar a juntar ese contexto y proponer el arreglo, sin convertirse en una caja negra con permisos sobre el cluster?</p></div>
             <div class="card blue"><h3>Restricciones del entorno</h3><p>Datos dentro del cluster, sin API externa y con recursos limitados. Quería ver si el enfoque era viable en esas condiciones, no en un notebook.</p></div>
           </div>
-          <p class="note">El objetivo no era un producto: era una prueba de concepto para ver si la idea merecería desarrollarse.</p>
         </section>""",
 
         # 3 · La idea, y por qué ahora
@@ -384,7 +383,8 @@ def slides() -> list[str]:
         f"""<section class="slide">
           <h2>Validación E2E con chaos engineering</h2>
           {chaos_table()}
-          <p class="note"><b>MTTD pipeline</b> (firing → webhook) es de segundos. El <b>MTTR</b> está dominado por el <strong>hardware</strong> — el LLM 1.5b en CPU tarda ~150-270 s —, no por el sistema. Los 4 experimentos escalan a humano: esperado por los gates de seguridad.</p>
+          <div class="card green" style="margin-top:1rem"><h3>Arco completo de remediación — validado E2E (06-jul)</h3><p>La tabla mide <strong>detección</strong> (MTTD/MTTR del pipeline). El arco de <strong>remediación</strong> es otra medición: OOMKilled 32Mi &rarr; escalate (cap 4.6) &rarr; approve humano &rarr; patch 512Mi &rarr; +300 s sano &rarr; <span class="pill ok">cured</span> · <code>aiops_feedback_verdict_total{{outcome="cured"}}=1</code>.</p></div>
+          <p class="note"><b>MTTD pipeline</b> (firing → webhook) es de segundos. El <b>MTTR</b> está dominado por el <strong>hardware</strong> — el LLM 1.5b en CPU tarda ~150-270 s —, no por el sistema. Los 4 experimentos escalan o sugieren por los gates de seguridad; el arco completo cierra en <code>cured</code>.</p>
         </section>""",
 
         # 12 · Observabilidad
