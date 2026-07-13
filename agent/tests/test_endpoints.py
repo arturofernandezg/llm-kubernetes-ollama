@@ -7,6 +7,7 @@ Todos los tests usan mocks de Ollama (no requieren cluster ni LLM).
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -831,6 +832,47 @@ class TestActionCallbackEndpoint:
         assert "arturo" in body["update"]["message"]
         mock_exec.assert_not_called()
         assert self.fake_redis._store.get("escalation:abc-456") is None
+
+    def test_approve_emits_structured_audit_log(self, api_client, caplog):
+        """Accountability: approve writes a durable audit line attributing WHO + which
+        variant (approve/approve_engine/approve_model) + target — the answer to
+        'anyone in the channel can click ×16': every decision is attributed and logged."""
+        _seed_redis(self.fake_redis, "audit-1")
+
+        with patch("main.execute_commands", new_callable=AsyncMock, return_value="[DRY-RUN] ok"), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             caplog.at_level(logging.INFO, logger="aiops_agent"):
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "approve", "incident_id": "audit-1"},
+            })
+
+        assert r.status_code == 200
+        audit = [rec for rec in caplog.records if getattr(rec, "audit", None) == "human_decision"]
+        assert len(audit) == 1
+        rec = audit[0]
+        assert rec.decision == "approve"
+        assert rec.action == "approve"
+        assert rec.approved_by == "arturo"
+        assert rec.incident_id == "audit-1"
+
+    def test_reject_emits_structured_audit_log(self, api_client, caplog):
+        """Reject is audited too — decision=reject, attributed to the user."""
+        _seed_redis(self.fake_redis, "audit-2")
+
+        with patch("main.execute_commands", new_callable=AsyncMock), \
+             patch("main.ingest_incident", new_callable=AsyncMock), \
+             caplog.at_level(logging.INFO, logger="aiops_agent"):
+            r = api_client.post("/webhook/action", json={
+                "user_name": "arturo",
+                "context": {"action": "reject", "incident_id": "audit-2"},
+            })
+
+        assert r.status_code == 200
+        audit = [rec for rec in caplog.records if getattr(rec, "audit", None) == "human_decision"]
+        assert len(audit) == 1
+        assert audit[0].decision == "reject"
+        assert audit[0].approved_by == "arturo"
 
     def test_unknown_incident_id_returns_ephemeral_text(self, api_client):
         """incident_id no encontrado → ephemeral_text + update que limpia los botones."""

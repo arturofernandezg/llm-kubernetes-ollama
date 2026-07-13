@@ -1404,6 +1404,13 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
 
     user = payload.user_name or "human"
     action = payload.context.action
+    # Audit trail (accountability): the durable log records WHO decided, WHICH variant
+    # (approve_engine ×2 vs approve_model = the LLM's raw value) and the target workload.
+    # user_name is Mattermost-attested (not HMAC-covered) → best-effort attribution, not
+    # an authz control; the HMAC on (incident_id, action) is what gates authenticity.
+    _audit_pa = incident.diagnosis.get("proposed_action") or {}
+    audit_namespace = _audit_pa.get("namespace") or incident.alert_item.labels.get("namespace")
+    audit_workload = _audit_pa.get("name") or incident.alert_item.labels.get("pod")
 
     rollback_scheduled = False
     if action in ("approve", "approve_engine", "approve_model"):
@@ -1485,7 +1492,18 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
                 "blocked_commands": [],
             }
         decision_line = f"\n---\n✅ **Remediación APROBADA** por @{user}\n```\n{log}\n```"
-        logger.info("Human approved remediation for incident %s", incident.incident_id)
+        logger.info(
+            "AUDIT human decision: remediation approved",
+            extra={
+                "audit": "human_decision",
+                "decision": "approve",
+                "action": action,
+                "approved_by": user,
+                "incident_id": incident.incident_id,
+                "namespace": audit_namespace,
+                "workload": audit_workload,
+            },
+        )
     elif action == "reject":
         REMEDIATION_COUNTER.labels(action="human_rejected").inc()
         decision_line = f"\n---\n❌ **Remediación RECHAZADA** por @{user}"
@@ -1496,8 +1514,16 @@ async def handle_action_callback(payload: MattermostActionPayload) -> dict:
             "blocked_commands": [],
         }
         logger.info(
-            "Human rejected remediation for incident %s (action=%s)",
-            incident.incident_id, action,
+            "AUDIT human decision: remediation rejected",
+            extra={
+                "audit": "human_decision",
+                "decision": "reject",
+                "action": action,
+                "approved_by": user,
+                "incident_id": incident.incident_id,
+                "namespace": audit_namespace,
+                "workload": audit_workload,
+            },
         )
     else:
         logger.warning(
