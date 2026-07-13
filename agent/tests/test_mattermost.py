@@ -9,6 +9,8 @@ import httpx
 from mattermost import (
     send_mattermost_alert,
     send_escalation_with_buttons,
+    make_hmac_token,
+    sanitize_action_id,
     MATTERMOST_MAX_RETRIES,
     _MAX_TEXT_LENGTH,
 )
@@ -273,3 +275,47 @@ class TestSendEscalationWithButtons:
         sent_text = kwargs["json"]["attachments"][0]["text"]
         assert len(sent_text) == _MAX_TEXT_LENGTH + 1  # +1 for the ellipsis char
         assert sent_text.endswith("…")
+
+    @pytest.mark.asyncio
+    @patch("mattermost.MATTERMOST_BASE_DELAY", 0.0)
+    async def test_c08_variant_button_ids_are_alphanumeric(self):
+        """C-08 regression (2026-07-13): the underscore in action ids 'approve_engine'/
+        'approve_model' made Mattermost 404 the click (POST /posts/{id}/actions/{action_id}
+        requires an alphanumeric action_id) — the button never reached the agent. The button
+        `id` must be alphanumeric while integration.context.action keeps the real (underscored)
+        action that the callback handler reads and the HMAC covers."""
+        settings.mattermost_webhook_url = FAKE_URL
+        mock_client = make_mock_client([make_ok_response()])
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await send_escalation_with_buttons(
+                header="header",
+                attachment_text="body",
+                incident_id="inc-1",
+                callback_base_url="http://agent:8000",
+                webhook_secret="s3cr3t",
+                approve_variants=[
+                    {"action": "approve_engine", "label": "✅ ×2 motor"},
+                    {"action": "approve_model", "label": "⚠️ Valor modelo"},
+                ],
+            )
+
+        assert result is True
+        actions = mock_client.post.call_args.kwargs["json"]["attachments"][0]["actions"]
+        # 2 approve variants + reject
+        assert [a["id"] for a in actions] == ["approveengine", "approvemodel", "reject"]
+        # every routing id must be alphanumeric (else Mattermost 404s the click)
+        for a in actions:
+            assert a["id"].isalnum(), f"non-alphanumeric button id {a['id']!r} will 404"
+        # the real underscored action survives in context + is what the HMAC signs
+        engine = actions[0]["integration"]["context"]
+        assert engine["action"] == "approve_engine"
+        assert engine["hmac_token"] == make_hmac_token("inc-1", "approve_engine", "s3cr3t")
+
+    def test_sanitize_action_id_strips_non_alphanumeric(self):
+        """Underscores/symbols removed; plain actions untouched; never returns empty."""
+        assert sanitize_action_id("approve_engine") == "approveengine"
+        assert sanitize_action_id("approve_model") == "approvemodel"
+        assert sanitize_action_id("approve") == "approve"
+        assert sanitize_action_id("reject") == "reject"
+        assert sanitize_action_id("___") == "action"

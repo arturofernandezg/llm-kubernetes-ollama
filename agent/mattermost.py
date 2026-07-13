@@ -29,6 +29,17 @@ def make_hmac_token(incident_id: str, action: str, secret: str) -> str:
     ).hexdigest()
 
 
+def sanitize_action_id(action: str) -> str:
+    """Mattermost routes button clicks via POST /posts/{id}/actions/{action_id}, whose
+    action_id path segment is validated as alphanumeric — an underscore (e.g. the C-08
+    actions 'approve_engine'/'approve_model') 404s the click before it ever reaches us.
+    Strip to [A-Za-z0-9] for the button *id*; the real action (underscores intact) still
+    travels in integration.context.action, which is what the callback handler reads and
+    what the HMAC covers. Stays unique across a single attachment's actions."""
+    cleaned = "".join(c for c in action if c.isalnum())
+    return cleaned or "action"
+
+
 async def _post_with_retry(payload: dict[str, Any]) -> bool:
     """Envía payload JSON a Mattermost con retry/exponential backoff."""
     if not settings.mattermost_webhook_url:
@@ -121,7 +132,7 @@ async def send_escalation_with_buttons(
 
     def _button(action: str, label: str) -> dict[str, Any]:
         return {
-            "id": action,
+            "id": sanitize_action_id(action),
             "name": label,
             "integration": {
                 "url": action_url,
