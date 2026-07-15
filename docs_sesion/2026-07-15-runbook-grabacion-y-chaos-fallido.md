@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-15
 slug: runbook-grabacion-y-chaos-fallido
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

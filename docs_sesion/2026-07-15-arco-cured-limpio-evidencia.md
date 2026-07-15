@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-15
 slug: arco-cured-limpio-evidencia
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

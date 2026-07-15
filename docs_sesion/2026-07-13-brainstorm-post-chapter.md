@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-13
 slug: brainstorm-post-chapter
-promoted: false
+promoted: true
 ---
 
 > Sesión de análisis + brainstorm (madrugada 12→13 jul, antes de S7). Sin cambios de código.

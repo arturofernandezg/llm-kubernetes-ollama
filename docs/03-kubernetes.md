@@ -157,6 +157,12 @@ kubectl exec -n arturo-llm-test deploy/redis -- redis-cli ping
 ## Probes del agente
 
 ```yaml
+startupProbe:          # /healthz — protege el cold start (F-19, aplicado 2026-07-14)
+  path: /healthz       # Mientras no pase, liveness/readiness NO corren
+  periodSeconds: 10
+  failureThreshold: 30 # 30×10s = 300s de margen para arrancar
+  timeoutSeconds: 3
+
 livenessProbe:         # /healthz — sin dependencias, siempre 200
   path: /healthz       # Si falla → K8s reinicia el pod
   initialDelaySeconds: 10
@@ -167,6 +173,8 @@ readinessProbe:        # /readyz — verifica Redis (cola de ingesta, F2)
   initialDelaySeconds: 5
   periodSeconds: 10
 ```
+
+> **startupProbe (F-19)**: sin ella, un cold start con dependencias caídas superaba la ventana del liveness (~55s = initialDelay 10 + 3×15) y K8s mataba el pod a mitad del lifespan → CrashLoop. Se destapó en el incidente nocturno del 07-14 (pod muerto a los 77s en "Waiting for application startup"). La startupProbe da 300s de margen y desactiva liveness/readiness hasta que la app abre `:8000`. La causa profunda (startup sin timeout en `chromadb.HttpClient` + `redis.ping()`, F-20) queda como fix de código post-chapter — la probe es la mitigación de infra, no la cura.
 
 > **F2**: `/readyz` chequea **Redis** (no Ollama). El sentido de la cola es bufferear la lentitud/caída de Ollama, así que Ollama lento ya no saca al pod de rotación — el consumidor drena cuando Ollama vuelve. Redis caído → 503 (el pod no puede encolar). El env `QUEUE_ENABLED` se retiró: la cola es incondicional.
 

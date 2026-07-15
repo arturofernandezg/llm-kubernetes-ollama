@@ -1,7 +1,7 @@
 ---
 date: 2026-07-14
 session: S8·a — forense incidente nocturno + estabilización pre-video
-promoted: false
+promoted: true
 ---
 
 # 2026-07-14 · Incidente nocturno, forense del auto-bucle y estabilización pre-demo

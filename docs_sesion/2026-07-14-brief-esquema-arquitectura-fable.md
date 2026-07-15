@@ -1,6 +1,6 @@
 ---
 brief_for: fable
-promoted: false
+promoted: true
 objetivo: Generar un esquema visual del cluster (foto de todo lo desplegado) para la reunión con el tutor / chapter
 ---
 
