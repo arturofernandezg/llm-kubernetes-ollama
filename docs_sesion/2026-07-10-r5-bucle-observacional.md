@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-10
 slug: r5-bucle-observacional
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

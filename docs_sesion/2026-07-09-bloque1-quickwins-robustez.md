@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-09
 slug: bloque1-quickwins-robustez
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

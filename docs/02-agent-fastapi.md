@@ -18,13 +18,14 @@ Versión actual: 0.6.0
 | `extraction.py` | PROMPT_TEMPLATE, `extract_json()` con 3 estrategias de fallback | 0 (legacy) |
 | `validation.py` | `validate_params()` — validación no-bloqueante contra valores GCP | 0 (legacy) |
 | `tf_generator.py` | `safe_name()`, `generate_terraform()`, template Terraform | 0 (legacy) |
-| `mattermost.py` | Cliente HTTP async para Mattermost con retry/backoff | 1 |
+| `mattermost.py` | Cliente HTTP async para Mattermost con retry/backoff. C-08: `send_escalation_with_buttons(..., approve_variants=None)` — un botón por variante, cada uno firma su propia `action` vía `make_hmac_token`; helper interno `_button` (DRY, incluye reject). **Fix S7 (`2ac3c5d`)**: `sanitize_action_id()` reduce el `id` del botón a `[A-Za-z0-9]` — la ruta de acciones de MM valida `action_id` alfanumérico y `approve_engine`/`approve_model` (con `_`) daban 404 EN Mattermost sin llegar al agente; `context.action` conserva el `_` (es lo que el handler lee y el HMAC firma) | 1 · C-08 |
 | `rag.py` | Cliente ChromaDB, ingesta (runbooks + incidents), query con embedding, construcción de queries enriquecidas | 2 |
 | `diagnosis.py` | Prompt AIOps contextual, `generate_diagnosis(..., snapshot=None)`, sección "CLUSTER FACTS" vía `format_cluster_facts()` (fail-soft), parsing JSON estructurado del LLM, `_clamp()` | 2 |
-| `enrichment.py` | Grounding v2 (Eje A): `gather_incident_context(labels)` → `IncidentSnapshot` (container/limits/phase/restart_count/last_state_reason + identidad del workload vía **ownerReferences** pod→RS→Deployment con gate de existencia + `match_labels` del selector real). `_kubectl_json` argv sin shell, timeout corto + `proc.kill()`, nunca raisea. Fail-soft: jamás bloquea el pipeline; kill-switch `enrichment_enabled` | v2 P0·1 |
-| `remediation.py` | Validation layer (classify/validate commands), decision engine (9 reglas cascada + 4.7 target fantasma), sellado (`seal_proposed_action`, síntesis `new_value=2×current`), confidence grounded (`derive/ground_confidence`), cooldown por workload (`acquire_workload_cooldown`, F-01), executor dual-mode + rollback | 3 · v2 |
+| `enrichment.py` | Grounding v2 (Eje A): `gather_incident_context(labels)` → `IncidentSnapshot` (container/limits/phase/restart_count/last_state_reason + identidad del workload vía **ownerReferences** pod→RS→Deployment con gate de existencia + `match_labels` del selector real). `_kubectl_json` argv sin shell, timeout corto + `proc.kill()`, nunca raisea. Fail-soft: jamás bloquea el pipeline; kill-switch `enrichment_enabled`. **F-17**: + `logs_tail` (`_gather_logs`: `--tail=N`, `--previous` si el contenedor murió/reinició con fallback a current, caps líneas+chars) + `recent_events` (`_gather_events`: field-selector por pod, newest-last, límite); `_kubectl_text` hermano de `_kubectl_json` para salida no-JSON; cada gather fail-soft por separado | v2 P0·1 · F-17 |
+| `remediation.py` | Validation layer (classify/validate commands), decision engine (9 reglas cascada + 4.7 target fantasma), sellado (`seal_proposed_action`, síntesis `new_value=2×current`), confidence grounded (`derive/ground_confidence`), cooldown por workload (`acquire_workload_cooldown`, F-01), executor dual-mode + rollback. **C-07**: pre-flight de permisos free-text (`auth_can_i_args` + `check_command_executable` fail-open salvo "no" explícito + `partition_by_permission`). **C-08**: `structured_command_variants(diagnosis)` — variantes `engine` (×2)/`model` para el doble botón, ambas vía `build_set_resources_command` | 3 · v2 · C-07/08 |
 | `escalation_store.py` | Store/get/delete/count async de escalaciones sobre `redis.asyncio`. Serializa a JSON con TTL nativo. Fail-open. | Mini-Fase 4 |
 | `rollback_store.py` | Backstop durable de rollbacks en Redis (`store`/`delete`/`list_rollbacks`, clave `rollback:{id}`, TTL nativo, fail-open). Espejo de `escalation_store`. Permite recovery al arranque si el pod reinicia a mitad de ventana. | v2 P0·3 |
+| `incident_index.py` | **R5 (bucle observacional)**: índice fail-open fingerprint→incidente activo en Redis (`incident:active:{fp}`, TTL `incident_correlation_ttl_seconds=3600`). `record_active_incident` / `pop_active_incident` (GET+DEL: una resolución se consume una vez). El ingest indexa `{doc_id, error_class, started_at, awaits_verdict, text, metadata}`; la rama `resolved` del webhook correla (`_correlate_resolution` en `main.py`) → métrica MTTR + re-upsert a `resolved_observed` si no espera veredicto | R5 |
 | `utils.py` | `backoff_delay()` helper (exponential backoff compartido) | 3 |
 
 ## Endpoints
@@ -33,7 +34,7 @@ Versión actual: 0.6.0
 |---|---|---|---|---|
 | GET | `/healthz` | Liveness probe. Siempre 200. | Ninguna | 0 |
 | GET | `/readyz` | Readiness probe. 200 si **Redis** alcanzable (la cola es la dependencia de ingesta; Ollama lento/caído no saca al pod). 503 si Redis no responde. | Redis | F2 |
-| POST | `/webhook/alert` | Ingesta alertas Alertmanager → **encola en Redis Streams** (firing; fail-closed 503 si Redis cae) o notifica directo (resolved). El consumidor in-process corre el pipeline RAG→diagnóstico→remediación→Mattermost | Redis (ingesta); Ollama/ChromaDB/Mattermost (consumidor) | 1-3, F2 |
+| POST | `/webhook/alert` | Ingesta alertas Alertmanager → **encola en Redis Streams** (firing; fail-closed 503 si Redis cae) o notifica directo (resolved). El consumidor in-process corre el pipeline RAG→diagnóstico→remediación→Mattermost. **R5**: la rama `resolved` además lanza `_correlate_resolution(fp)` como background task — pop del índice de incidentes activos por fingerprint (`_alert_fingerprint`, fuente única con el dedup) → métrica `aiops_incident_resolution_seconds{error_class}` + re-upsert del doc a `resolved_observed` si `awaits_verdict=False` (el veredicto fuerte del rollback nunca se pisa) | Redis (ingesta); Ollama/ChromaDB/Mattermost (consumidor) | 1-3, F2, R5 |
 | POST | `/webhook/action` | Callback de botones interactivos Mattermost (Aprobar/Rechazar escalaciones) | ChromaDB, Mattermost | 3 |
 | POST | `/webhook/command` | Slash command `/aiops` (status / incidents / help). Auth: `MM_COMMAND_TOKEN` static token. Responde ephemeral. | Ollama, ChromaDB | Mini-Fase 4 |
 | POST | `/extract` | **(Legado)** Extracción de parámetros desde texto a JSON. | Ollama | 0 |
@@ -60,7 +61,7 @@ Versión actual: 0.6.0
 **Fase 3 (implementado)**:
 9. Validation layer evalúa commands contra whitelist/blacklist.
 10. Motor de decisión (9 reglas): `AUTO_REMEDIATE` | `ESCALATE` | `SUGGEST_ONLY`.
-11. Si `ESCALATE` con `safe_commands` no vacío → mensaje Mattermost con botones `[✅ Ejecutar]` / `[❌ Rechazar]` (via `send_escalation_with_buttons`). El `incident_id` y payload se persisten en **Redis** via `escalation_store.store_escalation()` (TTL 60 min). Si Redis no está disponible → mensaje degradado sin botones (fail-open).
+11. Si `ESCALATE` con `safe_commands` no vacío → mensaje Mattermost con botones `[✅ Ejecutar]` / `[❌ Rechazar]` (via `send_escalation_with_buttons`). El `incident_id` y payload se persisten en **Redis** via `escalation_store.store_escalation()` (TTL `escalation_ttl_minutes=120`). Si Redis no está disponible → mensaje degradado sin botones (fail-open).
 12. Si `AUTO_REMEDIATE` → ejecuta kubectl directamente (respeta `REMEDIATION_DRY_RUN`).
 13. Resultado (aprobado/rechazado/auto) se persiste en colección `incidents` de ChromaDB.
 
@@ -111,8 +112,11 @@ Mattermost POST cuando el operador pulsa un botón de acción:
 
 | Campo `action` | Comportamiento | Métrica |
 |---|---|---|
-| `"approve"` | Llama `execute_commands(safe_commands)`, persiste en ChromaDB | `human_approved` |
+| `"approve"` | Llama `execute_commands(safe_commands)` (o `command_variants["approve"]` si existe), persiste en ChromaDB | `human_approved` |
+| `"approve_engine"` / `"approve_model"` | **C-08 (doble botón)**: ejecuta `command_variants[action]` — la ×2 determinista del motor o el valor propuesto por el LLM. Cada botón lleva su propio HMAC (`incident_id:action`): el token de una acción NO autoriza la otra. Escalaciones pre-C-08 (`command_variants={}`) caen al fallback `safe_commands` con `approve` — cero migración | `human_approved` |
 | `"reject"` | Persiste decisión, no ejecuta comandos | `human_rejected` |
+
+**Audit trail (S7, `7e40837`)**: toda decisión humana emite un log estructurado `AUDIT human decision: remediation approved|rejected` con `audit=human_decision`, `decision`, `action` (qué variante), `approved_by`/`rejected_by`, `incident_id`, `namespace` y workload — accountability de quién pulsó qué (responde a "cualquiera del canal puede aprobar": puede, pero queda atribuido).
 
 Respuesta JSON que Mattermost usa para actualizar el mensaje original y eliminar los botones:
 
@@ -351,6 +355,8 @@ Endpoint `GET /metrics` expuesto via `prometheus-fastapi-instrumentator`:
 
 - `aiops_remediation_rollback_total{outcome}` — resultado del rollback post-patch (`scheduled` / `skipped_no_snapshot` / `healthy` / `reverted` / `revert_failed` / `evaluation_error`)
 - `aiops_enrichment_total{outcome}` — etapa de grounding (v2 Eje A): `gathered` (snapshot con workload confirmado) / `workload_unresolved` (pod visto pero controller sin confirmar → la PA se anula y la 4.7 escala) / `skipped` (enrichment off o sin labels) / `error`. Clasifica por `workload_name` — mide el *gather*, no la decisión posterior del seal. En cluster: si el RBAC de replicasets no está aplicado, TODO cae en `workload_unresolved`
+- `aiops_incident_resolution_total{correlated}` — **R5**: correlación de un `resolved` de Alertmanager con el incidente activo (`hit` / `miss`)
+- `aiops_incident_resolution_seconds{error_class}` — **R5**: histograma del tiempo alerta-disparada→alerta-resuelta (MTTR observado por clase; buckets 60..3600)
 
 **Contadores de la cola (F2, definidos en `streams.py`)**:
 - `aiops_queue_enqueued_total` — alertas encoladas (`XADD` exitoso); no incrementa en dedup

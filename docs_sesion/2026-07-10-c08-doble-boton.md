@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-10
 slug: c08-doble-boton
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

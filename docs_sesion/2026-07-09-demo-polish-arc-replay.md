@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-09
 slug: demo-polish-arc-replay
-promoted: false
+promoted: true
 ---
 
 ## Objetivo
@@ -102,4 +102,4 @@ destacar. En paralelo, dejar clarísimo (para Jay y para la sala) **cómo funcio
 5. **Opcional (ofrecido, no hecho)**: línea en la slide de límites / QA sobre *safe + contexto ✓ /
    fix-correctness no medido* para no-memoria — blindar el landmine de Q&A por escrito.
 6. **Arrastrados**: matriz E1–E6 (`docs/14`); Gate 8 resto de screenshots Grafana; F-11/F-17/F-06;
-   `/promote` masivo de bitácoras (`promoted: false`: 07-07, 07-08, este 07-09).
+   `/promote` masivo de bitácoras (`promoted: true`: 07-07, 07-08, este 07-09).

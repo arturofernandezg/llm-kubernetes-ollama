@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<title>Observz — Foto del cluster</title>
+<style>
+  :root{
+    --bg:#fcfcfa; --panel:#ffffff; --ink:#14181d; --muted:#5b6570; --line:#dcdfe2;
+    --accent:#ff5a00; --accent-deep:#b23e00; --act:#0d9268;
+    --ns-mon:#3670c4; --ns-mon-bg:rgba(54,112,196,.05);
+    --ns-core:#c24a00; --ns-core-bg:rgba(255,90,0,.045);
+    --ns-mm:#6a5acd; --ns-mm-bg:rgba(106,90,205,.05);
+    --ns-chaos:#c03535; --ns-chaos-bg:rgba(192,53,53,.05);
+    --pill-bg:#f2f0ec;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#101318; --panel:#181d24; --ink:#e8eaee; --muted:#9aa4ae; --line:#2b323a;
+      --accent:#ff7a33; --accent-deep:#ffa066; --act:#2fd08f;
+      --ns-mon:#6f9fe8; --ns-mon-bg:rgba(111,159,232,.07);
+      --ns-core:#ff8a4d; --ns-core-bg:rgba(255,122,51,.06);
+      --ns-mm:#9d8fef; --ns-mm-bg:rgba(157,143,239,.07);
+      --ns-chaos:#e06c6c; --ns-chaos-bg:rgba(224,108,108,.07);
+      --pill-bg:#232a33;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#101318; --panel:#181d24; --ink:#e8eaee; --muted:#9aa4ae; --line:#2b323a;
+    --accent:#ff7a33; --accent-deep:#ffa066; --act:#2fd08f;
+    --ns-mon:#6f9fe8; --ns-mon-bg:rgba(111,159,232,.07);
+    --ns-core:#ff8a4d; --ns-core-bg:rgba(255,122,51,.06);
+    --ns-mm:#9d8fef; --ns-mm-bg:rgba(157,143,239,.07);
+    --ns-chaos:#e06c6c; --ns-chaos-bg:rgba(224,108,108,.07);
+    --pill-bg:#232a33;
+  }
+  :root[data-theme="light"]{
+    --bg:#fcfcfa; --panel:#ffffff; --ink:#14181d; --muted:#5b6570; --line:#dcdfe2;
+    --accent:#ff5a00; --accent-deep:#b23e00; --act:#0d9268;
+    --ns-mon:#3670c4; --ns-mon-bg:rgba(54,112,196,.05);
+    --ns-core:#c24a00; --ns-core-bg:rgba(255,90,0,.045);
+    --ns-mm:#6a5acd; --ns-mm-bg:rgba(106,90,205,.05);
+    --ns-chaos:#c03535; --ns-chaos-bg:rgba(192,53,53,.05);
+    --pill-bg:#f2f0ec;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.55}
+  .wrap{max-width:1240px;margin:0 auto;padding:40px 28px 72px}
+  .eyebrow{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11px;letter-spacing:.22em;
+    text-transform:uppercase;color:var(--accent-deep);margin:0 0 10px}
+  h1{font-size:clamp(26px,4vw,38px);font-weight:750;letter-spacing:-.01em;margin:0 0 10px;text-wrap:balance}
+  .lead{color:var(--muted);max-width:68ch;margin:0 0 30px;font-size:15.5px}
+  .lead code{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.9em;background:var(--pill-bg);
+    border:1px solid var(--line);border-radius:5px;padding:.05em .35em;color:var(--accent-deep)}
+  .diagram{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:10px;overflow-x:auto}
+  .diagram svg{display:block;width:100%;height:auto;min-width:760px}
+
+  /* ---- SVG ---- */
+  text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;fill:var(--ink)}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  .cluster{fill:var(--bg);stroke:var(--line);stroke-width:1.6}
+  .cl-title{font-size:21px;font-weight:750}
+  .cl-meta{font-size:12px;fill:var(--muted)}
+  .pill{fill:var(--pill-bg);stroke:var(--line)}
+  .pill-t{font-size:11.5px;fill:var(--muted)}
+  .ns{stroke-width:1.4;rx:12}
+  .ns-mon{fill:var(--ns-mon-bg);stroke:var(--ns-mon)}
+  .ns-core{fill:var(--ns-core-bg);stroke:var(--ns-core)}
+  .ns-mm{fill:var(--ns-mm-bg);stroke:var(--ns-mm)}
+  .ns-chaos{fill:var(--ns-chaos-bg);stroke:var(--ns-chaos)}
+  .nsl{font-size:13px;font-weight:700}
+  .nsl-sub{font-weight:400;fill:var(--muted)}
+  .t-mon{fill:var(--ns-mon)} .t-core{fill:var(--ns-core)} .t-mm{fill:var(--ns-mm)} .t-chaos{fill:var(--ns-chaos)}
+  .card{fill:var(--panel);stroke:var(--line);stroke-width:1.2}
+  .card-dim{fill:var(--panel);stroke:var(--line);stroke-width:1;stroke-dasharray:4 4;opacity:.75}
+  .pn{font-size:16px;font-weight:700}
+  .pn-s{font-size:13.5px;font-weight:700}
+  .pp{font-size:11.5px;fill:var(--accent-deep)}
+  .pf{font-size:11.5px;fill:var(--muted)}
+  .tag{fill:var(--pill-bg);stroke:var(--line)}
+  .tag-t{font-size:9.5px;fill:var(--muted);letter-spacing:.06em}
+  .e-acc{stroke:var(--accent);stroke-width:2.4;fill:none}
+  .e-act{stroke:var(--act);stroke-width:2.8;fill:none}
+  .e-dep{stroke:var(--muted);stroke-width:1.5;fill:none;opacity:.8}
+  .e-sec{stroke:var(--muted);stroke-width:1.2;fill:none;opacity:.65;stroke-dasharray:5 5}
+  .el{font-size:11.5px;fill:var(--muted)}
+  .el-acc{font-size:11.5px;fill:var(--accent-deep);font-weight:600}
+  .el-act{font-size:11.5px;fill:var(--act);font-weight:600}
+  .mk-acc{fill:var(--accent)} .mk-act{fill:var(--act)} .mk-dep{fill:var(--muted)}
+  .badge{fill:var(--accent)} .badge-act{fill:var(--act)}
+  .badge-t{font-size:12px;font-weight:700;fill:#fff}
+  .api{fill:var(--panel);stroke:var(--act);stroke-width:1.5;stroke-dasharray:7 5}
+  .callout{fill:var(--panel);stroke:var(--accent-deep);stroke-width:1.3}
+  .co-title{font-size:13.5px;font-weight:700;fill:var(--accent-deep)}
+  .co-t{font-size:11.5px;fill:var(--ink)}
+  .lg{fill:var(--panel);stroke:var(--line)}
+  .lg-title{font-size:11px;font-weight:700;letter-spacing:.18em;fill:var(--muted)}
+  .lg-t{font-size:11.5px;fill:var(--muted)}
+  .lg-step{font-size:11.5px;fill:var(--ink)}
+  .foot{font-size:11px;fill:var(--muted)}
+
+  /* ---- tabla de referencia ---- */
+  h2{font-size:19px;margin:44px 0 6px}
+  .tbl-note{color:var(--muted);font-size:13.5px;margin:0 0 16px;max-width:70ch}
+  .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:640px}
+  th{text-align:left;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+    font-weight:600;padding:12px 16px;border-bottom:1px solid var(--line)}
+  td{padding:9px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td.num{font-weight:700;color:var(--accent-deep);white-space:nowrap}
+  td.num.act{color:var(--act)}
+  td .port{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px;color:var(--accent-deep)}
+  td.motivo{color:var(--muted)}
+  .fine{color:var(--muted);font-size:12.5px;margin-top:22px;max-width:78ch}
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">Observz · Anexo de arquitectura</p>
+  <h1>La foto del cluster</h1>
+  <p class="lead">Todo lo desplegado para el prototipo AIOps: <strong>4 namespaces, 11 pods</strong> y las
+  únicas comunicaciones que la NetworkPolicy permite — quién llama a quién, por qué puerto y para qué.
+  Fuente: los manifiestos reales de <code>k8s/*.yaml</code> (NetworkPolicy + env vars + RBAC), estado a 2026-07-14.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 1440 1040" role="img" aria-label="Diagrama del cluster GKE ai-infra-agent: 4 namespaces, pods y comunicaciones">
+    <defs>
+      <marker id="ma" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="mk-acc"/>
+      </marker>
+      <marker id="mg" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="mk-act"/>
+      </marker>
+      <marker id="md" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="mk-dep"/>
+      </marker>
+    </defs>
+
+    <!-- ══ Cluster ══ -->
+    <rect class="cluster" x="16" y="64" width="1408" height="940" rx="18"/>
+    <text class="cl-title" x="44" y="106">Cluster GKE — ai-infra-agent</text>
+    <text class="cl-meta mono" x="1396" y="104" text-anchor="end">europe-southwest1-a · e2-standard-2 Spot + 2 nodos guaranteed</text>
+    <rect class="pill" x="44" y="120" width="212" height="26" rx="13"/>
+    <text class="pill-t" x="150" y="137" text-anchor="middle">Sin Cloud NAT — pods sin internet</text>
+    <rect class="pill" x="266" y="120" width="290" height="26" rx="13"/>
+    <text class="pill-t" x="411" y="137" text-anchor="middle">NetworkPolicy activo — solo el tráfico dibujado</text>
+    <rect class="pill" x="566" y="120" width="296" height="26" rx="13"/>
+    <text class="pill-t" x="714" y="137" text-anchor="middle">agent y ollama fijados a nodos guaranteed=true</text>
+
+    <!-- ══ Namespaces ══ -->
+    <rect class="ns ns-mon" x="48" y="170" width="304" height="470" rx="12"/>
+    <text class="nsl mono t-mon" x="64" y="196">arturo-monitoring <tspan class="nsl-sub">— observabilidad</tspan></text>
+
+    <rect class="ns ns-core" x="400" y="170" width="600" height="560" rx="12"/>
+    <text class="nsl mono t-core" x="416" y="196">arturo-llm-test <tspan class="nsl-sub">— núcleo del sistema</tspan></text>
+
+    <rect class="ns ns-mm" x="1060" y="170" width="332" height="320" rx="12"/>
+    <text class="nsl mono t-mm" x="1076" y="196">arturo-mattermost <tspan class="nsl-sub">— ChatOps</tspan></text>
+
+    <rect class="ns ns-chaos" x="1060" y="530" width="332" height="200" rx="12"/>
+    <text class="nsl mono t-chaos" x="1076" y="556">arturo-chaos <tspan class="nsl-sub">— experimentos</tspan></text>
+
+    <!-- ══ Pods: monitoring ══ -->
+    <rect class="card" x="68" y="225" width="264" height="120" rx="10"/>
+    <text class="pn" x="84" y="252">prometheus</text>
+    <text class="pp mono" x="84" y="272">:9090 · + kube-state-metrics</text>
+    <text class="pf" x="84" y="292">scrapea métricas y evalúa 6 reglas</text>
+    <text class="pf" x="84" y="308">de alerta · acotado a arturo-.*</text>
+
+    <rect class="card" x="68" y="375" width="264" height="95" rx="10"/>
+    <text class="pn" x="84" y="402">alertmanager</text>
+    <text class="pp mono" x="84" y="422">alertmanager-svc:9093</text>
+    <text class="pf" x="84" y="442">agrupa y enruta la alerta al webhook</text>
+
+    <rect class="card" x="68" y="500" width="264" height="95" rx="10"/>
+    <text class="pn" x="84" y="527">grafana</text>
+    <text class="pp mono" x="84" y="547">:3000</text>
+    <text class="pf" x="84" y="567">2 dashboards: Overview + Chaos</text>
+
+    <!-- ══ Pods: llm-test ══ -->
+    <rect class="card" x="545" y="230" width="290" height="150" rx="10"/>
+    <text class="pn" x="565" y="260">agent</text>
+    <rect class="tag" x="742" y="244" width="78" height="19" rx="9.5"/>
+    <text class="tag-t mono" x="781" y="257" text-anchor="middle">guaranteed</text>
+    <text class="pp mono" x="565" y="284">agent-svc:8000 · aiops-agent:2ac3c5d</text>
+    <text class="pf" x="565" y="306">FastAPI: webhook, cola, RAG, grounding,</text>
+    <text class="pf" x="565" y="322">motor de remediación con gates + HMAC</text>
+
+    <rect class="card" x="445" y="470" width="160" height="125" rx="10"/>
+    <text class="pn-s" x="461" y="496">ollama</text>
+    <text class="pp mono" x="461" y="514">ollama-svc:11434</text>
+    <text class="pf" x="461" y="533">qwen2.5:1.5b +</text>
+    <text class="pf" x="461" y="549">nomic-embed-text</text>
+    <text class="pf" x="461" y="567">PVC modelos · guaranteed</text>
+
+    <rect class="card" x="635" y="470" width="160" height="125" rx="10"/>
+    <text class="pn-s" x="651" y="496">chromadb</text>
+    <text class="pp mono" x="651" y="514">chromadb-svc:8000</text>
+    <text class="pf" x="651" y="533">RAG vectorial · PVC</text>
+    <text class="pf" x="651" y="549">16 runbooks +</text>
+    <text class="pf" x="651" y="565">memoria de incidentes</text>
+
+    <rect class="card" x="825" y="470" width="160" height="125" rx="10"/>
+    <text class="pn-s" x="841" y="496">redis</text>
+    <text class="pp mono" x="841" y="514">redis-svc:6379</text>
+    <text class="pf" x="841" y="533">cola Streams ·</text>
+    <text class="pf" x="841" y="549">escalaciones · rollback</text>
+    <text class="pf" x="841" y="565">cooldown · incidentes</text>
+
+    <rect class="card-dim" x="825" y="635" width="160" height="65" rx="10"/>
+    <text class="pn-s" x="841" y="660" opacity=".8">apache <tspan class="pp mono">· :80</tspan></text>
+    <text class="pf" x="841" y="678">solo tests de red</text>
+
+    <!-- ══ Pods: mattermost ══ -->
+    <rect class="card" x="1080" y="225" width="292" height="115" rx="10"/>
+    <text class="pn" x="1100" y="252">mattermost</text>
+    <text class="pp mono" x="1100" y="272">mattermost-svc:8065</text>
+    <text class="pf" x="1100" y="292">canal de incidencias · botones</text>
+    <text class="pf" x="1100" y="308">Aprobar/Rechazar firmados (HMAC)</text>
+
+    <rect class="card" x="1080" y="375" width="292" height="90" rx="10"/>
+    <text class="pn-s" x="1100" y="402">postgres</text>
+    <text class="pp mono" x="1100" y="422">postgres-svc:5432</text>
+    <text class="pf" x="1100" y="442">BD de Mattermost (solo MM accede)</text>
+
+    <!-- ══ Pods: chaos ══ -->
+    <rect class="card" x="1080" y="585" width="292" height="115" rx="10"/>
+    <text class="pn-s" x="1100" y="612">chaos-oom-target <tspan class="pf">y compañía</tspan></text>
+    <text class="pp mono" x="1100" y="632">oom · crashloop · bad-image · cpu</text>
+    <text class="pf" x="1100" y="652">fallos inyectados a propósito;</text>
+    <text class="pf" x="1100" y="668">el agente también remedia aquí</text>
+
+    <!-- ══ K8s API ══ -->
+    <rect class="api" x="545" y="790" width="430" height="120" rx="10"/>
+    <text class="pn-s" x="565" y="818">K8s API <tspan class="pf">— control plane</tspan></text>
+    <text class="pp mono" x="565" y="840">deployments: get/patch · pods/rs/events: get/list</text>
+    <text class="pp mono" x="565" y="857">pods/log: get · limitranges: get/list</text>
+    <text class="pf" x="565" y="881">Role namespaced — SOLO arturo-llm-test y arturo-chaos.</text>
+    <text class="pf" x="565" y="897">Sin ClusterRole de escritura → blast-radius acotado.</text>
+
+    <!-- ══ Callout Slack ══ -->
+    <rect class="callout" x="1060" y="770" width="332" height="150" rx="10"/>
+    <text class="co-title" x="1080" y="798">¿Por qué Mattermost y no Slack?</text>
+    <text class="co-t" x="1080" y="822">Se quería usar Slack, pero por políticas de</text>
+    <text class="co-t" x="1080" y="839">seguridad de la empresa los datos no podían</text>
+    <text class="co-t" x="1080" y="856">salir a un SaaS externo.</text>
+    <text class="co-t" x="1080" y="880">→ Mattermost self-hosted dentro del cluster:</text>
+    <text class="co-t" x="1080" y="897">los datos nunca salen.</text>
+
+    <!-- ══ Leyenda ══ -->
+    <rect class="lg" x="48" y="675" width="304" height="315" rx="10"/>
+    <text class="lg-title" x="68" y="703">LEYENDA</text>
+    <line class="e-acc" x1="68" y1="723" x2="106" y2="723"/>
+    <text class="lg-t" x="116" y="727">flujo principal E2E (① – ⑥)</text>
+    <line class="e-act" x1="68" y1="749" x2="106" y2="749"/>
+    <text class="lg-t" x="116" y="753">acción de remediación (⑥)</text>
+    <line class="e-dep" x1="68" y1="775" x2="106" y2="775"/>
+    <text class="lg-t" x="116" y="779">observabilidad / datos</text>
+    <line class="e-sec" x1="68" y1="801" x2="106" y2="801"/>
+    <text class="lg-t" x="116" y="805">secundario (tests)</text>
+    <line x1="68" y1="824" x2="332" y2="824" stroke="var(--line)" stroke-width="1"/>
+    <text class="lg-step" x="68" y="848">① Prometheus detecta y dispara la alerta</text>
+    <text class="lg-step" x="68" y="869">② Alertmanager llama al webhook del agente</text>
+    <text class="lg-step" x="68" y="890">③ El agente razona: LLM + RAG + estado</text>
+    <text class="lg-step" x="68" y="911">④ Escala a Mattermost con botones firmados</text>
+    <text class="lg-step" x="68" y="932">⑤ Una persona aprueba o rechaza</text>
+    <text class="lg-step" x="68" y="953">⑥ El motor aplica el patch y lo verifica</text>
+
+    <!-- ══ Aristas ══ -->
+    <!-- scrape prometheus→agent -->
+    <line class="e-dep" x1="332" y1="265" x2="540" y2="265" marker-end="url(#md)"/>
+    <text class="el mono" x="360" y="253">scrape /metrics · :8000</text>
+
+    <!-- ① prometheus→alertmanager -->
+    <line class="e-acc" x1="200" y1="345" x2="200" y2="370" marker-end="url(#ma)"/>
+    <circle class="badge" cx="172" cy="358" r="11"/>
+    <text class="badge-t" x="172" y="362.5" text-anchor="middle">1</text>
+    <text class="el-acc" x="214" y="362">alerta firing</text>
+
+    <!-- ② alertmanager→agent -->
+    <line class="e-acc" x1="332" y1="420" x2="540" y2="322" marker-end="url(#ma)"/>
+    <circle class="badge" cx="420" cy="372" r="11"/>
+    <text class="badge-t" x="420" y="376.5" text-anchor="middle">2</text>
+    <text class="el-acc mono" x="535" y="308" text-anchor="end">POST /webhook/alert · :8000</text>
+
+    <!-- ③ agent→deps -->
+    <line class="e-acc" x1="600" y1="380" x2="528" y2="464" marker-end="url(#ma)"/>
+    <line class="e-acc" x1="695" y1="380" x2="713" y2="464" marker-end="url(#ma)"/>
+    <line class="e-acc" x1="790" y1="380" x2="898" y2="464" marker-end="url(#ma)"/>
+    <circle class="badge" cx="704" cy="418" r="11"/>
+    <text class="badge-t" x="704" y="422.5" text-anchor="middle">3</text>
+    <text class="el" x="540" y="424" text-anchor="end">LLM · :11434</text>
+    <text class="el" x="722" y="447">RAG · :8000</text>
+    <text class="el" x="852" y="416">cola + estado · :6379</text>
+
+    <!-- ④ agent→mattermost -->
+    <line class="e-acc" x1="835" y1="270" x2="1074" y2="270" marker-end="url(#ma)"/>
+    <circle class="badge" cx="870" cy="270" r="11"/>
+    <text class="badge-t" x="870" y="274.5" text-anchor="middle">4</text>
+    <text class="el-acc" x="890" y="258">escalación + botones · :8065</text>
+
+    <!-- ⑤ mattermost→agent -->
+    <line class="e-acc" x1="1080" y1="330" x2="841" y2="330" marker-end="url(#ma)"/>
+    <circle class="badge" cx="1044" cy="330" r="11"/>
+    <text class="badge-t" x="1044" y="334.5" text-anchor="middle">5</text>
+    <text class="el-acc" x="880" y="352">aprobar / rechazar (HMAC) · :8000</text>
+
+    <!-- ⑥ agent→K8s API -->
+    <path class="e-act" d="M835,362 L1014,362 Q1022,362 1022,370 L1022,822 Q1022,830 1014,830 L983,830" marker-end="url(#mg)"/>
+    <circle class="badge-act" cx="1022" cy="560" r="11"/>
+    <text class="badge-t" x="1022" y="564.5" text-anchor="middle">6</text>
+    <text class="el-act mono" x="1008" y="758" text-anchor="end">kubectl patch deployment</text>
+    <text class="el-act" x="1008" y="775" text-anchor="end">veredicto: cured / rolled_back</text>
+
+    <!-- mattermost→postgres -->
+    <line class="e-dep" x1="1226" y1="340" x2="1226" y2="370" marker-end="url(#md)"/>
+    <text class="el" x="1240" y="360">persistencia · :5432</text>
+
+    <!-- grafana→agent -->
+    <line class="e-sec" x1="332" y1="545" x2="540" y2="372" marker-end="url(#md)"/>
+    <text class="el" x="354" y="580">test contact point</text>
+    <text class="el" x="354" y="595">:8000</text>
+
+    <!-- footer -->
+    <text class="foot mono" x="720" y="978" text-anchor="middle">Registry: europe-southwest1-docker.pkg.dev/uniovi-ai-infra-agent · imagen desplegada: aiops-agent:2ac3c5d · modelos LLM cargados a mano (sin salida a internet)</text>
+  </svg>
+  </div>
+
+  <h2>Las comunicaciones, una a una</h2>
+  <p class="tbl-note">Las flechas del esquema son <strong>exactamente</strong> el tráfico que la NetworkPolicy
+  permite — no hay más. Los números marcan el orden del flujo principal de un incidente.</p>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>Etapa</th><th>Comunicación</th><th>Puerto</th><th>Para qué</th></tr></thead>
+    <tbody>
+      <tr><td class="num">①</td><td>prometheus → alertmanager</td><td class="port">:9093</td><td class="motivo">la regla evaluada dispara la alerta (firing)</td></tr>
+      <tr><td class="num">②</td><td>alertmanager → agent</td><td class="port">:8000</td><td class="motivo">POST <span class="port">/webhook/alert</span> — arranca el pipeline</td></tr>
+      <tr><td class="num">③</td><td>agent → ollama</td><td class="port">:11434</td><td class="motivo">generación del diagnóstico + embeddings</td></tr>
+      <tr><td class="num">③</td><td>agent → chromadb</td><td class="port">:8000</td><td class="motivo">query RAG (runbooks) + ingesta de incidentes</td></tr>
+      <tr><td class="num">③</td><td>agent → redis</td><td class="port">:6379</td><td class="motivo">cola de alertas, escalaciones, rollback durable, cooldown, índice de incidentes</td></tr>
+      <tr><td class="num">④</td><td>agent → mattermost <em>(cross-namespace)</em></td><td class="port">:8065</td><td class="motivo">notifica la escalación con botones Aprobar/Rechazar</td></tr>
+      <tr><td class="num">⑤</td><td>mattermost → agent <em>(cross-namespace)</em></td><td class="port">:8000</td><td class="motivo">callback del botón <span class="port">/webhook/action</span>, firmado con HMAC</td></tr>
+      <tr><td class="num act">⑥</td><td>agent → K8s API</td><td class="port">—</td><td class="motivo"><span class="port">kubectl get/patch deployments</span> — remediar; solo en arturo-llm-test y arturo-chaos (Role namespaced)</td></tr>
+      <tr><td class="num">·</td><td>prometheus → agent</td><td class="port">:8000</td><td class="motivo">scrape de <span class="port">/metrics</span> — el agente también se observa</td></tr>
+      <tr><td class="num">·</td><td>mattermost → postgres</td><td class="port">:5432</td><td class="motivo">persistencia de Mattermost</td></tr>
+      <tr><td class="num">·</td><td>grafana → agent</td><td class="port">:8000</td><td class="motivo">test del contact point</td></tr>
+      <tr><td class="num">·</td><td>apache → agent</td><td class="port">:8000</td><td class="motivo">tests de red / validación manual (secundario)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="fine">Seguridad por diseño: el agente escribe únicamente mediante un <strong>Role namespaced</strong>
+  (nunca ClusterRole) con permisos en arturo-llm-test y arturo-chaos — ni un agente comprometido podría tocar el
+  resto del cluster compartido. Los callbacks de aprobación van firmados con HMAC-SHA256 y, al no haber Cloud NAT,
+  ningún dato sale del cluster: el LLM, la base RAG y el ChatOps son self-hosted.</p>
+</div>
+
+</body>
+</html>

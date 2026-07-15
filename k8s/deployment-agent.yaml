@@ -31,7 +31,8 @@ spec:
             memory: "128Mi"
             cpu: "50m"
           limits:
-            memory: "384Mi"
+            # 2Gi reconcilia el valor vivo (F-22); right-sizing real post-chapter con métricas frescas
+            memory: "2Gi"
             cpu: "300m"
         securityContext:
           runAsNonRoot: true
@@ -44,6 +45,16 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        # Startup (F-19): protege el cold start — liveness/readiness no cuentan hasta
+        # que la app responde una vez. Presupuesto 300s (churn de nodo puede dejar las
+        # deps arrancando en paralelo; el lifespan espera chroma/redis sin acotar hasta F-20).
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 30
         # Liveness: solo comprueba que el proceso responde.
         # Si falla → Kubernetes reinicia el pod.
         livenessProbe:

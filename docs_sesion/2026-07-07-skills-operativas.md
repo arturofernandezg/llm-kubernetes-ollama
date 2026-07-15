@@ -69,4 +69,4 @@ runbooks. Añadir el catálogo al libro de estudio.
 3. **Commit pendiente de Jay** (de la sesión anterior): bump `k8s/deployment-agent.yaml` a
    `0914611` + bitácoras. Las skills no entran (gitignored).
 4. **Pendiente arrastrado**: Gate 8 resto de screenshots Grafana; `/promote` masivo (~11 bitácoras
-   `promoted: false`, incluida esta); F-11/F-17; matriz E1–E6 (docs/14); S5 deck + ensayo; S6 F-06.
+   `promoted: true`, incluida esta); F-11/F-17; matriz E1–E6 (docs/14); S5 deck + ensayo; S6 F-06.

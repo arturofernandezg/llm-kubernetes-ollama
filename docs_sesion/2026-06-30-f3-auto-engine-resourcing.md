@@ -65,5 +65,5 @@ promoted: true
 - ~~pytest~~ ✅ 460 verde (full suite); `test_remediation.py` 175.
 - **Slice 6 — validación en cluster (la demo)**: build+deploy imagen nueva; flip de flags (`remediation_enabled=true`, `remediation_dry_run=false`, `remediation_auto_cpu_enabled=true`) en `arturo-*`; `scripts/chaos.sh cpu`/`oom` → auto-fire real + tarjeta Mattermost + rollback con health-check + Grafana. Es el chaos experiment con auto-remediación que la demo necesita. (Guardrail namespace ya protege blast-radius.)
 - **Tweak UX (opcional)**: endurecer el prompt para que el modelo emita el `set resources` exacto cuando hay `proposed_action` con field de límite (hoy `has_set_resources=null` 4/5) → tarjeta lista para aprobar de un click. NO desbloquea el auto (ya lo sintetiza el motor) pero mejora la escalación.
-- **Pendientes arrastrados**: `/promote` de F3 (slices 1/1b/2) + F4 + evals + esta sesión (5 bitácoras `promoted: false`); matriz E1–E6 (`docs/14`); Gate 8 screenshots; validar self-heal NOGROUP live.
+- **Pendientes arrastrados**: `/promote` de F3 (slices 1/1b/2) + F4 + evals + esta sesión (5 bitácoras `promoted: true`); matriz E1–E6 (`docs/14`); Gate 8 screenshots; validar self-heal NOGROUP live.
 - **Doc de fallo a promover**: "auto limitado por el modelo" (F4) queda **superado** por el re-sourcing — actualizar el modo de fallo en `docs/07` cuando se promueva.

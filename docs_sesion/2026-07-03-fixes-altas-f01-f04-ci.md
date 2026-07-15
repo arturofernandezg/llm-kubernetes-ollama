@@ -9,7 +9,7 @@ Sesión larga (varias microtasks encadenadas, plan aprobado en /start): cerrar l
 hallazgos Alta pendientes de la review senior que son testeables con mocks —
 test F-05 (deuda de ayer), F-01 cooldown por workload (diseño ya cerrado), F-04
 timeout Mattermost — y, a petición de Jay a mitad de sesión, dejar implementado
-CI antes de la demo. Cierre con /promote (~8 bitácoras `promoted: false`).
+CI antes de la demo. Cierre con /promote (~8 bitácoras `promoted: true`).
 
 ## Hecho
 - **Test F-05** (`tests/test_streams.py`, +2): la compensación de la dedup-key

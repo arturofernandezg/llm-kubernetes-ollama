@@ -26,7 +26,7 @@ Refrescar el proyecto tras ~1 mes de pausa, reorganizar el repo y diseñar un m�
 - **Cola = Redis Streams** (reutilizar el Redis existente, cero infra nueva) en vez de NATS.
 - **Bitácora por fichero** (no rodante) con frontmatter `promoted`, para tener un boundary limpio de promoción.
 - **3 skills** (no 2 ni 1 con modos): separa captura (frecuente, ligera) de promoción (periódica) — encaja con "capturar ahora, promover luego".
-- **Cadencia del método**: `/log` es repetible (a media sesión y **antes de un compact**, para no perder contexto al resumirse); `/promote` no tiene que ser cada sesión — lee ficheros (`promoted: false`), así que puede acumular varias bitácoras y funciona incluso tras un compact.
+- **Cadencia del método**: `/log` es repetible (a media sesión y **antes de un compact**, para no perder contexto al resumirse); `/promote` no tiene que ser cada sesión — lee ficheros (`promoted: true`), así que puede acumular varias bitácoras y funciona incluso tras un compact.
 
 ## Siguiente
 - **F1 — Validación en cluster**: trazar el pipeline E2E; chaos sobre dependencias propias (Redis/Ollama/ChromaDB) → fail-open; test de concurrencia → ver el dedup de FASE 2; informe de production-readiness.

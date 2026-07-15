@@ -47,14 +47,18 @@ llm-kubernetes-ollama/
 │   ├── mattermost.py         # Cliente HTTP async Mattermost (retry/backoff, botones HMAC)
 │   ├── rag.py                # Cliente ChromaDB, ingesta runbooks, query semántica
 │   ├── diagnosis.py          # Prompt AIOps contextual, generate_diagnosis(), JSON
+│   ├── enrichment.py         # Grounding: snapshot del cluster (kubectl) → CLUSTER FACTS al prompt
 │   ├── remediation.py        # Validation layer, motor de decisión, executor, rollback
 │   ├── escalation_store.py   # Persistencia de escalaciones en Redis (fail-open)
+│   ├── rollback_store.py     # Durabilidad del rollback en Redis (re-arma tras reinicio)
+│   ├── incident_index.py     # Bucle observacional: índice fingerprint→incidente activo (Redis)
+│   ├── streams.py            # Cola Redis Streams (dedup + XREADGROUP + dead-letter)
 │   ├── utils.py              # backoff_delay() compartido
 │   ├── tf_generator.py       # Generación Terraform (Fase 0 legacy)
 │   ├── runbooks/             # 16 runbooks YAML semilla (OOMKilled, CrashLoop…)
 │   ├── ingest_runbooks.py    # CLI ingesta runbooks → ChromaDB (async)
 │   ├── Dockerfile · requirements.txt · requirements-dev.txt
-│   └── tests/                # 387 tests en 13 ficheros (no requieren K8s ni Ollama)
+│   └── tests/                # 695 tests en 17 ficheros (no requieren K8s ni Ollama)
 ├── k8s/
 │   ├── deployment-agent.yaml · deployment-ollama.yaml · deployment-apache.yaml
 │   ├── service-*.yaml · pvc-ollama.yaml · pdb-ollama.yaml
@@ -62,16 +66,16 @@ llm-kubernetes-ollama/
 │   ├── prometheus.yaml           # Prometheus + kube-state-metrics + 6 reglas
 │   ├── alertmanager.yaml         # Alertmanager → agent-svc:8000/webhook/alert
 │   ├── chromadb.yaml             # ChromaDB StatefulSet + PVC
-│   ├── redis.yaml                # Redis (estado de escalaciones)
+│   ├── redis.yaml                # Redis (escalaciones + rollback + cola Streams de alertas)
 │   ├── mattermost.yaml           # Mattermost + PostgreSQL StatefulSet
 │   ├── grafana.yaml              # Grafana stateless + 2 dashboards (overview + chaos)
 │   ├── job-ingest-runbooks.yaml  # K8s Job — ingesta idempotente de runbooks en ChromaDB
 │   ├── rbac.yaml                 # Roles para remediación (arturo-llm-test + arturo-chaos)
 │   └── chaos/                    # Manifests chaos engineering (arturo-chaos)
-├── scripts/                      # chaos.sh · smoke.sh · build_demo.py
+├── scripts/                      # chaos.sh · chaos_arc.sh · smoke.sh · build_demo_v3.py
 ├── docs/                         # Documentación detallada por componente (+ defensa.md, img/)
 ├── docs_sesion/                  # Diarios de sesión de desarrollo
-├── demo/                         # Deck de presentación (demo.html + guion.html)
+├── demo/                         # Deck de presentación (demo_v3.html + guion_v3.html)
 ├── memoria/                      # Memoria del TFM (LaTeX: main.tex, capitulos/, demos/)
 ├── generate_tf.py                # CLI legacy: extrae params + genera .tf
 ├── cloudbuild.yaml               # Pipeline Cloud Build (tests → build → push AR)

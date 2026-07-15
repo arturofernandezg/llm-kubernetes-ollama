@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-07
 slug: promote-plan-chapter-deck-review
-promoted: false
+promoted: true
 ---
 
 ## Objetivo
@@ -12,7 +12,7 @@ para decidir una v2 actualizada.
 
 ## Hecho
 - **`/promote` completo** (fuente: bitácoras `promoted:false`). El grep inicial dio 11 falsos
-  positivos (menciones de "promoted: false" en el cuerpo); las **reales eran 3**: `2026-07-04-cured-run-r2-human-gap`,
+  positivos (menciones de "promoted: true" en el cuerpo); las **reales eran 3**: `2026-07-04-cured-run-r2-human-gap`,
   `2026-07-06-r2-human-fix-cured-validado`, `2026-07-07-skills-operativas`.
   - `docs/07-roadmap.md`: fecha chapter **8/14→15 julio**; imagen `8a40fdc→0914611`; tests **620→621**;
     **S3·b ✅ cerrado** (veredicto `cured` validado en cluster 07-06) + R4 desbloqueado; paridad

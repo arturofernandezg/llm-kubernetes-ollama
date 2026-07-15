@@ -93,5 +93,5 @@ suspendido a petición de Jay** — sesión larga de arco completo aprovechando 
   mensaje Mattermost con confidence grounded.
 - **Guard anti-placeholder en `secrets-setup.sh`** (ofrecido, pendiente de OK).
 - Panel Grafana para `aiops_enrichment_total` (sesión Gate 8 / screenshots).
-- `/promote`: hay ~6 bitácoras `promoted: false` y el roadmap está desactualizado (dice "Eje A
+- `/promote`: hay ~6 bitácoras `promoted: true` y el roadmap está desactualizado (dice "Eje A
   siguiente" y "staged sin commitear" cuando ya está commiteado y buildeado en `cb2d1db`).

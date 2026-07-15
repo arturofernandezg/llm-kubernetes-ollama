@@ -84,7 +84,7 @@
   <div class="thesis">«El cluster informa, el modelo razona, el motor dispone.»</div>
 
   <div class="numstrip">
-    <div><div class="n">621</div><div class="t">tests (15 ficheros, gate CI)</div></div>
+    <div><div class="n">695</div><div class="t">tests (17 ficheros, gate CI)</div></div>
     <div><div class="n">100%</div><div class="t">p@1 retrieval (antes 73.3%)</div></div>
     <div><div class="n">5 s</div><div class="t">MTTD del pipeline</div></div>
     <div><div class="n">≤2×</div><div class="t">cap de cualquier patch auto</div></div>
@@ -183,7 +183,7 @@ El LLM nunca ejecuta nada: propone, y todo lo que propone pasa por una validatio
 <div class="tbl"><table>
 <thead><tr><th>Namespace</th><th>Qué corre</th></tr></thead>
 <tbody>
-<tr><td><code>arturo-llm-test</code></td><td>agent (FastAPI, imagen <code>aiops-agent:0914611</code>) · ollama (qwen2.5:1.5b + nomic-embed-text, PVC con los modelos) · chromadb (StatefulSet, 16 runbooks) · redis (cola + estado)</td></tr>
+<tr><td><code>arturo-llm-test</code></td><td>agent (FastAPI, imagen <code>aiops-agent:2ac3c5d</code>) · ollama (qwen2.5:1.5b + nomic-embed-text, PVC con los modelos) · chromadb (StatefulSet, 16 runbooks) · redis (cola + estado)</td></tr>
 <tr><td><code>arturo-monitoring</code></td><td>prometheus · kube-state-metrics · alertmanager · grafana (2 dashboards provisionados)</td></tr>
 <tr><td><code>arturo-mattermost</code></td><td>mattermost + postgres (ChatOps)</td></tr>
 <tr><td><code>arturo-chaos</code></td><td>targets de chaos engineering (4 experimentos)</td></tr>
@@ -294,7 +294,11 @@ en el camino grounded. Kill-switch: <code>ENRICHMENT_ENABLED=false</code> degrad
 <h2 id="c6">6 · El cerebro acotado: el LLM</h2>
 <p><strong>Modelo:</strong> qwen2.5:1.5b servido por Ollama in-cluster, <code>temperature=0</code> (greedy determinista —
 el default 0.8 daba propuestas distintas run a run). <strong>Entrada:</strong> alerta + runbooks recuperados + incidentes
-similares (con su outcome) + CLUSTER FACTS. <strong>Salida:</strong> JSON estructurado — diagnóstico en lenguaje,
+similares (con su outcome) + CLUSTER FACTS + <strong>RECENT LOGS / RECENT EVENTS</strong> (F-17, 2026-07-10: tail de
+logs del container — <code>--previous</code> si murió, ahí está la traza del OOM — y últimos eventos del pod, ambos
+fail-soft y con caps duros de líneas/chars por el presupuesto de tokens; en bloques separados para que lo <em>observado</em>
+no se mezcle con los hechos autoritativos). Es el primer uso genuinamente nuevo del LLM: razona sobre lenguaje libre,
+cero ejecución. <strong>Salida:</strong> JSON estructurado — diagnóstico en lenguaje,
 comandos sugeridos, <code>proposed_action</code> (field, new_value…), confidence, risk.</p>
 <p><strong>Qué decide realmente el LLM tras la v2:</strong> el diagnóstico narrado (lo que lee el humano), qué campo tocar
 (<code>resources.limits.memory</code> vs <code>cpu</code>) y en qué dirección. Todo lo demás — target, valor actual, comando,
@@ -380,6 +384,31 @@ del motor (no el free-text del modelo), y el approve ejecuta exactamente eso —
 y entrada al bucle de veredicto <strong>idénticos al camino auto</strong>. El último gap de paridad (el <code>doc_id</code>
 del incidente no viajaba con la escalación → un cured humano no entraba al bucle) se cerró en <code>ca159be</code>:
 el doc_id se acarrea por Redis dentro de la escalación, porque re-derivarlo es imposible (lleva timestamp).</p>
+<p><strong>C-08 — doble botón model/×2 (validado en cluster 2026-07-13):</strong> cuando el LLM propone &gt;2× (el caso
+16× del chaos: 512Mi sobre 32Mi), la escalación ofrece <strong>dos botones bien formados</strong>: <em>Opción A</em>
+(×2 determinista del motor, ✅ recomendada) y <em>Opción B</em> (valor del LLM, ⚠️) — ambos sintetizados por
+<code>build_set_resources_command</code>, nunca free-text, y <strong>cada botón firma su propia acción por HMAC</strong>
+(la elección model↔engine no es flippable en tránsito). Convierte la decisión oculta del motor en una elección explícita
+y auditada del operador. El safety-net (snapshot/rollback/cooldown) es value-agnostic: elija lo que elija el humano,
+el rollback revierte al snapshot capturado.</p>
+<p><strong>C-07 — factibilidad ≠ seguridad:</strong> los comandos free-text de una escalación pasan un pre-flight
+<code>kubectl auth can-i</code>; los que RBAC deniega (p.ej. <code>kubectl top</code> → <code>pods.metrics.k8s.io</code>
+Forbidden bajo least-privilege) se muestran como <em>"comandos sugeridos (sin permisos)"</em> en vez de ofrecer un botón
+que ejecutaría-y-fallaría. Fail-open salvo un "no" explícito; el comando estructurado del motor no pasa por el check
+(determinista, conocido-ejecutable). No se amplió RBAC: least-privilege es la feature, no el bug.</p>
+<p><strong>Audit trail (2026-07-13):</strong> toda decisión humana queda logueada estructurada —
+<code>AUDIT human decision: … action=approve_engine, approved_by=@user, namespace, workload</code>. Responde a "¿cualquiera
+del canal puede pulsar el botón?": puede, pero queda atribuido y auditado.</p>
+
+<h3>8.4 R5 — El bucle observacional (MTTR real para todas las clases)</h3>
+<p>El veredicto del rollback solo cubre lo que el motor patchea (memoria/CPU). Para el resto de clases, R5 (2026-07-10)
+cierra el bucle con lo que Alertmanager ya sabe: un <code>resolved</code> se correla <strong>por fingerprint</strong>
+(fuente única con la dedup) al incidente activo vía un índice fail-open en Redis (<code>incident:active:{fp}</code>,
+TTL 1h). En un hit: métrica <code>aiops_incident_resolution_seconds{error_class}</code> (MTTR observado) y, si el
+incidente no esperaba veredicto de rollback, el doc en ChromaDB se re-marca <code>resolved_observed</code>.
+<strong>Jerarquía de señales:</strong> el veredicto del motor (verificado) es fuerte y dueño del outcome;
+<code>resolved_observed</code> (observado, causa sin verificar) es débil y nunca lo pisa.
+<strong>Validado en cluster 2026-07-13: primer valor real, 92.47s para un OOMKilled</strong> resuelto sin intervención.</p>
 
 <!-- ══════════ 9 ══════════ -->
 <h2 id="c9">9 · Observabilidad: cero caja negra</h2>
@@ -393,6 +422,7 @@ el doc_id se acarrea por Redis dentro de la escalación, porque re-derivarlo es 
 <tr><td><code>aiops_enrichment_total{outcome}</code></td><td>gathered / workload_unresolved / skipped / error — el grounding es observable por alerta</td></tr>
 <tr><td><code>aiops_remediation_rollback_total{outcome}</code></td><td>scheduled / healthy / reverted / revert_failed</td></tr>
 <tr><td><code>aiops_feedback_verdict_total{outcome}</code></td><td><strong>cured / rolled_back / rollback_failed</strong> — ¿el fix aguantó? (la gráfica de la demo)</td></tr>
+<tr><td><code>aiops_incident_resolution_seconds{error_class}</code></td><td>R5: MTTR observado por clase (firing→resolved correlado por fingerprint). Primer valor real: 92.47s (OOMKilled, 2026-07-13)</td></tr>
 <tr><td><code>aiops_queue_*</code></td><td>enqueued / processed / depth / reclaimed / dead — salud de la cola</td></tr>
 <tr><td><code>aiops_chaos_mttd/mttr_seconds</code></td><td>histogramas MTTD/MTTR por experimento chaos</td></tr>
 <tr><td><code>aiops_escalation_store_total{outcome}</code></td><td>stored / redis_down — escalaciones degradadas sin botones</td></tr>
@@ -404,7 +434,7 @@ verde cured, naranja rolled_back, rojo rollback_failed) — y dashboard <em>Chao
 lo cubre <code>TargetDown</code>.</p>
 
 <!-- ══════════ 10 ══════════ -->
-<h2 id="c10">10 · Cómo llegamos aquí (historia en 12 hitos)</h2>
+<h2 id="c10">10 · Cómo llegamos aquí (historia en 17 hitos)</h2>
 <div class="tbl"><table>
 <thead><tr><th>Cuándo</th><th>Hito</th><th>Lo esencial</th></tr></thead>
 <tbody>
@@ -420,6 +450,10 @@ lo cubre <code>TargetDown</code>.</p>
 <tr><td>2–3 jul</td><td><strong>Review senior</strong>: 7.1/10, F-01..F-18</td><td>Cerrados los 5 Alta accionables (F-01 cooldown, F-02 gate kind, F-03 to_thread, F-04 timeout MM, F-05 compensación dedup) + CI GitHub Actions. <strong>F4 R1/R2/R2·3/R3</strong>: retrieval 100% + bucle de veredicto.</td></tr>
 <tr><td>4 jul</td><td><strong>Validación v2 en cluster</strong></td><td>1ª vez del arco completo: grounding real (32Mi del cluster), cap 4.6 escala 512Mi (16×), approve E2E, rollback durable. Hallazgo: falso-rollback por artefacto del manifiesto chaos (--timeout).</td></tr>
 <tr><td>6 jul</td><td><strong>S3·b — cured validado</strong></td><td>Fix paridad R2-humano (doc_id viaja con la escalación) → run limpio → <code>verdict_total{cured}=1.0</code>. Lección: horno nocturno → teardown mecánico (<code>chaos_arc.sh</code> + <code>--vm-hang 0</code>) + panel veredicto + meta-alertas.</td></tr>
+<tr><td>8–9 jul</td><td><strong>R4 corrido</strong> + quick-wins</td><td>Harness nuevo en 2 capas, protocolo PRE-registrado: Capa A retrieval de incidents p@1 0%→46.7%; Capa B <em>null</em> (el 1.5b ignora la etiqueta de outcome — publicado como fortaleza: la seguridad la impone el motor). C-01 (falso-rollback: solo restarts con motivo de fallo) y C-02 (approve siembra cooldown) cerrados.</td></tr>
+<tr><td>10 jul</td><td><strong>R5 + F-17 + C-07 + C-08</strong></td><td>Bucle observacional (resolved→MTTR + <code>resolved_observed</code>) · logs+events al prompt · pre-flight <code>auth can-i</code> del free-text · doble botón model/×2 con HMAC por acción.</td></tr>
+<tr><td>10–12 jul</td><td><strong>Deck v3 "Observz"</strong> + F-06 vía docs</td><td>15+4 slides offline con replay embebido del run real + 23 QA (review hostil 07-13: fix figcap 65→95%, tabla chaos glosada, +7 QA). F-06: claim de durabilidad degradado y declarado (AOF+PVC → v2.1) — decisión, no olvido.</td></tr>
+<tr><td>13 jul</td><td><strong>S7 — deploy + C-08 E2E</strong></td><td>Deploy <code>2ac3c5d</code> (+ audit trail <code>7e40837</code>). El arco destapó un bug real: Mattermost valida <code>action_id</code> como alfanumérico → los botones C-08 con <code>_</code> daban 404 <em>en MM</em>, nunca llegaban al agente. Cazado desde logs de dos componentes, fix + test de regresión + redeploy + validado E2E el mismo día. R5 viva: 92.47s.</td></tr>
 </tbody></table></div>
 
 <!-- ══════════ 11 ══════════ -->
@@ -427,25 +461,35 @@ lo cubre <code>TargetDown</code>.</p>
 <div class="tbl"><table>
 <thead><tr><th>Número</th><th>Qué es</th><th>Contexto / de dónde sale</th></tr></thead>
 <tbody>
-<tr><td><strong>621</strong></td><td>tests (15 ficheros)</td><td>pytest global verde; gate en Cloud Build y en CI GitHub Actions. Todo mockeado (no requieren cluster).</td></tr>
-<tr><td><strong>p@1 73.3%→100%</strong></td><td>precisión del retrieval</td><td>R1 filtro por error_class, A/B en cluster N=15. p@3 86.7%→100%.</td></tr>
+<tr><td><strong>695</strong></td><td>funciones de test (17 ficheros)</td><td>pytest colecta ~700; verde confirmado 07-11 con 691, los ~4 nuevos de S7 pendientes de re-confirmar. Gate en Cloud Build y CI GitHub Actions. Todo mockeado (no requieren cluster).</td></tr>
+<tr><td><strong>p@1 73.3%→100%</strong></td><td>precisión del retrieval (runbooks)</td><td>R1 filtro por error_class, A/B en cluster N=15. p@3 86.7%→100%. Cuasi-determinista: el filtro selecciona la clase por construcción.</td></tr>
+<tr><td><strong>0%→46.7%</strong></td><td>R4 Capa A: feedback-loop gain</td><td>p@1 del retrieval de <em>incidents</em>, poblados vs vacío (p@2 0→60%). N=15, protocolo pre-registrado; Fisher exacto p≈0.006 — significativo incluso con ese N.</td></tr>
+<tr><td><strong>null (3/3)</strong></td><td>R4 Capa B: efecto del outcome en el prompt</td><td>Pre-registrado: el 1.5b ignora la etiqueta cured/rolled_back (arms idénticos). Publicado como fortaleza: la seguridad la impone el motor, no la memoria del modelo.</td></tr>
+<tr><td><strong>92.47 s</strong></td><td>MTTR observado (R5)</td><td><code>aiops_incident_resolution_seconds{OOMKilled}</code> — primer valor real en cluster (2026-07-13), incidente resuelto solo, correlado por fingerprint.</td></tr>
 <tr><td><strong>100% vs 25%</strong></td><td>safety con RAG vs zero-shot</td><td>docs/10 — por eso rag_degraded nunca auto-remedia (regla 7.5).</td></tr>
 <tr><td><strong>5 s</strong></td><td>MTTD del pipeline</td><td>startsAt→webhook. Detección prácticamente instantánea.</td></tr>
 <tr><td><strong>147–213 s</strong></td><td>LLM warm por diagnóstico</td><td>qwen2.5:1.5b en CPU (e2-standard-2, sin GPU). Techo de hardware, no de diseño.</td></tr>
-<tr><td><strong>≤2×</strong></td><td>cap de cualquier patch</td><td>Regla 4.6 (acuerdo tutor). El overshoot escala, no se clampa en silencio. Demo real: LLM pidió 512Mi (16×) → escalate.</td></tr>
+<tr><td><strong>≤2×</strong></td><td>cap de cualquier patch</td><td>Regla 4.6 (acuerdo tutor). El overshoot escala, no se clampa en silencio. Demo real: LLM pidió 512Mi (16×) → escalate. Desde C-08, la escalación ofrece AMBOS como botones (×2 motor ✅ / valor modelo ⚠️): la frontera de lo que el motor hace solo, no un techo absoluto.</td></tr>
 <tr><td><strong>300 s</strong></td><td>ventana de rollback</td><td>Espera antes del health-check post-patch; el contexto sobrevive reinicios (Redis).</td></tr>
 <tr><td><strong>600 s</strong></td><td>cooldown por workload</td><td>SETNX; un patch auto por workload por ventana; &gt; ventana de rollback.</td></tr>
 <tr><td><strong>120 min</strong></td><td>TTL de escalación</td><td>Configurable por env var (antes 60 hardcodeado).</td></tr>
 <tr><td><strong>300 s / 3 / 600 s</strong></td><td>cola: dedup TTL / max deliveries / min idle reclaim</td><td>dead-letter a <code>aiops:alerts:dead</code> tras 3 entregas.</td></tr>
 <tr><td><strong>16</strong></td><td>runbooks en ChromaDB</td><td>YAML curados con error_class + comandos.</td></tr>
 <tr><td><strong>10</strong></td><td>reglas Prometheus</td><td>6 de workloads (acotadas a arturo-.*) + 4 meta-alertas del agente.</td></tr>
-<tr><td><strong>5.9 → 7.1</strong></td><td>notas de las dos reviews senior</td><td>Auditoría 07-01 (3 P0, cerrados) → review 07-02 (F-01..18; 5 de 6 Alta cerrados, queda F-06).</td></tr>
-<tr><td><strong>0914611</strong></td><td>imagen en cluster</td><td>Tag = short SHA del commit que buildeó. Validada 07-06 con el cured.</td></tr>
-<tr><td><strong>cured=1.0</strong></td><td>aiops_feedback_verdict_total</td><td>El bucle de aprendizaje cerrado E2E con approve humano, en cluster.</td></tr>
+<tr><td><strong>5.9 → 7.1</strong></td><td>notas de las dos reviews senior</td><td>Auditoría 07-01 (3 P0, cerrados) → review 07-02 (F-01..18; los 6 Alta cerrados — F-06 por la vía docs: claim degradado y declarado, AOF+PVC en v2.1).</td></tr>
+<tr><td><strong>2ac3c5d</strong></td><td>imagen en cluster</td><td>Desplegada 2026-07-13 (S7): R5+F-17+C-07+C-08+audit trail+fix C-08. Tag = short SHA del commit que buildeó. El cured del 07-06 se validó sobre <code>0914611</code>.</td></tr>
+<tr><td><strong>cured=1.0</strong></td><td>aiops_feedback_verdict_total</td><td>El bucle de aprendizaje cerrado E2E con approve humano, en cluster (07-06). El run del 07-13 añadió <code>rolled_back=1</code> real: el safety-net auto-revirtió un fix humano insuficiente (64Mi &lt; stress de 100M).</td></tr>
 </tbody></table></div>
 
 <!-- ══════════ 12 ══════════ -->
 <h2 id="c12">12 · Guion de demo paso a paso</h2>
+<div class="kbox"><h4>Decisión 07-09: la demo del chapter es el REPLAY embebido en el deck v3</h4>
+El LLM tarda 150-270s en CPU → demo en vivo = ~4 min de espera + riesgo. El deck v3 (<code>demo/demo_v3.html</code>)
+lleva un replay del run real del 07-06 (valores capturados, no simulados, etiquetado como replay). Este guion en vivo
+queda como <em>respaldo</em> si alguien pide verlo correr de verdad. Novedad del arco desde el 07-13: en el paso de
+Mattermost aparecen <strong>DOS botones</strong> (C-08) — y ojo: con el stress de 100M del manifiesto, aprobar la
+Opción A (×2 = 64Mi) da <code>rolled_back</code> (el pod sigue OOM y el safety-net revierte); solo la Opción B (512Mi)
+cura. El botón que elige el operador determina el veredicto — los dos finales son demostrables.</div>
 
 <h3>12.1 Preparación (10 min antes)</h3>
 <pre><code># Port-forwards (cada uno en su terminal, o con & al final)
@@ -478,8 +522,10 @@ diagnóstico LLM (~3 min, el momento de explicar el techo de hardware) →
 <code>ground_confidence: grounded=1.0, model=0.9</code> →
 <code>Remediation blocked: memory_exceeds_2x</code> (el LLM pidió 512Mi = 16× → el cap NO clampa: escala al humano).</li>
 <li><strong>Min 6-7</strong> — Mattermost: mensaje de escalación con el diagnóstico, las DOS confidencias
-("100% grounded del cluster; el modelo dijo 90%"), el comando determinista del motor y los botones.
-<strong>Pulsa Aprobar.</strong> El patch se aplica (<code>--limits=memory=512Mi</code>) y se programa el rollback.</li>
+("100% grounded del cluster; el modelo dijo 90%") y — C-08 — <strong>dos botones</strong>: Opción A (×2 motor, 64Mi, ✅)
+y Opción B (valor del modelo, 512Mi, ⚠️), cada uno con el comando exacto que ejecuta y su propia firma HMAC.
+<strong>Para un cured, pulsa la Opción B</strong> (512Mi; la A revierte — el stress pide 100M). El patch se aplica
+y se programa el rollback.</li>
 <li><strong>Min 7-12</strong> — ventana de 300s. Tiempo para Grafana: fila Cola (enqueued/processed), fila
 Bucle de aprendizaje (aún sin veredicto — el incidente está <code>auto_pending</code>, "provisional hasta el veredicto").</li>
 <li><strong>Min 12</strong> — veredicto: <code>healthy: true → cured</code>. Mensaje de éxito en MM, el stat de Grafana
@@ -498,9 +544,10 @@ curl -s localhost:8000/metrics | grep aiops_feedback_verdict_total
 kubectl exec -n arturo-llm-test deploy/redis -- redis-cli --scan --pattern 'rollback:*'</code></pre>
 
 <h3>12.4 Plan B (si el LLM está frío o el cluster se tuerce)</h3>
-<p>Screenshots del run del 07-06 en <code>demo/</code> (<code>mattermost_cured.png</code>,
-<code>mattermost_escalation_grounded_confidence.png</code>) + el deck <code>demo/demo.html</code> con los CHAOS_RESULTS
-embebidos. La narrativa se sostiene igual: enseña los logs reales del run validado.</p>
+<p>El plan A ya ES el plan B: el deck v3 con el replay embebido funciona offline sin cluster. Refuerzos:
+screenshots reales en <code>demo/</code> (<code>mattermost_cured.png</code> del 07-06,
+<code>mattermost_c08_double_button.png</code> y <code>mattermost_approved_patch_ok.png</code> del 07-13,
+<code>mattermost_escalation_grounded_confidence.png</code>). Y el plan B físico de S8: PDF por Ctrl+P + copia en móvil/USB.</p>
 
 <!-- ══════════ 13 ══════════ -->
 <h2 id="c13">13 · Preguntas hostiles, respuestas honestas</h2>
@@ -536,9 +583,11 @@ bloquear la cola. Semántica at-least-once asumida: puede haber un duplicado, nu
 </div></details>
 
 <details><summary>«¿Y si muere Redis? Prometéis durabilidad sobre un pod sin disco»</summary><div class="ans">
-<p>Cierto, y está reconocido como F-06 (el único hallazgo Alta abierto). Estado real: la cola se auto-cura (503 + reenvío
-de Alertmanager + self-heal del consumer group), pero un rollback en vuelo se perdería. El fix es barato (AOF + PVC de 1Gi,
-mismo patrón que ChromaDB) y está en el sprint; la alternativa honesta es degradar el claim. Lo indefendible sería no saberlo.</p>
+<p>El claim está <strong>degradado a propósito y declarado</strong> (decisión 07-12): el estado sobrevive reinicios del
+<em>agente</em> (ese era el P0·3 y está validado), pero NO la pérdida del pod <em>Redis</em> sin AOF+PVC. La cola se
+auto-cura (503 + reenvío de Alertmanager + self-heal del consumer group); un rollback en vuelo se perdería. El fix es
+barato (AOF + PVC 1Gi, mismo patrón que ChromaDB) y es lo primero de v2.1 — se decidió no tocar infra a 3 días del
+chapter. Lo indefendible sería no saberlo; está escrito en los modos de fallo.</p>
 </div></details>
 
 <details><summary>«¿Quién vigila al vigilante?»</summary><div class="ans">
@@ -569,7 +618,48 @@ prompt. Ya sufrimos una contaminación real (bug de labels en mayo), la purgamos
 <p>Sí — y las tres capas respondieron: la validation layer clasificó los comandos como read-only, el RBAC denegó lo que
 no estaba concedido (<code>kubectl top</code> → Forbidden: least-privilege funcionando) y el resultado se mostró honesto
 (<code>[FAILED exit=1]</code>) en vez de fingir éxito. El gap identificado — validar <em>factibilidad</em> además de
-seguridad — está en backlog como pre-flight <code>kubectl auth can-i</code>.</p>
+seguridad — <strong>ya está cerrado</strong> (C-07): pre-flight <code>kubectl auth can-i</code> en la escalación; lo
+denegado se muestra como sugerencia sin botón. Y no se amplió RBAC para "arreglarlo": least-privilege es la feature.</p>
+</div></details>
+
+<details><summary>«¿N=15 no es una muestra ridícula?»</summary><div class="ans">
+<p>Es pequeña y lo declaramos: IC 95% amplio, protocolo pre-registrado <em>antes</em> de correr, señal direccional y no
+benchmark. Dos matices: el efecto de Capa A (0/15 → 7/15) ya es significativo con ese N (Fisher exacto p≈0.006), y el
+100% de R1 es cuasi-determinista — el filtro por error_class selecciona la clase por construcción; más N testearía el
+diccionario, no reduciría varianza. Además los casos son sintéticos escritos por la misma mano: subir a N=30 daría un IC
+<em>nominalmente</em> más estrecho sin validez real añadida (pseudo-replicación). El salto de validez de verdad es un
+benchmark externo (ITBench), en el roadmap post-chapter.</p>
+</div></details>
+
+<details><summary>«El LLM pide 16× y ¿qué, lo tiráis a la basura?»</summary><div class="ans">
+<p>Ya no: desde C-08 la escalación ofrece <strong>los dos</strong> como botones bien formados — Opción A (×2 del motor,
+recomendada) y Opción B (el valor del modelo, marcada ⚠️) — ambos sintetizados por el motor, nunca free-text, cada uno
+con su propia firma HMAC. El ×2 no es un techo: es la frontera de lo que el motor hace <em>solo</em>. Más allá decide un
+humano, con las dos opciones delante y su decisión auditada. Y el safety-net es value-agnostic: elija lo que elija,
+snapshot + rollback + veredicto. Validado E2E en cluster el 07-13.</p>
+</div></details>
+
+<details><summary>«¿Y si el humano aprueba un fix que no basta?»</summary><div class="ans">
+<p>Pasó de verdad el 07-13: se aprobó el ×2 del motor (64Mi) contra un stress de 100M → a los 300s el health-check vio
+el pod aún OOM → <strong>revert automático</strong> a 32Mi + <code>verdict_total{rolled_back}=1</code> + el incidente
+marcado como fix fallido en ChromaDB. El safety-net no distingue quién aprobó: "safety ≠ correctness" — el sistema no
+garantiza que el fix acierte, garantiza que un fix fallido no se queda puesto ni se olvida.</p>
+</div></details>
+
+<details><summary>«¿Por qué no usáis K8sGPT / HolmesGPT y a casa?»</summary><div class="ans">
+<p>Los dos son <em>diagnóstico/investigación</em> (read-only): excelentes en explicar, no cierran el bucle de actuación.
+Nuestro diferencial es exactamente esa mitad: actuador acotado con rollback verificado + veredicto que alimenta el
+aprendizaje. De hecho HolmesGPT valida a posteriori nuestra F-17 (su enfoque es dar logs/events/toolsets al LLM). El
+patrón que la industria describe como objetivo 2026 — determinista donde se puede, LLM donde aporta, presupuestos
+duros — es la tesis de este diseño en pequeño.</p>
+</div></details>
+
+<details><summary>«Si el modelo ignora la etiqueta de outcome (Capa B null), ¿para qué archiváis veredictos?»</summary><div class="ans">
+<p>Porque el consumidor del veredicto no es (solo) el prompt: es el <em>retrieval</em> (Capa A, positiva: p@1 de incidents
+0→46.7% — la memoria emerge a la clase correcta), la métrica narrable (¿los fixes aguantan?) y el forense. El null de
+Capa B se pre-registró y se publica como diseño robusto: la regla "no repitas un fix fallido" no depende de que un 1.5b
+la lea — la impone el motor determinista. Palancas si algún día importa: modelo mayor o guard determinista sobre el
+precedente citado.</p>
 </div></details>
 
 <details><summary>«¿Y la seguridad de los callbacks? ¿Un curl puede aprobar una remediación?»</summary><div class="ans">
@@ -582,20 +672,24 @@ con la misma política. Y la escalación expira (TTL 120min): no se puede aproba
 <h2 id="c14">14 · Límites conocidos y trabajo futuro</h2>
 <p>La credibilidad del sistema es que sus modos de fallo están escritos por nosotros antes de que los encuentre nadie:</p>
 <ul>
-<li><strong>F-06 (Alta, abierto):</strong> Redis sin AOF/PVC — la durabilidad prometida excede la de la capa de
-almacenamiento. Fix en sprint o degradar el claim.</li>
+<li><strong>F-06 (declarado, no abierto a ciegas):</strong> Redis sin AOF/PVC — el estado sobrevive reinicios del agente
+pero no la pérdida del pod Redis. Claim degradado y escrito en los modos de fallo (decisión 07-12); AOF+PVC es lo
+primero de v2.1.</li>
 <li><strong>Throughput estructural:</strong> ~1 alerta/4min (LLM serializado en CPU). Mitigado por la cola; la solución es
 GPU o priorización/colapso por workload (F-10, v3).</li>
-<li><strong>C-01:</strong> el health-check post-patch cuenta restarts sin mirar el motivo — un reinicio benigno puede
-leerse como crash (visto con un manifiesto chaos, no con OOM real). Fix diseñado: mirar <code>lastState.reason</code>.</li>
-<li><strong>C-02:</strong> el approve humano aún no siembra el cooldown (F-01 solo cubre el auto) → doble escalación
-posible del mismo workload.</li>
 <li><strong>Single-target:</strong> hoy solo Deployments (STS/DaemonSet escalan a humano por diseño, F-02) y solo bump
 de límites. El patrón para crecer está definido: cada acción nueva = una síntesis determinista + su rollback.</li>
-<li><strong>Horizontes:</strong> v2.1 (F-06, F-11 incident_id E2E, F-17 logs+events al prompt — el primer uso <em>nuevo</em>
-del LLM: solo lenguaje, cero ejecución —, salida estructurada del decoder, watchdog del consumer) · v2.5 (cobertura
-Pending/Evicted, kubernetes_asyncio, re-validación en approve, E2E en CI con kind, panel de KPIs de negocio) ·
-v3 (catálogo de acciones, predicción proactiva, ChatOps conversacional, multi-tenant).</li>
+<li><strong>Cerrados desde la v1 de este libro</strong> (eran límites, ya no): C-01 (el health-check ya mira
+<code>lastState.reason</code> — solo restarts con motivo de fallo marcan unhealthy), C-02 (el approve siembra el
+cooldown), F-17 (logs+events al prompt, desplegado), C-07 (pre-flight de factibilidad), C-08 (doble botón).</li>
+<li><strong>Superficie nueva a vigilar (F-17):</strong> los logs del workload entran al prompt — texto controlable por
+un tenant/atacante = vector de inyección a threat-modelar (conecta con el paper "AI Oops" de RSA). En el radar
+post-chapter como hardening adversarial.</li>
+<li><strong>Horizontes:</strong> v2.1 (F-15 modularizar main.py primero — la suite de ~700 es la red —, salida
+estructurada del decoder con re-medición por el eval propio, F-11 incident_id E2E, AOF+PVC) · v2.5 (cobertura
+Pending/Evicted, kubernetes_asyncio, re-validación en approve, E2E en CI con kind, panel de KPIs de negocio con el
+MTTR de R5) · apuestas (ITBench como benchmark externo, hardening adversarial) · v3 (catálogo de acciones, predicción
+proactiva, ChatOps conversacional, multi-tenant).</li>
 </ul>
 
 <!-- ══════════ 15 ══════════ -->
@@ -628,7 +722,7 @@ mordisco del tag de deploy equivocado es hoy el Paso 0 de <code>/ship</code>.</p
 
 <div class="kbox"><h4>Por qué esto es presentable</h4>
 El método es parte del resultado: un ingeniero + un asistente con runbooks ejecutables construyeron y validaron en
-cluster un sistema de 621 tests en microtareas de ~20 minutos. Las skills son al flujo de trabajo lo que el motor de
+cluster un sistema de ~700 tests en microtareas de ~20 minutos. Las skills son al flujo de trabajo lo que el motor de
 reglas es al LLM: la parte determinista que hace fiable a la parte creativa.</div>
 
 <!-- ══════════ GLOSARIO ══════════ -->
@@ -654,8 +748,8 @@ reglas es al LLM: la parte determinista que hace fiable a la parte creativa.</di
 </dl>
 
 <footer>
-AIOps Infrastructure Agent · Libro de estudio v1.1 · generado 2026-07-06, actualizado 2026-07-07 (cap. 15: método y skills) · imagen 0914611 (commits ca159be+0914611, 621 tests) ·
-fuentes: docs/01-14, docs_sesion/estado_de_proyecto.html, bitácoras 07-01→07-06 · documento autocontenido, imprimible
+AIOps Infrastructure Agent · Libro de estudio v1.2 · generado 2026-07-06, actualizado 2026-07-13 (R4/R5/F-17/C-07/C-08, deploy S7, QA nuevas) · imagen 2ac3c5d (695 funciones de test en 17 ficheros) ·
+fuentes: docs/01-14, docs_sesion/estado_de_proyecto.html, bitácoras 07-01→07-13 · documento autocontenido, imprimible
 </footer>
 
 </main>

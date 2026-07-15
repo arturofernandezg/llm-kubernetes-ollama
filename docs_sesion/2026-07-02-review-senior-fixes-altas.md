@@ -87,6 +87,6 @@ despliegue de `cb2d1db` sigue bloqueado en la recuperación de secrets (manual, 
   el enrichment — primer uso nuevo del LLM).
 - **Sin cambios**: sigue pendiente lo de la sesión anterior — recuperación de secrets
   (Jay, MM UI), deploy `cb2d1db` (ahora será un commit nuevo con estos fixes), chaos OOM
-  del arco completo, `/promote` (~7 bitácoras `promoted: false`).
+  del arco completo, `/promote` (~7 bitácoras `promoted: true`).
 - Comando de test para Jay (cuando haya código F-01/F-04):
   `python3 -m pytest agent/tests/ -q`

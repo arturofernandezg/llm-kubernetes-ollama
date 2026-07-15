@@ -77,5 +77,5 @@ clases próximas) por vía determinista, coherente con la tesis v2.
 - Continuar el orden RAG: **R3** (higiene de query, micro, mismo fichero) → **R2**
   (bucle de aprendizaje real, toca main+rollback — la feature narrable del chapter)
   → **R4** (métrica gain para el deck).
-- Sin promover aún (bitácora `promoted: false`); `/promote` al cerrar el bloque RAG.
+- Sin promover aún (bitácora `promoted: true`); `/promote` al cerrar el bloque RAG.
 </content>

@@ -172,6 +172,15 @@ La tabla de arriba mide **detección + notificación** (MTTD/MTTR del pipeline).
 
 **Veredicto `cured` — cerrado 2026-07-06 (S3·b)**: run limpio con el manifiesto arreglado sobre la imagen `0914611` (fix R2 paridad humano/auto): OOMKilled puro a 32Mi → escalate (cap 4.6) → approve humano → patch 512Mi → +300s healthy → **`aiops_feedback_verdict_total{outcome="cured"}=1.0`** y el doc en ChromaDB marcado `cured`. Con `cured`+`rolled_back` reales, R4 (gráfica feedback-loop gain) queda habilitado. El veredicto tiene su fila propia en el dashboard Overview ("Bucle de aprendizaje", `aiops_feedback_verdict_total` por outcome) y dos meta-alertas lo respaldan (`AiopsRollbackRevertFailed`, `AiopsDeadLetter` — reglas 7-10 en `k8s/prometheus.yaml`).
 
+## Arcos S7 — C-08 doble botón E2E + R5 con valor real (2026-07-13, `2ac3c5d`)
+
+Dos arcos OOM sobre la imagen nueva (R5+F-17+C-07+C-08+audit):
+
+- **Arco #1 (`7e40837`)**: el doble botón C-08 **renderizó perfecto** (Opción A ×2 motor 64Mi ✅ / Opción B modelo 512Mi ⚠️ / Rechazar — captura `demo/mattermost_c08_double_button.png`), pero los Aprobar no funcionaban. Debug desde evidencia: 0 POSTs de approve en el agente + `code:404 "not found handler triggered"` en el log de Mattermost → **MM valida `action_id` como alfanumérico** y `approve_engine`/`approve_model` llevan `_` → el click moría EN Mattermost. Fix `sanitize_action_id()` (el `id` de routing a `[A-Za-z0-9]`; `context.action` y el HMAC intactos) + test de regresión sobre el render real → `2ac3c5d`.
+- **Arco #2 (`2ac3c5d`)**: `approve_engine` (64Mi) → patch OK + `AUDIT human decision` → a +300s el pod seguía OOM (el stress pide 100M fijos) → **`rolled_back` + revert a 32Mi**. El safety-net auto-revirtió un fix humano insuficiente — "safety ≠ correctness" en acción. **Gotcha del manifiesto**: con `--vm-bytes 100M`, el ×2 del motor (64Mi) SIEMPRE da `rolled_back`; solo el valor del modelo (512Mi) o ≥~128Mi cura → **el botón que elige el operador determina el veredicto** (los dos finales son demostrables).
+- **R5 viva**: `aiops_incident_resolution_seconds{OOMKilled}` sum=92.47s count=1 — un incidente hermano del re-fire (fingerprint distinto, escalado-no-aprobado) se resolvió solo → `resolved_observed`. Los dos veredictos (`rolled_back` fuerte + `resolved_observed` débil) coexistieron en **fingerprints distintos**: la jerarquía "la débil nunca pisa la fuerte" es por fingerprint y se respetó.
+- **Gotchas operativos**: el smoke test siembra Redis (`aiops:cooldown:*` + `incident:active:*`, e intenta remediar su pod sintético) → **limpiar Redis antes de un arco es obligatorio**; el container de Ollama no tiene `curl` → warm vía `port-forward svc/ollama-svc 11434` o absorber el cold-start en el budget del arco.
+
 ## Visualización en Grafana
 
 El dashboard **"AIOps — Chaos"** provisionado en `k8s/grafana.yaml` (ConfigMap

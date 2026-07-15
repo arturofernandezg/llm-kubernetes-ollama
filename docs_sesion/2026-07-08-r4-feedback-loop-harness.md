@@ -1,7 +1,7 @@
 ---
 fecha: 2026-07-08
 slug: r4-feedback-loop-harness
-promoted: false
+promoted: true
 ---
 
 ## Objetivo

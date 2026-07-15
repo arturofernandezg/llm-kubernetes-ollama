@@ -18,7 +18,8 @@ Principios del v3 (acordados con Jay):
   - Firma visual: el arco de seis etapas (alerta → informa → razona → dispone →
     humano → veredicto) — animado en portada, raíl en los dividers, replay a
     tamaño completo en la slide de demo y HUD de progreso.
-  - Núcleo ~15 min + capa de RESPALDO (R1-R4) tras el cierre, contada aparte.
+  - Núcleo ~13 min + ~2 min del vídeo real de la demo (se reproduce FUERA del
+    deck, QuickTime) + capa de RESPALDO (R1-R4) tras el cierre, contada aparte.
   - Escenario lógico 1280×720; exporta a PDF (1 diap./página) con Ctrl+P.
 """
 
@@ -34,19 +35,20 @@ FONT_DIR = OUT_DIR / "assets" / "fonts"
 TITLE = "Observz"
 SUBTITLE = "Diagnóstico y remediación asistida de incidencias en Kubernetes"
 AUTHOR = "Arturo Fernández"
+TUTOR = "Carlos San Juan"
 SUBJECT = "MasOrange / Telecable"
 # Sin DATE a propósito: el deck no lleva fechas.
 
 # Fuente única de números — evita el drift de literales dispersos por slides.
 STATS = {
-    "tests": "696",  # pytest full 2026-07-11 (692 verdes + 4 arreglados en sesión) — re-confirmar verde antes de presentar
+    "tests": "700",  # pytest full 2026-07-15 (700 verdes, re-confirmado la mañana del chapter)
     "runbooks": "16",
-    "alert_rules": "6",
+    "alert_rules": "10",  # 6 detección de workload + 4 auto-observabilidad del agente (k8s/prometheus.yaml)
     "engine_rules": "9",
     "p1_before": "73%", "p1_after": "100%",
     "p3_before": "87%", "p3_after": "100%",
     "eval_n": "15",
-    "conf_rag": "0.86", "conf_zero": "0.63",
+    "conf_rag": "0,86", "conf_zero": "0,63",
     "chaos_experiments": "4",
     "cap": "2×",
     # R4 feedback-loop gain (fixture sintético declarado)
@@ -61,6 +63,7 @@ CHAOS_RESULTS = [
 ]
 
 IMAGES = {
+    "logo": ["demo/logo_empresa_light.png"],  # derivado de logo_empresa.jpg para fondo claro (scratchpad/make_logo_light.py)
     "grounded": ["demo/mattermost_escalation_grounded_confidence.png"],
     "cured": ["demo/mattermost_cured.png"],
     "grafana_overview": ["demo/grafana_overview_top.png"],
@@ -104,6 +107,11 @@ def img(key: str, alt: str, cls: str = "figframe") -> str:
     return f'<div class="placeholder">Captura pendiente: <code>{IMAGES[key][0]}</code></div>'
 
 
+def brandmark() -> str:
+    uri = data_uri("logo")
+    return f'<img class="brandmark" src="{uri}" alt="MasOrange">' if uri else ""
+
+
 def font_css() -> str:
     rules = []
     for family, weight, style, fname in FONTS:
@@ -124,7 +132,7 @@ def font_css() -> str:
 def chaos_table() -> str:
     head = (
         "<tr><th>Experimento</th><th class='num'>for:</th><th class='num'>MTTD pipeline</th>"
-        "<th class='num'>MTTR pipeline</th><th class='num'>conf.</th><th>outcome</th><th class='num'>T_detect</th></tr>"
+        "<th class='num'>T. respuesta</th><th class='num'>conf. modelo</th><th>outcome</th><th class='num'>T_detect</th></tr>"
     )
     rows = ""
     for r in CHAOS_RESULTS:
@@ -135,6 +143,14 @@ def chaos_table() -> str:
             f"<td><span class='pill'>{r['outcome']}</span></td><td class='num'>{r['detect']} s</td>"
             "</tr>"
         )
+    # Fila del arco completo (run del replay): sin métricas de latencia del harness — no se inventan.
+    rows += (
+        "<tr>"
+        "<td>OOMKilled · <strong>arco completo</strong> (replay)</td>"
+        "<td class='num'>0m</td><td class='num'>—</td><td class='num'>—</td><td class='num'>0,95</td>"
+        "<td><span class='pill ok'>cured</span></td><td class='num'>—</td>"
+        "</tr>"
+    )
     return f"<table>{head}{rows}</table>"
 
 
@@ -283,6 +299,33 @@ tr.hi td{color:var(--accent-deep);font-weight:600}
 .statstrip b.okc{color:var(--ok)}
 .statstrip span{font-family:var(--mono);font-size:10.5px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}
 
+/* ── Foto del cluster (slide despliegue) ── */
+.cm{width:100%;height:auto;display:block}
+.cm text{font-family:var(--sans);fill:var(--ink)}
+.cm .m{font-family:var(--mono)}
+.cm .cl{fill:none;stroke:var(--hair2);stroke-width:1.2}
+.cm .hdr{font-size:11px;fill:var(--dim);letter-spacing:.04em}
+.cm .ns{fill:none;stroke:var(--hair2);stroke-width:1}
+.cm .nsl{font-size:11.5px;font-weight:600;fill:var(--muted);letter-spacing:.04em}
+.cm .nsl tspan{font-weight:400;fill:var(--dim)}
+.cm .nsl.core{fill:var(--accent-deep)}
+.cm .chip{fill:#fff;stroke:var(--hair2);stroke-width:1}
+.cm .chip.hot{fill:var(--accent-soft);stroke:var(--accent)}
+.cm .pn{font-size:13px;font-weight:600}
+.cm .pn.lg{font-size:15px}
+.cm .pp{font-size:10px;fill:var(--accent-deep)}
+.cm .pf{font-size:9.5px;fill:var(--muted)}
+.cm .ea{stroke:var(--accent);stroke-width:2;fill:none}
+.cm .ee{stroke:var(--ink);stroke-width:2;fill:none}
+.cm .ed{stroke:var(--hair2);stroke-width:1.2;fill:none;stroke-dasharray:4 4}
+.cm .bd{fill:var(--accent)}
+.cm .bd.ink{fill:var(--ink)}
+.cm .bt{font-size:10.5px;font-weight:600;fill:#fff}
+.cm .lab{font-size:9.5px;font-weight:600;fill:var(--accent-deep)}
+.cm .lab.ink{fill:var(--ink)}
+.cm .lab.dim{fill:var(--dim);font-weight:400;font-size:9px}
+.cm .api{fill:none;stroke:var(--ink);stroke-width:1.1;stroke-dasharray:6 4;opacity:.85}
+
 /* ── Encabezado menor ── */
 .h3{font-family:var(--mono);font-size:12.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
 
@@ -366,6 +409,7 @@ tr.hi td{color:var(--accent-deep);font-weight:600}
 
 /* ── Portada ── */
 .cover{justify-content:center;padding:70px 96px}
+.brandmark{position:absolute;top:66px;right:96px;height:42px;width:auto}
 .cover .eyebrow{margin-bottom:24px}
 .cover h1{font-family:var(--serif);font-size:76px;font-weight:700;line-height:1.02;letter-spacing:-.015em;margin-bottom:14px}
 .cover .thesis{font-family:var(--serif);font-style:italic;font-size:26px;color:var(--accent-deep);margin-bottom:18px}
@@ -374,13 +418,6 @@ tr.hi td{color:var(--accent-deep);font-weight:600}
 .cover .meta div{font-size:14.5px;color:var(--muted);line-height:1.45;max-width:420px}
 .cover .meta b{display:block;font-weight:600;color:var(--ink);margin-bottom:2px}
 .cover .meta .mono{font-family:var(--mono);font-size:12.5px}
-.timechip{
-  position:absolute;right:96px;bottom:64px;
-  font-family:var(--mono);font-size:12.5px;color:var(--accent-deep);
-  border:1px solid rgba(178,62,0,.35);background:var(--accent-soft);
-  border-radius:999px;padding:7px 16px;white-space:nowrap;
-}
-.timechip b{font-weight:600}
 
 /* ── Divider de sección ── */
 .divider{justify-content:center;text-align:center;align-items:center}
@@ -530,6 +567,7 @@ def slides() -> list[str]:
     return [
         # ══════════ 01 · PORTADA ══════════
         f"""<section class="slide active cover">
+          {brandmark()}
           <div class="eyebrow">Prototipo AIOps · Prácticas · <b>{SUBJECT}</b></div>
           <h1>{TITLE}</h1>
           <p class="thesis">El cluster informa, el modelo razona, el motor dispone.</p>
@@ -537,50 +575,35 @@ def slides() -> list[str]:
           {arcsig(all_on=True)}
           <div class="meta">
             <div><b>{AUTHOR}</b>Prácticas de ingeniería AIOps</div>
+            <div><b>{TUTOR}</b>Tutor</div>
             <div class="mono" style="align-self:center;color:var(--dim)">GKE · Prometheus · Ollama · ChromaDB · Redis · Mattermost · FastAPI</div>
           </div>
-          <div class="timechip"><b>~15 min</b> + preguntas · demo integrada</div>
-          <div class="notes" hidden><b>0:00 · ~30 s.</b> Apertura sin humos: es un prototipo de prácticas, una prueba de concepto para comprobar si la idea es viable. La frase ancla es la tesis: «el cluster informa, el modelo razona, el motor dispone». El arco de seis etapas de la portada es el hilo de toda la presentación y se verá en movimiento en la demo. Presupuesto: ~15 min de diapositivas con la demo integrada; preguntas aparte (hay capa de respaldo tras el cierre).</div>
+          <div class="notes" hidden><b>0:00 · ~25 s.</b> Apertura sin humos: es un prototipo de prácticas, una prueba de concepto para comprobar si la idea es viable. La frase ancla es la tesis: «el cluster informa, el modelo razona, el motor dispone». El arco de seis etapas de la portada es el hilo de toda la presentación y se verá en movimiento en la demo. Presupuesto: ~10 min de diapositivas + ~2 min del vídeo real de la demo (fuera del deck) ≈ 12 min en total; preguntas aparte (hay capa de respaldo tras el cierre).</div>
         </section>""",
 
-        # ══════════ 02 · ESCENARIO ══════════
+        # ══════════ 02 · ESCENARIO Y PROPUESTA ══════════
         """<section class="slide">
-          <div class="eyebrow">Escenario</div>
-          <div class="claim">Cuando salta una alerta, el contexto está disperso <em>y se junta a mano</em></div>
+          <div class="eyebrow">Escenario y propuesta</div>
+          <div class="claim">Unir alerta, contexto y decisión segura <em>en el mismo flujo</em></div>
           <div class="body">
             <dl class="defs">
               <div class="def"><dt>Hoy</dt><dd>ante una alerta de Kubernetes, el operador reúne a mano tres piezas: qué pod falla, qué runbook aplica y qué comando es seguro ejecutar.</dd></div>
               <div class="def"><dt>La pregunta</dt><dd>¿puede un LLM reunir ese contexto y proponer el arreglo, <strong>sin convertirse en una caja negra con permisos sobre el cluster</strong>?</dd></div>
-              <div class="def"><dt>El entorno</dt><dd>datos dentro del cluster, sin API externa y con recursos limitados. Se buscaba comprobar la viabilidad del enfoque <strong>en esas condiciones reales</strong>.</dd></div>
-            </dl>
-          </div>
-          <div class="folio">Escenario</div>
-          <div class="notes" hidden><b>0:30 · ~50 s.</b> Enmarcar el problema sin vender dolor de negocio: el diagnóstico de una alerta exige juntar contexto disperso, y ese trabajo es repetitivo. La pregunta que se quiso responder: ¿puede un LLM ayudar sin ser una caja negra con permisos? Las restricciones del entorno (datos in-cluster, sin API externa) son parte del enunciado, no un accidente.</div>
-        </section>""",
-
-        # ══════════ 03 · PROPUESTA ══════════
-        """<section class="slide">
-          <div class="eyebrow">Propuesta</div>
-          <div class="claim">Unir alerta, contexto y decisión segura <em>en el mismo flujo</em></div>
-          <div class="body">
-            <dl class="defs">
-              <div class="def"><dt>La idea</dt><dd>el sistema trae el runbook, propone el arreglo y lo ejecuta <strong>solo cuando es seguro</strong>; si no lo es, escala a una persona con el comando ya preparado.</dd></div>
               <div class="def"><dt>La clave</dt><dd>no es el modelo: un LLM con <code>kubectl</code> libre no es aceptable. La clave es la <strong>capa de seguridad determinista</strong> que lo rodea y decide qué se ejecuta.</dd></div>
-              <div class="def"><dt>El listón</dt><dd>cada afirmación de esta presentación mapea a algo que el sistema <strong>hace</strong> hoy en un cluster real, y lo que no está medido se dice.</dd></div>
             </dl>
           </div>
           <div class="folio">Escenario</div>
-          <div class="notes" hidden><b>1:20 · ~45 s.</b> La propuesta en una frase: alerta + contexto + decisión segura en el mismo flujo. Adelantar la idea que ordena todo el diseño: el LLM nunca ejecuta; propone, y un motor determinista decide. El tercer punto fija el tono de la sesión: prototipo honesto, con medidas y con límites declarados.</div>
+          <div class="notes" hidden><b>0:25 · ~40 s.</b> Escenario y propuesta en una sola parada. El problema: diagnosticar una alerta exige juntar contexto disperso, y ese trabajo repetitivo se hace a mano. La pregunta: ¿puede un LLM ayudar sin ser una caja negra con permisos? La respuesta que ordena todo el diseño se adelanta ya: el LLM nunca ejecuta — propone, y un motor determinista decide. Tres frases y avanzar.</div>
         </section>""",
 
         # ══════════ DIV · PARTE 01 ══════════
         f"""<section class="slide divider">
           <div class="part">Parte 01 / 03</div>
           <h2>Qué se ha diseñado y desarrollado</h2>
-          <p class="sub">El pipeline de extremo a extremo, la arquitectura en tres capas y las reglas que gobiernan cuándo el sistema actúa solo.</p>
+          <p class="sub">El pipeline de extremo a extremo y las tres capas de la tesis — <em>el cluster informa, el modelo razona, el motor dispone</em> — con las reglas que deciden cuándo el sistema actúa solo.</p>
           {arcsig(0, 3)}
           <div class="folio">{TITLE}</div>
-          <div class="notes" hidden><b>2:05 · ~5 s.</b> «Primero, cómo está construido.» El raíl enciende las cuatro primeras etapas del arco: de la alerta a la decisión del motor.</div>
+          <div class="notes" hidden><b>1:05 · ~5 s.</b> «Primero, cómo está construido.» El raíl enciende las cuatro primeras etapas del arco: de la alerta a la decisión del motor. La tesis en una frase: el cluster informa, el modelo razona, el motor dispone — y cada capa desconfía de la anterior: esa desconfianza es el diseño.</div>
         </section>""",
 
         # ══════════ 04 · PIPELINE ══════════
@@ -589,7 +612,7 @@ def slides() -> list[str]:
           <div class="claim">De la alerta de Prometheus al patch aplicado, <em>con la seguridad como principio</em></div>
           <div class="body">
             <div class="flow">
-              <div class="box">Prometheus<small>{STATS['alert_rules']} reglas K8s</small></div><span class="arr">→</span>
+              <div class="box">Prometheus<small>{STATS['alert_rules']} reglas de alerta</small></div><span class="arr">→</span>
               <div class="box">Alertmanager<small>routing</small></div><span class="arr">→</span>
               <div class="box">Cola Redis<small>Streams · fail-closed</small></div><span class="arr">→</span>
               <div class="box hot">Grounding<small>snapshot del cluster</small></div><span class="arr">→</span>
@@ -607,47 +630,30 @@ def slides() -> list[str]:
             </div>
           </div>
           <div class="folio">Diseño del sistema</div>
-          <div class="notes" hidden><b>2:10 · ~60 s.</b> Recorrer el flujo de izquierda a derecha. Las tres cajas encendidas son las tres capas de la tesis y se abren en las siguientes diapositivas. Dos detalles de ingeniería que conviene decir en alto: la cola es fail-closed (si Redis cae, Alertmanager reintenta: no se pierde la alerta) y todo corre dentro del cluster: los datos no salen y no hay coste por token.</div>
-        </section>""",
-
-        # ══════════ 05 · TRES CAPAS ══════════
-        f"""<section class="slide">
-          <div class="eyebrow">Diseño · la tesis</div>
-          <div class="claim">El cluster informa, el modelo razona, <em>el motor dispone</em></div>
-          <div class="body">
-            <dl class="defs">
-              <div class="def"><dt>Informa</dt><dd>una etapa determinista consulta <code>kubectl</code> <strong>antes</strong> del LLM y construye un snapshot real: límites, fase, reinicios, identidad del workload. Todo son hechos leídos del cluster.</dd></div>
-              <div class="def"><dt>Razona</dt><dd>el LLM recibe esos hechos más los runbooks del RAG y produce un diagnóstico. Queda reducido a <em>qué campo</em> y <em>en qué dirección</em>; los valores no los pone el modelo.</dd></div>
-              <div class="def"><dt>Dispone</dt><dd>un motor de {STATS['engine_rules']} reglas re-fuente la decisión: sella la identidad con la verdad del cluster, acota el cambio y decide auto / escalar / sugerir. <strong>El LLM nunca ejecuta.</strong></dd></div>
-            </dl>
-            {arcsig(1, 3, extra="mini")}
-            <p class="sm muted" style="margin-top:18px">Cada capa desconfía de la anterior. Esa desconfianza es el diseño.</p>
-          </div>
-          <div class="folio">Diseño del sistema</div>
-          <div class="notes" hidden><b>3:10 · ~50 s.</b> Esta es la diapositiva que ordena todo lo demás. Tres capas, cada una desconfiando de la anterior: los hechos vienen del cluster, el razonamiento del modelo, y la decisión de un motor determinista que vuelve a comprobar contra el cluster. Si solo se recuerda una cosa de la sesión, que sea esta frase.</div>
+          <div class="notes" hidden><b>1:10 · ~45 s.</b> Recorrer el flujo de izquierda a derecha. Las tres cajas encendidas son las tres capas de la tesis y se abren en las siguientes diapositivas. Un detalle de ingeniería que conviene decir en alto: la cola es fail-closed (si Redis cae, Alertmanager reintenta: no se pierde la alerta). El «todo in-cluster» no se cuenta aquí: se abre en la siguiente diapositiva, sobre el cluster real. Si preguntan por las reglas de alerta: 10 en total — 6 de detección de workload (OOM, crashloop, bad-image, CPU, memoria alta, target down) + 4 de auto-observabilidad del propio agente (backlog de cola, revert de rollback fallido, dead-letter, escalaciones sin Redis); esas 4 son «Observability First» aplicado al agente, no solo a lo que vigila.</div>
         </section>""",
 
         # ══════════ 06 · GROUNDING ══════════
         f"""<section class="slide">
           <div class="eyebrow">Diseño · el cluster informa</div>
-          <div class="claim">Antes de que el modelo hable, <em>se consulta la verdad del cluster</em></div>
+          <div class="claim">Antes de que el modelo hable, <em>habla el cluster</em></div>
           <div class="body">
             {img("grounded", "Escalación en Mattermost con confianza fundada en el cluster", "figframe wide")}
-            <div class="figcap">escalación real en Mattermost: confianza <b>100 % fundada en el cluster</b>, frente al 65 % que declaraba el modelo</div>
-            <div class="defpair" style="margin-top:22px">
+            <div class="figcap">confianza <b>100 % fundada en el cluster</b>, no la del modelo (95 %) · el texto libre del 1.5b (repite el pod) <b>nunca se ejecuta</b></div>
+            <div class="defpair" style="margin-top:8px">
               <dl class="defs">
                 <div class="def"><dt>Snapshot</dt><dd>container, límites, fase, reinicios y último motivo de terminación, leídos del cluster antes del diagnóstico.</dd></div>
-                <div class="def"><dt>Identidad</dt><dd>pod → ReplicaSet → Deployment vía <code>ownerReferences</code>: el target se <strong>confirma</strong> contra el cluster.</dd></div>
+                <div class="def"><dt>Identidad</dt><dd>el pod es efímero; el arreglo va al <strong>Deployment</strong> que persiste. Cuál es lo <strong>confirma el cluster</strong> vía <code>ownerReferences</code> (pod → ReplicaSet → Deployment), no el modelo.</dd></div>
               </dl>
               <dl class="defs">
                 <div class="def"><dt>Contexto</dt><dd>logs recientes (del contenedor caído si lo hay) y eventos del pod, en bloques separados de los hechos sellados.</dd></div>
                 <div class="def"><dt>Confianza</dt><dd>derivada de señales del cluster; la del modelo se conserva aparte y <strong>no gobierna</strong> la decisión.</dd></div>
               </dl>
             </div>
-            <p class="sm muted" style="margin-top:14px">Fail-soft: si el <code>kubectl</code> falla, el pipeline sigue sin snapshot. Perder contexto es mejor que perder la alerta.</p>
+            <p class="sm muted" style="margin-top:6px">Fail-soft: si el <code>kubectl</code> falla, el pipeline sigue sin snapshot. Perder contexto es mejor que perder la alerta.</p>
           </div>
           <div class="folio">Diseño del sistema</div>
-          <div class="notes" hidden><b>4:00 · ~60 s.</b> La pieza clave del diseño. El valor actual del límite y la identidad del workload vienen del snapshot de kubectl y no del modelo, lo que elimina la clase de fallo «el LLM se inventa el target o el valor». Señalar la captura: la confianza que se muestra está fundada en señales del cluster (motivo de terminación + reinicios); la que declaraba el modelo se conserva aparte. El snapshot incluye además logs y eventos recientes, separados de los hechos sellados para no diluir su autoridad.</div>
+          <div class="notes" hidden><b>3:25 · ~50 s.</b> La pieza clave del diseño: el valor del límite y la identidad del workload vienen del snapshot de kubectl, no del modelo — eso elimina la clase de fallo «el LLM se inventa el target o el valor». Explicar «Identidad» con palabras llanas: la alerta me da un pod, pero el pod es efímero — lo crea y lo destruye un controlador, y yo no quiero parchear el pod sino el Deployment, que es lo que persiste y define los límites. Y para saber cuál es NO le pregunto al modelo (se lo inventaría): subo por el campo ownerReferences, que en Kubernetes dice quién creó cada objeto — pod → ReplicaSet → Deployment. Ese último kubectl me confirma además que el target existe de verdad. Si esa cadena no resuelve un Deployment (un pod suelto, un ReplicaSet huérfano o falta de permisos), no actúo: escalo a una persona (es la regla 4.7 del motor). Frase para decir en alto: «el nombre del workload sale del cluster, no del modelo». Sobre la captura: la confianza mostrada está fundada en señales del cluster (motivo de terminación + reinicios); la del modelo (95 %) se conserva aparte — el punto es la procedencia, no la cifra. Y si señalan que el diagnóstico repite el nombre del pod: exacto, el texto libre del modelo pequeño es imperfecto, y por eso lo que se ejecuta nunca sale de ese texto sino de los valores sellados. El snapshot lleva además logs y eventos recientes, separados de los hechos sellados para no diluir su autoridad.</div>
         </section>""",
 
         # ══════════ 07 · EL MOTOR DISPONE ══════════
@@ -677,7 +683,7 @@ def slides() -> list[str]:
             <div class="honest">Hoy solo <b>subir el límite de memoria de un Deployment</b> cumple las tres condiciones; todo lo demás escala o sugiere. Es poco a propósito.</div>
           </div>
           <div class="folio">Diseño del sistema</div>
-          <div class="notes" hidden><b>5:00 · ~70 s.</b> La diapositiva que responde «¿por qué no es peligroso?». El criterio de lo autónomo son tres condiciones simultáneas: target confirmable desde el cluster, acción acotada y reversible, y resultado verificable. Hoy solo el caso memoria cumple las tres. Esa estrechez es una decisión: antes de ampliar el catálogo hay que ampliar la medición. El {STATS['cap']} no es un techo absoluto: es la frontera de lo que el sistema hace solo; más allá, la escalación ofrece los dos valores en botones separados (la ×2 determinista del motor, recomendada, y la propuesta del modelo) y la persona arbitra. Se verá en la demo.</div>
+          <div class="notes" hidden><b>4:15 · ~55 s.</b> La diapositiva que responde «¿por qué no es peligroso?». El criterio de lo autónomo son tres condiciones simultáneas: target confirmable desde el cluster, acción acotada y reversible, y resultado verificable. Hoy solo el caso memoria cumple las tres. Esa estrechez es una decisión: antes de ampliar el catálogo hay que ampliar la medición. El {STATS['cap']} no es un techo absoluto: es la frontera de lo que el sistema hace solo; más allá, la escalación ofrece los dos valores en botones separados (la ×2 determinista del motor, recomendada, y la propuesta del modelo) y la persona arbitra. Se verá en la demo.</div>
         </section>""",
 
         # ══════════ 08 · APRENDIZAJE ══════════
@@ -688,18 +694,16 @@ def slides() -> list[str]:
             <div class="defpair">
               <dl class="defs">
                 <div class="def ok"><dt>Veredicto</dt><dd>tras remediar se evalúa el resultado contra la salud real del pod: <code>cured</code> o <code>rolled_back</code>, con rollback automático.</dd></div>
-                <div class="def"><dt>Memoria</dt><dd>el veredicto re-marca el incidente en ChromaDB; los fracasos se conservan como <strong>conocimiento negativo recuperable</strong>.</dd></div>
               </dl>
               <dl class="defs">
-                <div class="def"><dt>Paridad</dt><dd>aprobar en Mattermost alimenta el mismo bucle que el camino automático.</dd></div>
-                <div class="def"><dt>Observación</dt><dd>las alertas que se resuelven sin veredicto se correlan por huella → <code>resolved_observed</code> + tiempo de resolución. Señal débil: nunca pisa a la fuerte.</dd></div>
+                <div class="def"><dt>Memoria</dt><dd>el veredicto re-marca el incidente en ChromaDB; los fracasos se conservan como <strong>conocimiento negativo recuperable</strong>.</dd></div>
               </dl>
             </div>
             <div style="margin-top:24px">{IMG_CURED}</div>
-            <div class="figcap">veredicto <b>cured</b> notificado en Mattermost tras verificar la salud real del pod</div>
+            <div class="figcap">veredicto <b>cured</b> notificado en Mattermost tras verificar la salud real del pod &middot; la alerta de la captura es <code>KubePodCrashLoopBackOff</code>: el pod OOM moría en bucle de reinicios — es el mismo incidente del arco</div>
           </div>
           <div class="folio">Diseño del sistema</div>
-          <div class="notes" hidden><b>6:10 · ~60 s.</b> El sistema no solo actúa: comprueba si lo que hizo funcionó y guarda el resultado. El veredicto re-marca el incidente en la memoria RAG, incluidos los fracasos, que valen tanto como los éxitos. La paridad humano/auto importa: aprobar un botón alimenta el mismo aprendizaje. Y para las alertas donde no hay veredicto verificado, el bucle observacional da un resultado más débil (resolved_observed) que nunca sobreescribe al fuerte. Si preguntan cuánto aporta esta memoria: está medido, dos diapositivas más adelante.</div>
+          <div class="notes" hidden><b>5:10 · ~50 s.</b> El sistema no solo actúa: comprueba si lo que hizo funcionó y guarda el resultado. El veredicto re-marca el incidente en la memoria RAG, incluidos los fracasos, que valen tanto como los éxitos. Si preguntan cuánto aporta esta memoria: está medido, dos diapositivas más adelante.</div>
         </section>""".replace("{IMG_CURED}", img("cured", "Veredicto cured notificado en Mattermost", "figframe wide")),
 
         # ══════════ DIV · PARTE 02 ══════════
@@ -709,7 +713,7 @@ def slides() -> list[str]:
           <p class="sub">El comportamiento no se supone: se mide. Un run real de extremo a extremo, el retrieval evaluado, la memoria cuantificada y cuatro experimentos de chaos.</p>
           {arcsig(4, 5)}
           <div class="folio">{TITLE}</div>
-          <div class="notes" hidden><b>7:20 · ~5 s.</b> «Construido el sistema, la pregunta es: ¿funciona? Todo lo que sigue está medido.» El raíl enciende las dos últimas etapas, el humano y el veredicto, que son las que la evidencia pone a prueba.</div>
+          <div class="notes" hidden><b>6:00 · ~5 s.</b> «Construido el sistema, la pregunta es: ¿funciona? Todo lo que sigue está medido.» El raíl enciende las dos últimas etapas, el humano y el veredicto, que son las que la evidencia pone a prueba.</div>
         </section>""",
 
         # ══════════ 09 · LA DEMO (REPLAY) ══════════
@@ -727,30 +731,27 @@ def slides() -> list[str]:
           </div>
           <p class="mono xs" style="color:var(--dim);margin-top:14px">en directo, el modelo 1.5b en CPU tarda ~150-270 s por diagn&oacute;stico; el replay muestra el arco validado sin esa espera</p>
           <div class="folio">Evidencia y medici&oacute;n</div>
-          <div class="notes" hidden><b>7:25 · ~2 min.</b> Esta es la demo. Es un replay de un run real en el cluster y no una simulaci&oacute;n; decirlo expl&iacute;citamente. Dejar correr la animaci&oacute;n y narrar las seis etapas al ritmo en que aparecen; para repetirla, retroceder una diapositiva y avanzar. Los dos momentos que importan: el motor sella 32Mi desde el cluster (no del modelo) y, ante un salto de 16&times;, ni lo aplica ni lo recorta en silencio: lo lleva a una persona con el comando preparado. El veredicto cured cierra el bucle y alimenta la memoria. Cada capa desconfi&oacute; de la anterior, y por eso el arco es defendible. Matiz si lo preguntan: desde ese run, la escalaci&oacute;n ofrece adem&aacute;s un segundo bot&oacute;n con la &times;2 determinista del motor junto al valor del modelo — la elecci&oacute;n del operador es hoy expl&iacute;cita, no impl&iacute;cita.</div>
+          <div class="notes" hidden><b>6:05 · ~2 min.</b> Si se ense&ntilde;a el v&iacute;deo real de la demo (fuera del deck, QuickTime), va justo despu&eacute;s del replay o en su lugar: el presupuesto total ya le reserva ~2 min. Esta es la demo. Es un replay de un run real en el cluster y no una simulaci&oacute;n; decirlo expl&iacute;citamente. Dejar correr la animaci&oacute;n y narrar las seis etapas al ritmo en que aparecen; para repetirla, retroceder una diapositiva y avanzar. Los dos momentos que importan: el motor sella 32Mi desde el cluster (no del modelo) y, ante un salto de 16&times;, ni lo aplica ni lo recorta en silencio: lo lleva a una persona con el comando preparado. El veredicto cured cierra el bucle y alimenta la memoria. Cada capa desconfi&oacute; de la anterior, y por eso el arco es defendible. Matiz si lo preguntan: desde ese run, la escalaci&oacute;n ofrece adem&aacute;s un segundo bot&oacute;n con la &times;2 determinista del motor junto al valor del modelo — la elecci&oacute;n del operador es hoy expl&iacute;cita, no impl&iacute;cita.</div>
         </section>""",
 
         # ══════════ 10 · RETRIEVAL Y SEGURIDAD ══════════
         f"""<section class="slide">
-          <div class="eyebrow">Evidencia · retrieval y seguridad</div>
-          <div class="claim">Con el runbook correcto delante, <em>el modelo no inventa</em></div>
+          <div class="eyebrow">Evidencia · RAG y seguridad</div>
+          <div class="claim">Con el manual correcto delante, <em>el modelo no inventa</em></div>
           <div class="body">
-            <div class="split s42">
-              <div>
-                <div class="h3">Runbook correcto a la primera</div>
-                <div class="rate"><span class="from">{STATS['p1_before']}</span><span class="rarr">→</span><span class="to">{STATS['p1_after'].replace('%','')}<small>%</small></span></div>
-                <p class="mono xs" style="color:var(--dim);margin-top:12px">precision@1 al filtrar el retrieval por la clase de error derivada de la alerta · p@3 {STATS['p3_before']}&rarr;{STATS['p3_after']}</p>
-              </div>
+            <p class="sm muted" style="margin-bottom:10px">RAG, en llano: antes de que el modelo responda, el sistema le pone delante el <strong>runbook</strong> (el manual) que toca para esa alerta. Con manual acierta y es seguro; <strong>sin manual va a ciegas</strong>.</p>
+            <div class="defpair">
               <dl class="defs">
-                <div class="def"><dt>Seguridad</dt><dd>comandos seguros: <strong>100 % con RAG</strong> frente a 25 % en zero-shot. El zero-shot llegó a alucinar un <code>kubectl delete</code> y el motor lo bloqueó.</dd></div>
-                <div class="def"><dt>Confianza</dt><dd>media <strong>{STATS['conf_rag']} con RAG</strong> vs {STATS['conf_zero']} zero-shot, sobre el mismo dataset.</dd></div>
-                <div class="def"><dt>Dataset</dt><dd>N={STATS['eval_n']} alertas de 5 clases (OOM, CrashLoop, ImagePull, HighCPU, HighMemory), medido en el cluster.</dd></div>
+                <div class="def"><dt>Seguridad</dt><dd>con el manual delante, el <strong>100 % de los comandos son seguros</strong>; sin manual, solo el 25 %. Una vez, sin manual, propuso un <code>kubectl delete</code> — y el motor lo bloqueó.</dd></div>
+              </dl>
+              <dl class="defs">
+                <div class="def"><dt>Dataset</dt><dd>N={STATS['eval_n']} alertas de 5 tipos (OOM, CrashLoop, ImagePull, CPU, memoria), medido en el cluster.</dd></div>
               </dl>
             </div>
-            <div class="honest">N={STATS['eval_n']} valida el <b>mecanismo</b>; para afirmar estadística fina hace falta ampliar el dataset a 30-50 alertas, y está en el plan.</div>
+            <div class="honest">La palanca de seguridad fue <b>darle mejor contexto</b>, no un modelo más grande. N={STATS['eval_n']} valida el mecanismo; para estadística fina, ampliar a 30-50 alertas (en el plan).</div>
           </div>
           <div class="folio">Evidencia y medición</div>
-          <div class="notes" hidden><b>9:25 · ~60 s.</b> Dos resultados. Primero: con el filtro por clase de error derivada del nombre de la alerta, el retrieval trae el runbook correcto a la primera el 100 % de las veces (antes, 73 %). Segundo, el que más importa: con el runbook delante, el 100 % de los comandos propuestos son seguros; sin RAG, solo el 25 %, con una alucinación de kubectl delete que el motor bloqueó. La lección: la palanca de seguridad fue servir mejor contexto antes que buscar un modelo más grande. Decir el tamaño del dataset sin que lo pregunten.</div>
+          <div class="notes" hidden><b>8:05 · ~45 s.</b> Primero la idea en llano: RAG es ponerle al modelo el manual correcto delante antes de que responda. El resultado: con el manual delante, el 100 % de los comandos que propone son seguros, frente al 25 % cuando va sin manual (una vez propuso un kubectl delete y el motor lo bloqueó). La frase que resume: la palanca de seguridad fue servir mejor contexto, no un modelo más grande. Decir N=15 sin que lo pregunten. Si preguntan por la confianza declarada del modelo (sube de 0,63 sin manual a 0,86 con manual): existe, pero no gobierna la decisión — la seguridad la pone el motor.</div>
         </section>""",
 
         # ══════════ 11 · ¿APORTA LA MEMORIA? ══════════
@@ -758,17 +759,17 @@ def slides() -> list[str]:
           <div class="eyebrow">Evidencia · la memoria, cuantificada</div>
           <div class="claim">¿Aporta algo que el sistema recuerde? <em>Dos preguntas, dos respuestas medidas</em></div>
           <div class="body">
+            <p class="sm muted" style="margin-bottom:10px">El bucle de aprendizaje: cada incidente se guarda con su veredicto. Esa memoria de <strong>incidentes vividos</strong> crece sola. ¿Sirve?</p>
             <div class="split s42" style="align-items:start">
               <div>
-                <div class="h3">1 · ¿Encuentra casos pasados parecidos? Sí</div>
+                <div class="h3">1 · ¿Recupera un caso pasado?</div>
                 <div class="rate"><span class="from">{STATS['r4_a_empty_p1']}</span><span class="rarr">→</span><span class="to" style="font-size:72px">{STATS['r4_a_seed_p1'].replace('%','')}<small>%</small></span></div>
-                <p class="mono xs" style="color:var(--dim);margin-top:12px">acierta la clase del incidente: sin memoria &rarr; con memoria · con los dos m&aacute;s parecidos: 0 % &rarr; {STATS['r4_a_seed_p2']}</p>
-                <p class="sm muted" style="margin-top:14px">Sin memoria no rescata nada; con ella, acierta la clase aproximadamente la mitad de las veces. La memoria <strong>emerge</strong>.</p>
+                <p class="sm muted" style="margin-top:14px">memoria vac&iacute;a &rarr; poblada: encuentra un caso de la misma clase <strong>~la mitad de las veces</strong>.</p>
               </div>
               <div>
                 <div class="h3">2 · ¿Le hace caso el modelo? No, a este tamaño</div>
                 <table style="margin-top:10px">
-                  <tr><th>Lo que el modelo recuerda</th><th>Propone</th><th class="num">Conf.</th></tr>
+                  <tr><th>Lo que el modelo recuerda</th><th>Propone</th><th class="num">Conf. modelo</th></tr>
                   <tr><td>nada</td><td>subir memoria</td><td class="num">0,80</td></tr>
                   <tr><td>&laquo;subir memoria <strong>no</strong> funcionó&raquo;</td><td>subir memoria</td><td class="num">0,80</td></tr>
                   <tr><td>&laquo;subir memoria <strong>sí</strong> funcionó&raquo;</td><td>subir memoria</td><td class="num">0,80</td></tr>
@@ -779,7 +780,7 @@ def slides() -> list[str]:
             <div class="honest">Resultado <b>pre-registrado antes de medir</b>, incluido el «no», sobre un fixture sintético declarado. La seguridad no depende de que el modelo recuerde: <b>la impone el motor</b>.</div>
           </div>
           <div class="folio">Evidencia y medición</div>
-          <div class="notes" hidden><b>10:25 · ~75 s.</b> Contarlo como dos preguntas encadenadas. Primera: ¿el sistema encuentra casos pasados parecidos? Sí: de 0 % a 46,7 %. Sin memoria no rescata nada; con ella acierta la clase la mitad de las veces. Segunda: ¿el modelo cambia su diagnóstico según lo que recuerda? No, a este tamaño: se le presentó el mismo aviso OOM tres veces, variando solo el recuerdo (nada / «no funcionó» / «sí funcionó»), y propuso lo mismo las tres. El remate: por eso el diseño es correcto, porque la seguridad la pone el motor y no la memoria del modelo. Y el resultado se pre-registró antes de medir, incluido que saliera «no»: un null honesto vale más que un positivo inventado.</div>
+          <div class="notes" hidden><b>8:50 · ~55 s.</b> Dos preguntas encadenadas. ¿Encuentra casos pasados parecidos? Sí: de 0 % a 46,7 %. ¿El modelo cambia su diagnóstico según lo que recuerda? No, a este tamaño: mismo aviso OOM tres veces variando solo el recuerdo, misma propuesta las tres. El remate: por eso el diseño es correcto — la seguridad la pone el motor, no la memoria del modelo. Y el null se pre-registró antes de medir: un null honesto vale más que un positivo inventado.</div>
         </section>""",
 
         # ══════════ 12 · CHAOS ══════════
@@ -788,11 +789,12 @@ def slides() -> list[str]:
           <div class="claim">Cuatro fallos inyectados: <em>detección en segundos, decisión con gates</em></div>
           <div class="body">
             {chaos_table()}
-            <p class="sm muted" style="margin-top:20px">Los cuatro experimentos escalan o sugieren <strong>por diseño</strong> (riesgo alto o target no resoluble). El arco completo hasta <span class="pill ok">cured</span> es la medición del replay: escalación &rarr; aprobación &rarr; patch &rarr; verificación.</p>
-            <div class="honest">El MTTR lo domina el <b>hardware</b>: el modelo 1.5b en CPU tarda ~150-270 s por diagnóstico. El pipeline detecta en ~5-10 s; la espera restante es la inferencia.</div>
+            <p class="mono xs" style="color:var(--dim);margin-top:12px">MTTD pipeline = firing &rarr; webhook &middot; T. respuesta = firing &rarr; notificaci&oacute;n (MTTD + inferencia LLM) &middot; T_detect = fallo inyectado &rarr; alerta (<code>for:</code> + ramp de <code>rate[5m]</code>: alerting, no el agente) &middot; conf. modelo = declarada por el LLM, no la fundada</p>
+            <p class="sm muted" style="margin-top:12px">Los cuatro experimentos de latencia escalan o sugieren <strong>por diseño</strong> (riesgo alto o target no resoluble); la última fila es el arco completo: escalación &rarr; aprobación &rarr; patch &rarr; verificación.</p>
+            <div class="honest" style="margin-top:16px">El T. de respuesta lo domina el <b>hardware</b>: el modelo 1.5b en CPU tarda ~150-270 s por diagnóstico. El pipeline detecta en ~5-10 s; la espera restante es la inferencia.</div>
           </div>
           <div class="folio">Evidencia y medición</div>
-          <div class="notes" hidden><b>11:40 · ~45 s.</b> Cuatro tipos de fallo inyectados en un namespace aislado del cluster. La detección del pipeline (alerta firing → webhook) es de segundos en los cuatro. El MTTR de ~200-250 s lo domina la inferencia del LLM en CPU, un techo de hardware; con GPU o un modelo servido mejor, baja. Que los cuatro escalen o sugieran no es un fallo: los gates de seguridad hacen su trabajo; el arco completo con patch y veredicto es el del replay.</div>
+          <div class="notes" hidden><b>9:45 · ~30 s.</b> Treinta segundos: la tabla no se lee fila a fila. Cuatro tipos de fallo inyectados en un namespace aislado del cluster. La detección del pipeline (alerta firing → webhook) es de segundos en los cuatro; el T_detect mayor es el for: de la regla más el ramp de rate[5m] — alerting, no el agente. El tiempo de respuesta de ~200-250 s lo domina la inferencia del LLM en CPU, un techo de hardware; con GPU o un modelo servido mejor, baja. Que los cuatro escalen o sugieran no es un fallo: los gates hacen su trabajo; la última fila es el arco completo del replay, con cured verificado. De recámara: la columna de confianza es la declarada por el modelo (la fundada aún no existía en esos runs — son de la fase pre-grounding); el 0,00 de HighCPU es el modelo sin comandos que estructurar para CPU, y el motor respondió suggest_only, que es lo correcto.</div>
         </section>""",
 
         # ══════════ 13 · OBSERVABILIDAD ══════════
@@ -812,7 +814,7 @@ def slides() -> list[str]:
             <p class="sm muted" style="margin-top:16px">Cada decisión del pipeline emite métrica: grounding, cola, remediación, veredicto, tiempo de resolución. Zero black-box.</p>
           </div>
           <div class="folio">Evidencia y medición</div>
-          <div class="notes" hidden><b>12:25 · ~35 s.</b> Principio de cero caja negra: cada decisión del pipeline emite una métrica Prometheus y se ve en Grafana, del grounding al veredicto, pasando por la cola. Las cifras de las diapositivas anteriores salen de esta capa, no de logs sueltos. La última familia de métricas (tiempo de resolución observado) es la más reciente: da resultado real y barato a las clases de alerta que no tienen veredicto verificado.</div>
+          <div class="notes" hidden><b>10:15 · ~20 s.</b> Veinte segundos, una idea. Principio de cero caja negra: cada decisión del pipeline emite una métrica Prometheus y se ve en Grafana, del grounding al veredicto, pasando por la cola. Las cifras de las diapositivas anteriores salen de esta capa, no de logs sueltos. La última familia de métricas (tiempo de resolución observado) es la más reciente: da resultado real y barato a las clases de alerta que no tienen veredicto verificado.</div>
         </section>"""
         .replace("{IMG_G1}", img("grafana_overview", "Panel general del agente AIOps en Grafana"))
         .replace("{IMG_G2}", img("grafana_queue", "Fila de la cola Redis Streams en Grafana")),
@@ -824,17 +826,16 @@ def slides() -> list[str]:
           <p class="sub">Los bordes conocidos del prototipo, con su estado real, y qué merecería medirse después.</p>
           {arcsig(all_on=True)}
           <div class="folio">{TITLE}</div>
-          <div class="notes" hidden><b>13:00 · ~5 s.</b> «Y esto es lo que el sistema NO hace todavía.» El raíl completo: el arco entero está en juego, incluidos sus bordes.</div>
+          <div class="notes" hidden><b>10:35 · ~5 s.</b> «Y esto es lo que el sistema NO hace todavía.» El raíl completo: el arco entero está en juego, incluidos sus bordes.</div>
         </section>""",
 
         # ══════════ 14 · LÍMITES ══════════
         f"""<section class="slide">
           <div class="eyebrow">Límites · declarados</div>
-          <div class="claim">La credibilidad está en saber <em>dónde están los bordes</em></div>
+          <div class="claim">Limitaciones</div>
           <div class="body">
             <dl class="defs">
               <div class="def"><dt>Latencia</dt><dd>techo de hardware: el modelo 1.5b en CPU tarda ~150-270 s por diagnóstico. Se detecta en segundos y se diagnostica al ritmo del hardware. Palanca: GPU o un modelo mayor.</dd></div>
-              <div class="def"><dt>Durabilidad</dt><dd>el estado vive en Redis y se re-arma tras un reinicio, pero sin AOF+PVC no sobrevive a la pérdida del pod. Es trabajo pendiente conocido.</dd></div>
               <div class="def"><dt>Dataset</dt><dd>N={STATS['eval_n']} valida los mecanismos; corto para estadística. Ampliar a 30-50 alertas.</dd></div>
               <div class="def"><dt>Memoria</dt><dd>el modelo pequeño no explota la etiqueta del resultado (medido). Explotarla pide un modelo mayor o un guard determinista en el motor.</dd></div>
               <div class="def"><dt>Curación</dt><dd>fuera del caso memoria está medido que el contexto es correcto y los comandos son seguros, pero <strong>no</strong> que el fix cure. Safety ≠ correctness; solo memoria está validado de extremo a extremo como <code>cured</code>.</dd></div>
@@ -842,7 +843,7 @@ def slides() -> list[str]:
             <p class="sm muted" style="margin-top:18px">Si la idea mereciera continuar, el paso natural sería probarla sobre alertas reales de un equipo y medir si ahorra tiempo. Hoy es una hipótesis pendiente de probar.</p>
           </div>
           <div class="folio">Límites y continuación</div>
-          <div class="notes" hidden><b>13:05 · ~75 s.</b> La diapositiva que más credibilidad da si se cuenta con calma. Cinco bordes, cada uno con su estado: latencia (hardware), durabilidad de Redis (pendiente), dataset corto, la memoria que el modelo pequeño no explota, y la distinción safety ≠ correctness: para las clases fuera de memoria está medido que el contexto y la seguridad son correctos pero no que el arreglo cure, y por eso ese camino nunca es automático. Cerrar sin sobrevender: probar con alertas reales sería el siguiente paso, y hoy es una hipótesis.</div>
+          <div class="notes" hidden><b>10:40 · ~60 s.</b> La diapositiva que más credibilidad da si se cuenta con calma. Cuatro bordes, cada uno con su estado: latencia (hardware), dataset corto, la memoria que el modelo pequeño no explota, y la distinción safety ≠ correctness: para las clases fuera de memoria está medido que el contexto y la seguridad son correctos pero no que el arreglo cure, y por eso ese camino nunca es automático. Cerrar sin sobrevender: probar con alertas reales sería el siguiente paso, y hoy es una hipótesis.</div>
         </section>""",
 
         # ══════════ 15 · CIERRE ══════════
@@ -856,13 +857,13 @@ def slides() -> list[str]:
             <div><b class="acc">{STATS['tests']}</b><span>tests en verde</span></div>
             <div><b>{STATS['chaos_experiments']}</b><span>experimentos chaos</span></div>
             <div><b class="acc">{STATS['p1_after']}</b><span>precision@1</span></div>
-            <div><b class="okc">100%</b><span>comandos seguros</span></div>
+            <div><b class="okc">100%</b><span>comandos seguros (N=15)</span></div>
           </div>
           <div class="meta">
             <div><b>{AUTHOR}</b>Prácticas · {SUBJECT}</div>
             <div class="mono" style="align-self:center;color:var(--dim)">preguntas bienvenidas · detalle técnico adicional en la capa de respaldo</div>
           </div>
-          <div class="notes" hidden><b>14:20 · ~40 s.</b> Cerrar con la tesis y el arco completo encendido. Agradecer el tiempo e invitar a las preguntas. Detrás de esta diapositiva queda la capa de respaldo (R1 alternativas · R2 seguridad de plataforma · R3 el null en detalle · R4 stack): no presentarla — saltar a ella solo si una pregunta lo pide.</div>
+          <div class="notes" hidden><b>11:40 · ~30 s.</b> Cerrar con la tesis y el arco completo encendido. Agradecer el tiempo e invitar a las preguntas. Detrás de esta diapositiva queda la capa de respaldo (R1 alternativas · R2 seguridad de plataforma · R3 el null en detalle · R4 stack · R5 la foto del cluster): no presentarla — saltar a ella solo si una pregunta lo pide.</div>
         </section>""",
 
         # ══════════ R1 · RESPALDO — ALTERNATIVAS ══════════
@@ -911,7 +912,7 @@ def slides() -> list[str]:
               <div>
                 <div class="h3">Mismo aviso, tres recuerdos distintos</div>
                 <table style="margin-top:10px">
-                  <tr><th>Brazo</th><th>Propone</th><th class="num">Conf.</th><th class="num">Menciona el fracaso</th></tr>
+                  <tr><th>Brazo</th><th>Propone</th><th class="num">Conf. modelo</th><th class="num">Menciona el fracaso</th></tr>
                   <tr><td>control (sin memoria)</td><td>subir memoria</td><td class="num">0,80</td><td class="num">—</td></tr>
                   <tr><td>recuerda «no funcionó»</td><td>subir memoria</td><td class="num">0,80</td><td class="num">0 / 3</td></tr>
                   <tr><td>recuerda «sí funcionó»</td><td>subir memoria</td><td class="num">0,80</td><td class="num">0 / 3</td></tr>
@@ -946,6 +947,110 @@ def slides() -> list[str]:
           <div class="folio">Respaldo</div>
           <div class="notes" hidden>Si preguntan por el stack o el coste: todo es open source y corre dentro del cluster — la factura marginal por diagnóstico es cero y los datos no salen. El chaos se inyecta en un namespace aislado para no afectar a nadie más en el cluster compartido. La entrega tiene dos gates: CI en cada push y los tests como gate del build de la imagen.</div>
         </section>""",
+
+        # ══════════ R5 · RESPALDO — LA FOTO DEL CLUSTER ══════════
+        """<section class="slide opt">
+          <div class="optflag">Respaldo</div>
+          <div class="eyebrow">Respaldo · la foto del cluster</div>
+          <div class="claim">La foto del cluster: <em>todo corre dentro, nada sale</em></div>
+          <div class="body">
+            <svg class="cm" viewBox="0 0 1100 405" aria-label="Mapa del cluster: cuatro namespaces, los pods desplegados y el flujo de un incidente">
+              <defs>
+                <marker id="cmA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#ff5a00"/></marker>
+                <marker id="cmE" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#101418"/></marker>
+                <marker id="cmD" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#c3c9cf"/></marker>
+              </defs>
+              <rect class="cl" x="2" y="2" width="1096" height="401" rx="10"/>
+              <text class="hdr m" x="18" y="26">cluster GKE &middot; ai-infra-agent &middot; europe-southwest1-a &middot; e2-standard-2 Spot + 2 nodos guaranteed</text>
+              <text class="hdr m" x="1082" y="26" text-anchor="end">sin Cloud NAT &middot; NetworkPolicy: solo el tr&aacute;fico dibujado</text>
+
+              <rect class="ns" x="18" y="40" width="230" height="280" rx="8"/>
+              <text class="nsl m" x="30" y="60">arturo-monitoring</text>
+              <rect class="chip" x="32" y="74" width="202" height="64" rx="6"/>
+              <text class="pn" x="44" y="96">prometheus</text>
+              <text class="pp m" x="44" y="112">:9090 &middot; +kube-state-metrics</text>
+              <text class="pf" x="44" y="127">10 reglas de alerta (6 workload + 4 self)</text>
+              <rect class="chip" x="32" y="158" width="202" height="64" rx="6"/>
+              <text class="pn" x="44" y="180">alertmanager</text>
+              <text class="pp m" x="44" y="196">:9093</text>
+              <text class="pf" x="44" y="211">enruta la alerta al webhook</text>
+              <rect class="chip" x="32" y="242" width="202" height="64" rx="6"/>
+              <text class="pn" x="44" y="264">grafana</text>
+              <text class="pp m" x="44" y="280">:3000</text>
+              <text class="pf" x="44" y="295">dashboards Overview + Chaos</text>
+
+              <rect class="ns" x="274" y="40" width="492" height="280" rx="8"/>
+              <text class="nsl m core" x="286" y="60">arturo-llm-test <tspan>&mdash; n&uacute;cleo del sistema</tspan></text>
+              <rect class="chip hot" x="400" y="76" width="240" height="80" rx="6"/>
+              <text class="pn lg" x="416" y="102">agent</text>
+              <text class="pp m" x="416" y="120">agent-svc:8000 &middot; nodo guaranteed</text>
+              <text class="pf" x="416" y="136">webhook &middot; cola &middot; RAG &middot; motor + HMAC</text>
+              <rect class="chip" x="290" y="196" width="146" height="70" rx="6"/>
+              <text class="pn" x="302" y="218">ollama</text>
+              <text class="pp m" x="302" y="233">:11434</text>
+              <text class="pf" x="302" y="247">LLM 1.5b + embeddings</text>
+              <rect class="chip" x="452" y="196" width="146" height="70" rx="6"/>
+              <text class="pn" x="464" y="218">chromadb</text>
+              <text class="pp m" x="464" y="233">:8000</text>
+              <text class="pf" x="464" y="247">16 runbooks + incidentes</text>
+              <rect class="chip" x="614" y="196" width="146" height="70" rx="6"/>
+              <text class="pn" x="626" y="218">redis</text>
+              <text class="pp m" x="626" y="233">:6379</text>
+              <text class="pf" x="626" y="247">cola &middot; rollback &middot; cooldown</text>
+
+              <rect class="ns" x="790" y="40" width="292" height="150" rx="8"/>
+              <text class="nsl m" x="802" y="60">arturo-mattermost <tspan>&mdash; ChatOps</tspan></text>
+              <rect class="chip" x="806" y="74" width="260" height="62" rx="6"/>
+              <text class="pn" x="818" y="96">mattermost</text>
+              <text class="pp m" x="818" y="112">mattermost-svc:8065</text>
+              <text class="pf" x="818" y="127">botones Aprobar / Rechazar (HMAC)</text>
+              <rect class="chip" x="806" y="148" width="260" height="34" rx="6"/>
+              <text class="pf m" x="818" y="169">postgres &middot; :5432 &mdash; BD de Mattermost</text>
+
+              <rect class="ns" x="790" y="206" width="292" height="114" rx="8"/>
+              <text class="nsl m" x="802" y="226">arturo-chaos <tspan>&mdash; experimentos</tspan></text>
+              <rect class="chip" x="806" y="240" width="260" height="66" rx="6"/>
+              <text class="pn" x="818" y="262">chaos-oom-target <tspan class="pf">&middot; +3</tspan></text>
+              <text class="pp m" x="818" y="277">oom &middot; crashloop &middot; bad-image &middot; cpu</text>
+              <text class="pf" x="818" y="291">el agente tambi&eacute;n remedia aqu&iacute;</text>
+
+              <rect class="api" x="274" y="352" width="416" height="42" rx="8"/>
+              <text class="pn m" x="290" y="369" style="font-size:12px">K8s API &mdash; deployments get/patch</text>
+              <text class="pf" x="290" y="384">Role namespaced &middot; solo arturo-llm-test y arturo-chaos &middot; sin ClusterRole de escritura</text>
+
+              <line class="ed" x1="234" y1="100" x2="394" y2="100" marker-end="url(#cmD)"/>
+              <text class="lab dim m" x="244" y="92">scrape /metrics</text>
+              <line class="ea" x1="133" y1="138" x2="133" y2="151" marker-end="url(#cmA)"/>
+              <circle class="bd" cx="133" cy="145" r="9"/>
+              <text class="bt" x="133" y="149" text-anchor="middle">1</text>
+              <text class="lab m" x="148" y="149">alerta firing</text>
+              <line class="ea" x1="234" y1="190" x2="394" y2="132" marker-end="url(#cmA)"/>
+              <circle class="bd" cx="315" cy="161" r="9"/>
+              <text class="bt" x="315" y="165" text-anchor="middle">2</text>
+              <text class="lab m" x="315" y="182" text-anchor="middle">webhook &middot; :8000</text>
+              <line class="ea" x1="440" y1="156" x2="366" y2="191" marker-end="url(#cmA)"/>
+              <line class="ea" x1="520" y1="156" x2="524" y2="191" marker-end="url(#cmA)"/>
+              <line class="ea" x1="600" y1="156" x2="684" y2="191" marker-end="url(#cmA)"/>
+              <circle class="bd" cx="524" cy="176" r="9"/>
+              <text class="bt" x="524" y="180" text-anchor="middle">3</text>
+              <line class="ea" x1="640" y1="105" x2="800" y2="105" marker-end="url(#cmA)"/>
+              <circle class="bd" cx="712" cy="105" r="9"/>
+              <text class="bt" x="712" y="109" text-anchor="middle">4</text>
+              <text class="lab m" x="712" y="90" text-anchor="middle">escalaci&oacute;n &middot; :8065</text>
+              <line class="ea" x1="802" y1="133" x2="646" y2="133" marker-end="url(#cmA)"/>
+              <circle class="bd" cx="712" cy="133" r="9"/>
+              <text class="bt" x="712" y="137" text-anchor="middle">5</text>
+              <text class="lab m" x="710" y="171" text-anchor="middle">aprueba / rechaza</text>
+              <path class="ee" d="M640,150 L772,150 Q778,150 778,156 L778,367 Q778,373 772,373 L696,373" marker-end="url(#cmE)"/>
+              <circle class="bd ink" cx="778" cy="260" r="9"/>
+              <text class="bt" x="778" y="264" text-anchor="middle">6</text>
+              <text class="lab ink m" x="700" y="341">patch deployment &rarr; veredicto cured / rolled_back</text>
+            </svg>
+          </div>
+          <div class="folio">Respaldo</div>
+          <div class="notes" hidden><b>1:55 · ~45 s.</b> Tres mensajes de diseño: (1) self-hosted, sin Cloud NAT — LLM, RAG y ChatOps dentro del cluster: los datos no salen y no hay coste por token; (2) NetworkPolicy — solo se permite el tráfico dibujado; (3) blast-radius acotado — el agente escribe únicamente vía un Role namespaced en sus dos namespaces, sin ClusterRole de escritura.</div>
+        </section>""",
+
     ]
 
 
@@ -953,8 +1058,9 @@ def slides() -> list[str]:
 
 RUNBOOK = [
     ("Cómo usar el deck", "Un único fichero HTML offline (funciona sin red). Flechas / espacio / clic para avanzar; <strong>N</strong> abre las notas del orador de cada diapositiva (con presupuesto de tiempo); <strong>F</strong> pantalla completa; <strong>Ctrl+P</strong> exporta a PDF (una diapositiva por página) como copia de seguridad. La capa de respaldo (R1–R4) está después del cierre y el contador la marca aparte: no se presenta, se salta a ella solo si una pregunta lo pide."),
-    ("Plan B", "La demo es un replay embebido en el propio HTML (sin dependencia de red ni de cluster en directo), así que el riesgo clásico de demo en vivo no existe. Si el portátil fallara: copia del fichero en el móvil/USB y el PDF exportado como último recurso."),
-    ("El hilo", "Tesis en una frase: «el cluster informa, el modelo razona, el motor dispone». Parte 1 — cómo está construido (pipeline, tres capas, grounding, motor, bucle de aprendizaje). Parte 2 — la evidencia (replay del run real, retrieval medido, la memoria cuantificada con su null, chaos, observabilidad). Parte 3 — límites sin maquillar y cierre. Registro: plural/impersonal, tono de prototipo honesto: nada de ROI ni de competir con suites comerciales."),
+    ("El vídeo de la demo", "El vídeo real de la demo se reproduce FUERA del deck (QuickTime), justo después del replay o en su lugar; el presupuesto del núcleo (~12 min) ya le reserva ~2 min. La presentación no depende de él: si el vídeo falla o no está, el replay embebido cuenta el mismo run."),
+    ("Plan B", "La demo es un replay embebido en el propio HTML (sin dependencia de red ni de cluster en directo), así que el riesgo clásico de demo en vivo no existe. Si el portátil fallara: copia del fichero (y del vídeo) en el móvil/USB y el PDF exportado como último recurso."),
+    ("El hilo", "Tesis en una frase: «el cluster informa, el modelo razona, el motor dispone». Parte 1 — cómo está construido (pipeline, la foto del cluster, tres capas, grounding, motor, bucle de aprendizaje). Parte 2 — la evidencia (replay del run real + vídeo, retrieval medido, la memoria cuantificada con su null, chaos, observabilidad). Parte 3 — límites sin maquillar y cierre. Registro: plural/impersonal, tono de prototipo honesto: nada de ROI ni de competir con suites comerciales."),
     ("Los dos momentos de la demo", "En el replay, detenerse en la etapa 4 (el motor sella 32Mi desde el cluster y, ante un 16×, ni aplica ni recorta: escala) y en la 6 (el veredicto cured verificado contra la salud real del pod, que re-marca la memoria). Es la tesis completa en un run real."),
 ]
 
@@ -975,6 +1081,15 @@ QA = [
     ("¿Por qué no usar Datadog u otra herramienta comercial?", "Existen y para muchos casos serían la respuesta; no se compite con ellas. Se exploró qué se puede construir self-hosted: el LLM local (los datos no salen del cluster) y una capa de decisión que es código propio y auditable. El valor era, sobre todo, aprender construyéndolo y midiéndolo."),
     ("¿Esto ahorra tiempo o dinero? ¿Hay ROI?", "No se ha medido y no se va a inventar: es un prototipo de prácticas. Lo que sí queda instrumentado son las métricas para medirlo (tiempo de diagnóstico, porcentaje de alertas pre-diagnosticadas, tiempo de resolución observado) si algún día se probara con alertas reales. Prometer un número hoy sería deshonesto."),
     ("¿Por qué no VPA para el caso de memoria?", "Para el caso puro de memoria, VPA sería la herramienta madura, y se reconoce. Aquí ese caso es el primero de un patrón más general: diagnóstico con contexto y explicación, decisión con gates, escalación a una persona con todo reunido, veredicto verificado y memoria de incidentes. VPA no explica el porqué, no escala con contexto ni aprende del resultado. Son cosas distintas que se tocan en un punto."),
+    ("Los logs y eventos del pod van al prompt. ¿Y si un workload malicioso escribe instrucciones en sus propios logs? (prompt injection)", "Puede ensuciar el diagnóstico, no la acción — y esa asimetría es el diseño. La salida del LLM nunca se ejecuta directa: en el camino estructurado el motor sella target y valores desde el snapshot del cluster (del texto del modelo no sale ni el nombre ni la cifra), y el texto libre pasa blacklist de patrones, pre-flight de permisos y aprobación humana firmada con HMAC. Un log envenenado podría, como mucho, sesgar la explicación que lee una persona; los bloques de logs/eventos van además separados de los hechos sellados para no diluir su autoridad. Es un vector conocido, mitigado por la regla de siempre: el modelo propone, nunca dispone."),
+    ("¿Qué pasa en una tormenta de alertas? La cola procesa de una en una y el LLM tarda minutos.", "Tres amortiguadores antes de llegar al LLM: Alertmanager agrupa (group_wait), el webhook deduplica por huella de alerta (SETNX en Redis) y el cooldown por workload impide re-patchear el mismo deployment dentro de la ventana. Aun así, el throughput real es ~1 diagnóstico cada 3-4 min por la inferencia en CPU: en una tormenta el backlog crece — las alertas no se pierden (quedan en la cola, con reintento y dead-letter) pero se atienden tarde. Paralelizar consumers es barato de diseño (los grupos de consumo de Redis Streams ya lo soportan); el prototipo priorizó corrección sobre throughput, y se dice tal cual."),
+    ("Si el diagnóstico tarda 4 minutos, ¿no llegáis a parchear un pod que ya se curó solo?", "No, por tres capas. El motor no decide sobre la foto de la alerta: re-consulta el cluster en el momento de decidir — el seal lee el estado actual, y si el target ya no existe o no se confirma, escala en vez de actuar. Después de cualquier patch, el veredicto verifica la salud real y haría rollback. Y si la alerta se resuelve sola antes de actuar, el resolved de Alertmanager se correla con el incidente y queda como resolved_observed: señal de que no hacía falta intervenir, que además alimenta la memoria."),
+    ("¿Y si comprometen al propio agente? ¿Qué puede hacer su service account?", "Poco, a propósito. El agente escribe solo mediante Roles namespaced en los namespaces del proyecto; no existe ningún ClusterRole de escritura, así que ni un agente comprometido podría tocar el resto del cluster compartido. Los callbacks de aprobación van firmados con HMAC-SHA256 (secret ausente → rechazo, fail-closed) y los comandos libres pasan blacklist y pre-flight de permisos. El blast radius se diseñó primero desde el atacante y después desde la feature."),
+    ("El modelo obedece el runbook pero ignora la etiqueta del resultado. ¿Por qué una parte del contexto sí y otra no?", "Porque piden capacidades distintas. El runbook cambia el espacio de acciones: pone delante comandos concretos y seguros, y el modelo elige entre ellos — está medido (100 % de comandos seguros vs 25 % sin RAG). La etiqueta del outcome pide razonamiento contrafactual («esto ya se intentó y falló, propón otra cosa»), y un 1.5b no lo explota — también medido, con el null pre-registrado. No es una contradicción sino una frontera de capacidad: copiar contexto es más fácil que razonar sobre él. Y por eso la seguridad no depende de ninguna de las dos cosas: la impone el motor."),
+    ("¿Cómo se testean 700 veces las respuestas de un LLM no determinista?", "Separando qué se testea. Los tests mockean Ollama y validan lo determinista: el motor de reglas, el sellado, los gates, la cola, los stores — que es donde vive la seguridad y lo que tiene que ser correcto siempre. La generación corre además a temperature=0 (greedy), reproducible para un mismo prompt. Lo no determinista no se asserta: se mide aparte, con las evaluaciones (retrieval, safety, memoria)."),
+    ("¿El doble botón y el pre-flight de permisos están corriendo ahora mismo en el cluster?", "Sí: desplegados y validados de extremo a extremo en el cluster el 13 de julio. En el arco de validación el operador pulsó el botón del motor (la ×2 determinista), el patch se aplicó y el veredicto llegó a rolled_back — el ×2 no bastaba contra ese fallo, el safety-net revirtió solo, y únicamente el valor del modelo curaba: el operador arbitra entre dos opciones bien formadas y el sistema verifica el resultado de cualquiera de las dos. De propina, la validación cazó un bug real: Mattermost exige action_id alfanumérico y el guion bajo del identificador daba 404; se arregló con sanitización, test de regresión y redeploy el mismo día."),
+    ("¿Qué pasa si el que se avería es el propio agente? ¿Se remedia a sí mismo?", "Pasó de verdad la noche antes de esta presentación, y el resultado es la mejor lección del proyecto. El churn de nodos del cluster (upgrade de GKE) tiró el pod del agente varias veces; el agente se autodiagnosticó y escaló a una persona — correcto. Pero el forense de la mañana destapó que una semana antes la rama automática sí se había parcheado a sí misma: un crash loop de infraestructura leído como problema de memoria, con la cadena de ×2 llegando de 384Mi a 10Gi antes del revert. De ahí salieron dos reglas nuevas, ya escritas y testeadas (se despliegan tras esta presentación; la imagen actual validada no se toca la víspera): el motor nunca auto-remedia su propio deployment — el médico no se opera a sí mismo — y la remediación automática de memoria exige que el motivo real de terminación sea OOMKilled, no cualquier crash loop. El incidente no cambió el diseño: lo confirmó — el forense se hizo con las mismas herramientas que usa el agente (snapshot, eventos, logs) y las reglas nuevas son más gates deterministas, no más confianza en el modelo."),
+    ("La confianza «fundada» marcaba 100 % y aun así el diagnóstico era erróneo. ¿No es un contrasentido?", "No: es la distinción entre target y causa, y se cuenta tal cual. La confianza fundada avala lo que el cluster puede confirmar — que el workload existe, que reinicia, cuál es su límite real — y gobierna si el sistema puede actuar sobre un target verificado. No avala la historia causal del modelo: en el incidente nocturno el prompt llevaba el motivo real de terminación (Error, no OOMKilled) y el 1.5b narró igualmente «alta CPU y memoria» — coherente con el null pre-registrado de la memoria: copiar contexto es más fácil que razonar sobre él. Mitigaciones: el gate de OOMKilled para la rama automática de memoria (escrito, pendiente de deploy) y renombrar la etiqueta para que comunique lo que es: target verificado, no causa verificada."),
 ]
 
 
